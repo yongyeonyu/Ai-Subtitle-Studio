@@ -2,9 +2,9 @@
 
 Generated: 2026-05-25
 
-Purpose: completion evidence for the `ACTION_ITEMS.md` domain split and native
-acceleration queue item. This map records the current long-file owners after the
-behavior-preserving split pass.
+Purpose: project-reference evidence for the completed domain split and native
+acceleration queue item. This map records the current long-file owners after
+the behavior-preserving split pass.
 
 ## Guardrails
 

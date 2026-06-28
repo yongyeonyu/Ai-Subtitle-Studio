@@ -135,15 +135,15 @@ bootstrap_prompt() {
 
 작업 전 반드시 읽으세요:
 1. AGENTS.md
-2. ACTION_ITEMS.md
-3. File_structure.txt
+2. docs/planning_queue/ACTION_ITEMS.md
+3. docs/project_reference/File_structure.txt
 4. docs/README.md
 5. docs/PROJECT_STATE.md
 6. docs/FEATURE_REGISTRY.md
 7. docs/ARCHITECTURE.md
 8. docs/VALIDATION.md
 9. docs/HANDOFF.md
-10. cooperation.md
+10. docs/workflow_operations/cooperation.md
 
 역할:
 - 덱스는 최종 구현, 검증, owner 보고를 담당합니다.

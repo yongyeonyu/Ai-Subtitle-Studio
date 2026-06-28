@@ -2,9 +2,9 @@
 
 Generated: 2026-05-24
 
-Purpose: execution artifact for `ACTION_ITEMS.md` item 1. This map records the
-current owner files and dependency edges for extracted pure Python facades and
-feature-flagged Swift/C++ helper seams.
+Purpose: project-reference artifact formerly tied to the active queue. This map
+records the current owner files and dependency edges for extracted pure Python
+facades and feature-flagged Swift/C++ helper seams.
 
 ## Scope Guard
 
@@ -544,7 +544,7 @@ subtitle_parallel_manager supervises cut/STT/STT2/LLM/roughcut scheduling.
 
 ## Verification Anchors
 
-- Long-file ownership guard: `LONG_FILE_OWNERSHIP_MAP.md`.
+- Long-file ownership guard: `docs/project_reference/LONG_FILE_OWNERSHIP_MAP.md`.
 - Unit guard for this map: `tests/test_subtitle_generation_domain_map.py`.
 - First facade guard: `tests/test_subtitle_segments_facade.py`.
 - STT feed facade guard: `tests/test_subtitle_stt_segments_facade.py`.

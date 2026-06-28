@@ -39,7 +39,7 @@ device proof, and old implementation decisions.
 | `docs/agent_communication/sentinel/handoff.md` | `.agents/sentinel/handoff.md` |
 | `docs/agent_communication/sentinel/agents/` | `.agents/sentinel/agents/` |
 | `docs/agent_communication/sentinel/BRIEFING.md` | `.agents/sentinel/BRIEFING.md` |
-| `docs/agent_communication/cooperation.md` | `cooperation.md` |
+| `docs/agent_communication/cooperation.md` | `docs/workflow_operations/cooperation.md` |
 | `runtime/watchdog/` | `.codex_work/jammini_watchdog/` |
 
 ## Applied Matrix
@@ -47,7 +47,7 @@ device proof, and old implementation decisions.
 | Taption section | Local status | Notes |
 | --- | --- | --- |
 | Pack overview | Adapted | This README is the local overview and keeps the physical handoff path explicit. |
-| Cooperation contract | Adapted | Canonical local file is `cooperation.md`. |
+| Cooperation contract | Adapted | Canonical local file is `docs/workflow_operations/cooperation.md`. |
 | Helper scripts | Adapted | Scripts live in `tools/` and keep AI Subtitle Studio read order, queue parsing, and `.agents/sentinel` paths. |
 | Resolver helper | Adapted | `tools/lib/jammini_conversation_resolver.py` resolves the active Antigravity route for this repo. |
 | Sentinel role cards | Adapted | AI Subtitle Studio cards live under `.agents/sentinel/agents/`. |
@@ -111,12 +111,12 @@ defer, or reject.
 
 - Do not move physical handoffs into `docs/agent_communication/`.
 - Do not let `.agents/sentinel/BRIEFING.md` become a second action queue; it is
-  a compact orientation file that points back to `ACTION_ITEMS.md` and
+  a compact orientation file that points back to `docs/planning_queue/ACTION_ITEMS.md` and
   `docs/HANDOFF.md`.
 - Do not copy Taption's old history or old iOS-local sentinel channel into this
   repo.
 - Keep helper scripts under `tools/` so shell entrypoints match `AGENTS.md`.
 - Keep the role cards short and source-app specific.
 - If the handoff path, helper command, or role-card location changes, update
-  `AGENTS.md`, `docs/README.md`, `cooperation.md`, and this file in the same
+  `AGENTS.md`, `docs/README.md`, `docs/workflow_operations/cooperation.md`, and this file in the same
   task.

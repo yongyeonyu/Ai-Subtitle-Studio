@@ -1,5 +1,38 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Documentation Relocation / App Store Launch Planning - 2026-06-28 KST
+
+- 실행 모드: root development-doc relocation, grouped action plan, Mac App Store launch plan, docs consolidation, and path-compatibility fix.
+- 결과: pass for docs relocation presence, script syntax, Python compile, focused pytest, Jammini route/bootstrap, old NAS doc path cleanup, and whitespace check.
+- 저장 위치:
+  - Active queue: `docs/planning_queue/ACTION_ITEMS.md`
+  - App Store launch plan: `docs/APP_STORE_SUBMISSION_READINESS.md`
+  - Docs hub: `docs/README.md`
+  - Project state: `docs/PROJECT_STATE.md`
+  - Handoff: `docs/HANDOFF.md`
+  - Product README: `docs/project_reference/PRODUCT_README.md`
+  - NAS benchmark plan: `docs/quality_validation/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-211017-watchdog-handoff-probe.md`
+  - Jammini docs risk scout: `.agents/sentinel/handoffs/20260628-211046-docs-relocation-risk-scout.md`
+- 실제 결과:
+  - Repository root now keeps `AGENTS.md` as the only root development-documentation file; non-doc runtime/config files remain at root.
+  - Active queue is grouped into `G0. Mac App Store Launch Program`, `G1. STT2 / Word Precision...`, and `G2. Source-App NLE / Taption Editing Continuity`.
+  - App Store launch plan now has Phase 0-6 gates covering owner inputs, source baseline, sandboxed app bundle, signed package, App Store Connect validation, submission assembly, and review/release.
+  - Moved root docs into `docs/planning_queue/`, `docs/project_reference/`, `docs/quality_validation/`, `docs/release_notes/`, `docs/nle_engine/`, and `docs/workflow_operations/`.
+  - Updated `tools/jammini_watchdog.sh`, `tools/jammini_delegate.sh`, `tools/cooperation_bootstrap.sh`, `tests/test_subtitle_generation_domain_map.py`, `ui/help/help_content.py`, `tools/nas_truth_learning.py`, and `core/personalization/nas_truth_learning.py` for new paths.
+  - No subtitle-generation policy, UI/UX, package build, signing, upload, notarization, DMG, App Store submission, STT/default-cache promotion, or persisted NLE disk-format change was performed.
+- 검증:
+  - `bash -n tools/jammini_watchdog.sh tools/jammini_delegate.sh tools/cooperation_bootstrap.sh` -> pass.
+  - `./venv/bin/python -m py_compile core/personalization/nas_truth_learning.py tools/nas_truth_learning.py tests/test_subtitle_generation_domain_map.py ui/help/help_content.py` -> pass.
+  - `test -f docs/planning_queue/ACTION_ITEMS.md && test -f docs/project_reference/PRODUCT_README.md && test -f docs/release_notes/RELEASE_v04.01.00.md && test ! -f ACTION_ITEMS.md && test ! -f README.md && test ! -f RELEASE_v04.01.00.md` -> `docs_presence_and_root_doc_move=pass`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_generation_domain_map.py tests/test_help_dialog.py -k "subtitle_generation_domain_map or help"` -> `7 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_generation_domain_map.py tests/test_help_dialog.py tests/test_nas_truth_learning.py -k "subtitle_generation_domain_map or help or nas_truth"` -> `12 passed`.
+  - `tools/jammini_watchdog.sh --status` -> active/canonical conversation `d2075935-3595-4188-baed-4ee0b45cb7a8`.
+  - `tools/jammini_watchdog.sh --once --dry-run` -> rendered a DEX task packet without dispatching work.
+  - `tools/jammini_delegate.sh --bootstrap --dry-run` -> read order uses `docs/planning_queue/ACTION_ITEMS.md`, `docs/project_reference/File_structure.txt`, and `docs/workflow_operations/cooperation.md`.
+  - `rg -n "docs/NAS_SUBTITLE_BENCHMARK" docs core tools tests --glob '!docs/quality_validation/test_result.md'` -> no old-path matches.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.00 Source-App Release - 2026-06-28 KST
 
 - 실행 모드: source-app release checkpoint, version/schema bump, code-review fix, docs update, and release validation.

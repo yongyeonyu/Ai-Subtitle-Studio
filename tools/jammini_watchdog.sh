@@ -28,7 +28,7 @@ state_dir="$workspace_root/.codex_work/jammini_watchdog"
 state_file="$state_dir/state.env"
 log_file="$state_dir/watchdog.log"
 delegate_script="$workspace_root/tools/jammini_delegate.sh"
-action_items_file="$workspace_root/ACTION_ITEMS.md"
+action_items_file="$workspace_root/docs/planning_queue/ACTION_ITEMS.md"
 ag_new="/opt/homebrew/bin/antigravity-send.sh"
 resolver_script="$workspace_root/tools/lib/jammini_conversation_resolver.py"
 
@@ -366,7 +366,7 @@ quality_request_for_index() {
     2) printf '%s\n' ".aissproj, direct SRT open, editor segment reload, project roughcut state의 legacy compatibility risk와 focused tests만 정리해줘." ;;
     3) printf '%s\n' "render/export plan을 NLE snapshot으로 라우팅하기 전 output duration, sidecar metadata, sync-safe render parity gate를 정리해줘." ;;
     4) printf '%s\n' "Macau/X5 source-app proof와 output/manual_verification/latest artifact checklist를 준비해줘. 실제 실행은 하지 말고 명령/증거 항목만." ;;
-    5) printf '%s\n' "현재 ACTION_ITEMS.md NLE 계획 기준으로 빠진 테스트/문서/검증 게이트 3개를 우선순위로 추천해줘." ;;
+    5) printf '%s\n' "현재 docs/planning_queue/ACTION_ITEMS.md NLE 계획 기준으로 빠진 테스트/문서/검증 게이트 3개를 우선순위로 추천해줘." ;;
   esac
 }
 
@@ -389,7 +389,7 @@ assign_task_once() {
 
   if [[ -n "$queue_item" ]]; then
     scope="top live queue item"
-    request="현재 ACTION_ITEMS.md 최상단 live queue 1개만 support slice로 분석해줘: ${queue_item}. owner files, regression risk, proof plan만 정리하고 DEX_REVIEW_READY로 멈춰."
+    request="현재 docs/planning_queue/ACTION_ITEMS.md 최상단 live queue 1개만 support slice로 분석해줘: ${queue_item}. owner files, regression risk, proof plan만 정리하고 DEX_REVIEW_READY로 멈춰."
     assignment_summary="queue:${queue_item}"
   else
     scope="$(quality_scope_for_index "$task_index")"

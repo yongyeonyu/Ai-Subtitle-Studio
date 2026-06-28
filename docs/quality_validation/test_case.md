@@ -538,7 +538,7 @@ git diff --check --
 1. 자막 열기 후 자막 에디터 기능
 - 방법: `open-srt`로 타임스탬프 파일 열기 → 에디터 진입 여부 확인 → 편집 가능한 모드 진입 확인.
 - 통과: `editor_open=true`, `editor_media_path`에 SRT 경로 기록, 즉시 에디터 UI 스냅샷 저장.
-- 실패 시: `action`를 `검토필요`로 분리하고 `ACTION_ITEMS.md`에 메뉴얼 검토 요청.
+- 실패 시: `action`를 `검토필요`로 분리하고 `docs/planning_queue/ACTION_ITEMS.md`에 메뉴얼 검토 요청.
 
 2. 영상 열기 후 자막 생성
 - 방법: 마카오 smoke 또는 X5 3분 high rolling fixture에서 `start-current-pipeline` 실행.

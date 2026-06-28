@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-211046-docs-relocation-risk-scout.md`
+- `.agents/sentinel/handoffs/20260628-211017-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-120244-release-architecture-review-hangyeol.md`
 - `.agents/sentinel/handoffs/20260628-120241-release-workflow-review-yujin.md`
 - `.agents/sentinel/handoffs/20260628-120230-release-qa-review-seorin.md`

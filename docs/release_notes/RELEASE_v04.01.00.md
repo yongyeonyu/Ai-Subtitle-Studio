@@ -18,14 +18,14 @@ This release keeps the Python/PyQt6 source-app product line. It does not claim M
   - `tests/test_trace_logger.py` now checks trace manifest app version against `config.APP_VERSION` instead of a release-specific literal.
 
 - NLE/Taption editing checkpoint:
-  - The completed NLE runtime/Taption subtitle editing slices remain archived in `COMPLETED_ACTION_ITEMS.md` and `test_result.md`.
-  - `ACTION_ITEMS.md` now keeps only active gates and archive pointers instead of duplicating completed NLE proof logs.
+  - The completed NLE runtime/Taption subtitle editing slices remain archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md` and `docs/quality_validation/test_result.md`.
+  - `docs/planning_queue/ACTION_ITEMS.md` now keeps only active gates and archive pointers instead of duplicating completed NLE proof logs.
   - Persisted NLE project fields, per-pixel drag writes, QML/GPU default UI surfaces, and native migration remain blocked unless the owner explicitly opens a new compatibility gate.
 
 - Development documentation:
   - `docs/README.md` now acts as the development-documentation hub.
   - Role folders under `docs/` point to planning queue, workflow operations, project reference, validation, product behavior, NLE, STT, evidence, release notes, and legacy archives.
-  - `AGENTS.md` documents root canonical document preservation, active-only queue policy, physical Jammini handoff priority, and clean-room Taption reference handling.
+  - `AGENTS.md` documents the root-doc policy, active-only queue policy, physical Jammini handoff priority, and clean-room Taption reference handling.
 
 - Release/code review:
   - Jammini route was confirmed through a physical handoff probe.

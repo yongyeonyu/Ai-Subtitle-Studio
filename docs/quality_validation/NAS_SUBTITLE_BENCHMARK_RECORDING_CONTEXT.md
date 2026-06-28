@@ -1,7 +1,7 @@
 # NAS Subtitle Benchmark Recording Context
 
 작성일: 2026-06-26
-대상 계획: `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`
+대상 계획: `docs/quality_validation/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`
 목적: 대표님이 영상별 녹음 상황을 직접 확인해 기록하고, 이후 상황별 자막 품질 튜닝과 LoRA 학습 후보를 분리한다.
 
 ## 사용 규칙

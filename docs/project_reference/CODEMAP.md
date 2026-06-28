@@ -1,6 +1,6 @@
 <!--
-Document-Version: 04.00.12-codemap
-Last-Updated: 2026-05-21
+Document-Version: 04.01.00-codemap
+Last-Updated: 2026-06-28
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
 -->
@@ -10,8 +10,8 @@ Purpose: Concise responsibility map for token-efficient code navigation.
 
 Use this file for fast navigation. It is intentionally responsibility-driven and compact.
 
-- Use `File_structure.txt` for shallow orientation only.
-- Use `CODEMAP.md` for deciding which files to inspect first.
+- Use `docs/project_reference/File_structure.txt` for shallow orientation only.
+- Use `docs/project_reference/CODEMAP.md` for deciding which files to inspect first.
 - Use `rg` for exact call sites, symbol lookups, and follow-up detail.
 
 ## Entry Points

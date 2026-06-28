@@ -1,23 +1,35 @@
 <!--
-Document-Version: 04.00.18-source-app
-Phase: SOURCE_APP_CONTINUATION_V4_0_18
+Document-Version: 04.01.00-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-28
 Updated-By: Codex
-Purpose: Completed action item archive separated from ACTION_ITEMS.md.
+Purpose: Completed action item archive separated from docs/planning_queue/ACTION_ITEMS.md.
 -->
 # COMPLETED_ACTION_ITEMS.md - Completed Action Item Archive
 
-This file keeps completed action-item history out of `ACTION_ITEMS.md`.
-`ACTION_ITEMS.md` remains the active execution queue and should contain only
+This file keeps completed action-item history out of `docs/planning_queue/ACTION_ITEMS.md`.
+`docs/planning_queue/ACTION_ITEMS.md` remains the active execution queue and should contain only
 remaining work, active gates, and rollback rules.
 
 When an active item or sub-slice is completed, move its concise completion
-summary here and remove that completed body from `ACTION_ITEMS.md`. The active
+summary here and remove that completed body from `docs/planning_queue/ACTION_ITEMS.md`. The active
 queue may keep only a short archive pointer back to the relevant heading here.
 
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## Documentation Relocation And App Store Launch Planning
+
+Source request: owner asked to create a Mac App Store launch plan, group and detail the active action items, move root development docs into docs, update/consolidate/retire docs, and update `AGENTS.md` for next-chat continuation.
+
+1. Root development docs were moved under `docs/`; `AGENTS.md` remains the only root development-documentation file.
+2. `docs/planning_queue/ACTION_ITEMS.md` now uses grouped active plans: `G0` Mac App Store launch, `G1` STT2/word precision latency, and `G2` source-app NLE/Taption continuity.
+3. `docs/APP_STORE_SUBMISSION_READINESS.md` now contains a Phase 0-6 Mac App Store launch plan and readiness definition.
+4. Docs hub, folder README files, project state, feature registry, validation guide, Jammini mapping, product README, file structure, code map, and release-note pointers were updated to the new docs layout.
+5. Path-dependent scripts/tests were updated: Jammini watchdog/delegate/bootstrap, subtitle domain-map test, help QA ownership, and NAS truth-learning default plan path.
+6. `docs/quality_validation/NAS_SUBTITLE_BENCHMARK_50_PLAN.md` and `docs/quality_validation/NAS_SUBTITLE_BENCHMARK_RECORDING_CONTEXT.md` now own the NAS benchmark docs instead of leaving them in docs root.
+7. No runtime subtitle-generation policy, UI/UX, package build, upload, signing, notarization, DMG, App Store submission, STT/default-cache promotion, or persisted NLE disk-format change was performed.
 
 ## v04.01.00 Source-App Release
 
@@ -26,17 +38,17 @@ Source request: owner asked to run code review/fixes, clean the worktree, commit
 1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.00"`.
 2. `core/project/project_format.py` was bumped to project schema version `04.01.00`.
 3. `tests/test_trace_logger.py` was fixed to assert trace manifest app version against `config.APP_VERSION` instead of a release-specific literal.
-4. `RELEASE_v04.01.00.md` was added as the source-app release checkpoint note.
-5. `README.md`, `AGENTS.md`, `ACTION_ITEMS.md`, `NLE_Action.md`, `docs/README.md`, `docs/PROJECT_STATE.md`, and `docs/APP_STORE_SUBMISSION_READINESS.md` were synced to the new checkpoint.
+4. `docs/release_notes/RELEASE_v04.01.00.md` was added as the source-app release checkpoint note.
+5. `docs/project_reference/PRODUCT_README.md`, `AGENTS.md`, `docs/planning_queue/ACTION_ITEMS.md`, `docs/nle_engine/NLE_Action.md`, `docs/README.md`, `docs/PROJECT_STATE.md`, and `docs/APP_STORE_SUBMISSION_READINESS.md` were synced to the new checkpoint.
 6. Jammini plus 한결/서린/유진 release reviews were collected through physical handoff files and classified by Dex.
 7. App Store readiness remains blocked and was not promoted to submission-ready; DMG, packaging, notarization, upload, persisted NLE disk fields, per-pixel NLE writes, UI/QML defaults, and STT/default-cache promotion were not performed.
 
 ## Development Documentation Organization And Active Queue Hygiene
 
-Source request: owner asked to delete completed action items from `ACTION_ITEMS.md` and organize development docs by referencing Taption docs/AGENTS rules.
+Source request: owner asked to delete completed action items from `docs/planning_queue/ACTION_ITEMS.md` and organize development docs by referencing Taption docs/AGENTS rules.
 
-1. `ACTION_ITEMS.md` was tightened back to active gates: completed NLE regression proof bullets were removed from the active STT2 item and the migration status section now keeps only current source-app/native-migration guardrails.
-2. Completed proof remains discoverable through `COMPLETED_ACTION_ITEMS.md`, `test_result.md`, `docs/HANDOFF.md`, and `output/manual_verification/latest/` instead of being duplicated in the active queue.
+1. `docs/planning_queue/ACTION_ITEMS.md` was tightened back to active gates: completed NLE regression proof bullets were removed from the active STT2 item and the migration status section now keeps only current source-app/native-migration guardrails.
+2. Completed proof remains discoverable through `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`, `docs/quality_validation/test_result.md`, `docs/HANDOFF.md`, and `output/manual_verification/latest/` instead of being duplicated in the active queue.
 3. `docs/README.md` was rewritten as the development-documentation hub, with Taption-style role folders adapted to AI Subtitle Studio.
 4. Role README files were added under `docs/planning_queue/`, `docs/workflow_operations/`, `docs/project_reference/`, `docs/quality_validation/`, `docs/product_behavior/`, `docs/nle_engine/`, `docs/speech_stt/`, `docs/validation_evidence/`, `docs/release_notes/`, and `docs/archive_legacy/`.
 5. `AGENTS.md` now documents development-documentation organization rules, root canonical document preservation, active-only queue policy, physical Jammini handoff priority, and clean-room Taption reference handling.

@@ -5,7 +5,7 @@ Purpose: Shared scratchpad for `덱스` and `잼민이` when a refactor or optim
 Rules:
 
 - This file is a discussion and candidate log, not the source of truth for execution order.
-- `ACTION_ITEMS.md` remains the source of truth for active queue and accepted execution items.
+- `docs/planning_queue/ACTION_ITEMS.md` remains the source of truth for active queue and accepted execution items.
 - Use this file to capture optimization ideas, native-capable hotspots, algorithm simplification candidates, rollback concerns, and open questions for cross-review.
 - Do not treat an idea in this file as approved work until the owner or `덱스` explicitly promotes it into an execution task.
 - If `덱스` asks `잼민이` to review specific files, capture any still-open review questions or disputed ideas here before execution if they need cross-check discussion.

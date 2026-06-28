@@ -1,0 +1,94 @@
+<!--
+Document-Version: 04.01.00-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_1_0
+Last-Updated: 2026-06-28
+Updated-By: Codex
+Scope: Shallow actual filesystem map for high-signal navigation.
+Role-Description-Rule: Tree entries must match current paths. Speculative cleanup notes are not allowed.
+-->
+================================================================================
+AI Subtitle Studio - Shallow Actual File Structure
+Last Updated: 2026-06-28
+Phase: SOURCE_APP_CONTINUATION_V4_1_0
+App Version: 04.01.00
+Structure Document: docs/project_reference/File_structure.txt
+Note: Root development docs policy keeps AGENTS.md as the only root dev doc.
+================================================================================
+
+ai_subtitle_studio/
+├── .agents/
+│   └── sentinel/
+├── .github/
+├── .gitignore
+├── AGENTS.md
+├── assets/
+│   └── icons/
+├── config/
+├── core/
+│   ├── audio/
+│   ├── automation/
+│   ├── engine/
+│   ├── llm/
+│   ├── native/
+│   ├── optimization/
+│   ├── personalization/
+│   ├── pipeline/
+│   ├── project/
+│   ├── roughcut/
+│   ├── runtime/
+│   ├── stt_mode/
+│   └── subtitle_quality/
+├── docs/
+│   ├── README.md
+│   ├── APP_STORE_SUBMISSION_READINESS.md
+│   ├── ARCHITECTURE.md
+│   ├── FEATURE_REGISTRY.md
+│   ├── HANDOFF.md
+│   ├── PROJECT_STATE.md
+│   ├── VALIDATION.md
+│   ├── DECISIONS/
+│   ├── agent_communication/
+│   ├── archive_legacy/
+│   ├── nle_engine/
+│   ├── planning_queue/
+│   ├── product_behavior/
+│   ├── project_reference/
+│   ├── quality_validation/
+│   ├── release_notes/
+│   ├── speech_stt/
+│   ├── validation_evidence/
+│   └── workflow_operations/
+├── main.py
+├── native/
+│   └── macos/
+├── output/
+├── packaging/
+│   └── macos/
+├── projects/
+├── requirements-mac.txt
+├── test video/
+├── tests/
+├── tools/
+├── ui/
+│   ├── dialogs/
+│   ├── editor/
+│   ├── help/
+│   ├── home/
+│   ├── main/
+│   ├── project/
+│   ├── qml/
+│   ├── queue/
+│   ├── settings/
+│   ├── sidebar/
+│   └── timeline/
+└── voice_data/
+
+Key development docs now live under docs/:
+
+- Active queue: docs/planning_queue/ACTION_ITEMS.md
+- Completed action archive: docs/planning_queue/COMPLETED_ACTION_ITEMS.md
+- Product README: docs/project_reference/PRODUCT_README.md
+- Release notes: docs/release_notes/RELEASE_v04.00.07.md and newer
+- Validation expectations/results: docs/quality_validation/test_case.md, docs/quality_validation/test_result.md
+- NLE plan: docs/nle_engine/NLE_Action.md
+- Cooperation docs: docs/workflow_operations/cooperation.md, docs/workflow_operations/anti_agents.md

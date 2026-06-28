@@ -15,7 +15,7 @@ from core.personalization.nas_truth_learning import build_nas_truth_learning_dry
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a read-only NAS 50 truth-learning manifest.")
-    parser.add_argument("--plan", default="docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md")
+    parser.add_argument("--plan", default="docs/quality_validation/NAS_SUBTITLE_BENCHMARK_50_PLAN.md")
     parser.add_argument("--nas-root", default=None)
     parser.add_argument("--with-records", action="store_true", help="Parse SRTs and build in-memory truth rows.")
     parser.add_argument("--max-items", type=int, default=None)

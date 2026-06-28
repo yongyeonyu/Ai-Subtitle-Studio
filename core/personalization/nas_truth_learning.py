@@ -11,7 +11,7 @@ from core.personalization.lora_models import stable_hash
 
 
 NAS_TRUTH_LEARNING_SCHEMA = "ai_subtitle_studio.nas_50_truth_learning_manifest.v1"
-DEFAULT_NAS_BENCHMARK_PLAN_PATH = Path("docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md")
+DEFAULT_NAS_BENCHMARK_PLAN_PATH = Path("docs/quality_validation/NAS_SUBTITLE_BENCHMARK_50_PLAN.md")
 CALIBRATION_ITEM_NUMBERS = {48, 50}
 VALIDATION_ITEM_NUMBERS = {6, 14, 22, 33, 42}
 HOLDOUT_ITEM_NUMBERS = {3, 18, 27, 38, 46}

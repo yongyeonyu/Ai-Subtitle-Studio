@@ -2,8 +2,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAP_PATH = ROOT / "SUBTITLE_GENERATION_DOMAIN_MAP.md"
-LONG_FILE_MAP_PATH = ROOT / "LONG_FILE_OWNERSHIP_MAP.md"
+PROJECT_REFERENCE_DIR = ROOT / "docs" / "project_reference"
+MAP_PATH = PROJECT_REFERENCE_DIR / "SUBTITLE_GENERATION_DOMAIN_MAP.md"
+LONG_FILE_MAP_PATH = PROJECT_REFERENCE_DIR / "LONG_FILE_OWNERSHIP_MAP.md"
 
 REQUIRED_DOMAINS = {
     "subtitle_cut_boundary",
@@ -100,26 +101,14 @@ def test_domain_map_covers_current_owner_paths():
         assert owner in text
 
 
-def test_action_item_points_to_domain_map_progress_artifact():
-    action_items = (ROOT / "ACTION_ITEMS.md").read_text(encoding="utf-8")
+def test_project_reference_docs_point_to_domain_map_progress_artifact():
+    reference_readme = (PROJECT_REFERENCE_DIR / "README.md").read_text(
+        encoding="utf-8"
+    )
 
-    assert "SUBTITLE_GENERATION_DOMAIN_MAP.md" in action_items
-    assert "LONG_FILE_OWNERSHIP_MAP.md" in action_items
-    assert "tests/test_subtitle_generation_domain_map.py" in action_items
-    assert "tests/test_subtitle_segments_facade.py" in action_items
-    assert "tests/test_subtitle_stt_segments_facade.py" in action_items
-    assert "tests/test_subtitle_resource_manager.py" in action_items
-    assert "tests/test_subtitle_global_canvas_facade.py" in action_items
-    assert "tests/test_subtitle_waveform_facade.py" in action_items
-    assert "tests/test_subtitle_timing_contracts.py" in action_items
-    assert "tests/test_subtitle_parallel_manager.py" in action_items
-    assert "tests/test_subtitle_cut_boundary_facade.py" in action_items
-    assert "tests/test_subtitle_dictionary_facade.py" in action_items
-    assert "tests/test_subtitle_live_sync_manager.py" in action_items
-    assert "tests/test_subtitle_live_editor_feed_facade.py" in action_items
-    assert "tests/test_subtitle_speaker_diarization_facade.py" in action_items
-    assert "tests/test_subtitle_facade_project_reopen_contracts.py" in action_items
-    assert "tests/test_subtitle_native_readiness.py" in action_items
+    assert "SUBTITLE_GENERATION_DOMAIN_MAP.md" in reference_readme
+    assert "LONG_FILE_OWNERSHIP_MAP.md" in reference_readme
+    assert "tests/test_subtitle_generation_domain_map.py" in reference_readme
 
 
 def test_long_file_ownership_map_captures_current_split_owners():

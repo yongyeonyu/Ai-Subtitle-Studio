@@ -1,16 +1,16 @@
 # Validation Evidence
 
-This folder is a pointer map for generated proof artifacts. Do not move large local artifacts here unless the owner explicitly asks.
+This folder is a pointer index for generated proof artifacts. Most evidence is
+stored outside docs to avoid copying large generated files into documentation.
 
 Canonical locations:
 
 - `../../output/manual_verification/latest/`
-- `../../.codex_work/benchmarks/subtitle_pipeline_variants/`
-- `../../test_result.md`
-- `../VALIDATION.md`
+- `../../.codex_work/benchmarks/`
+- `../quality_validation/test_result.md`
 
 Rules:
 
-- Keep generated proof paths in reports so later agents can reproduce or inspect them.
-- Treat `output/` and `.codex_work/` as local proof surfaces, not active queue storage.
-- If an artifact is required for future decisions, summarize it in `test_result.md`, release notes, or `COMPLETED_ACTION_ITEMS.md`.
+- Keep generated artifacts in their tool output directories.
+- If an artifact is required for future decisions, summarize it in `../quality_validation/test_result.md`, release notes, or `../planning_queue/COMPLETED_ACTION_ITEMS.md`.
+- Do not use this folder as a second action queue.

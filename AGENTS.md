@@ -105,9 +105,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!--
 Document-Version: 04.01.00-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-Last-Updated: 2026-06-27
+Last-Updated: 2026-06-28
 Updated-By: Codex
-Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
+Purpose: Agent bootstrap, operating rules, documentation map, and new-chat continuation prompt.
 -->
 # AGENTS.md - Agent Bootstrap Guide
 
@@ -120,30 +120,31 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
 - Current product direction: continue the existing Python/PyQt6 source app. Do not reopen native migration planning unless the owner explicitly asks.
-- Release note retention: keep `RELEASE_v04.00.07.md` and newer only. Older release notes and `check_list.md` were intentionally deleted.
+- Root documentation rule: keep `AGENTS.md` as the only development-documentation file at the repository root. All other development docs live under `docs/`.
+- Release note retention: keep `docs/release_notes/RELEASE_v04.00.07.md` and newer only. Older release notes and `check_list.md` were intentionally deleted.
 
 ## Bootstrap Order
 
 Read these first when continuing work:
 
 1. `AGENTS.md`
-2. `ACTION_ITEMS.md`
-3. `COMPLETED_ACTION_ITEMS.md`
-4. `check_list.md` if present
-5. `File_structure.txt`
-6. `docs/README.md`
-7. `docs/PROJECT_STATE.md`
-8. `docs/FEATURE_REGISTRY.md`
-9. `docs/ARCHITECTURE.md`
-10. `docs/VALIDATION.md`
-11. `docs/HANDOFF.md`
-12. `CODEMAP.md` if present
-13. Latest `RELEASE_v*.md`
-14. `README.md`
-15. `test_case.md`
-16. `test_result.md`
-17. `waste_action_item.md`
-18. `lesson_n_learned.md`
+2. `docs/planning_queue/ACTION_ITEMS.md`
+3. `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`
+4. `docs/README.md`
+5. `docs/PROJECT_STATE.md`
+6. `docs/FEATURE_REGISTRY.md`
+7. `docs/ARCHITECTURE.md`
+8. `docs/VALIDATION.md`
+9. `docs/HANDOFF.md`
+10. `docs/project_reference/File_structure.txt`
+11. `docs/project_reference/CODEMAP.md` if present
+12. Latest `docs/release_notes/RELEASE_v*.md`
+13. `docs/project_reference/PRODUCT_README.md`
+14. `docs/quality_validation/test_case.md`
+15. `docs/quality_validation/test_result.md`
+16. `docs/planning_queue/waste_action_item.md`
+17. `docs/planning_queue/lesson_n_learned.md`
+18. `check_list.md` only if a historical local copy is present; do not recreate it.
 
 ## Jammini Communication Check
 
@@ -161,7 +162,7 @@ Every Jammini packet sent from this repo must name the project as `AI Subtitle S
 - `.agents/sentinel/handoffs/*.md`
 - `.agents/sentinel/handoff.md`
 - `.agents/sentinel/agents/*.md` for stable 한결/서린/유진 role cards adapted from Taption's Jammini communication pack
-- `.agents/sentinel/BRIEFING.md` for compact current-state orientation only; `ACTION_ITEMS.md` and `docs/HANDOFF.md` remain authoritative
+- `.agents/sentinel/BRIEFING.md` for compact current-state orientation only; `docs/planning_queue/ACTION_ITEMS.md` and `docs/HANDOFF.md` remain authoritative
 
 Chat `ACK` / `WORKING` messages are diagnostic only. Treat a Jammini result as delivered only after `덱스` directly reads the handoff file and classifies it as accept, revise, defer, or reject.
 
@@ -173,17 +174,17 @@ When validating the current release baseline, also read:
 
 Former standalone handoff/planning files have been consolidated:
 
-- `idea_item.md` -> merged into `ACTION_ITEMS.md`
-- `NATIVE_LIB_PLAN.md` -> merged into `ACTION_ITEMS.md`
+- `idea_item.md` -> merged into `docs/planning_queue/ACTION_ITEMS.md`
+- `NATIVE_LIB_PLAN.md` -> merged into `docs/planning_queue/ACTION_ITEMS.md`
 - `NEW_CHAT_PROMPT.md` -> merged into this file
 
 Do not recreate those files unless the owner explicitly asks.
 
 ## Document Roles
 
-- `AGENTS.md`: this bootstrap, operating-rule, and new-chat continuation file.
-- `ACTION_ITEMS.md`: single source of truth for active ideas, action/native work, execution order, QA gates, rollback rules, and parked candidates.
-- `COMPLETED_ACTION_ITEMS.md`: owner-requested archive for completed action-item history that should not remain in the active queue.
+- `AGENTS.md`: this root bootstrap, operating-rule, documentation-map, and new-chat continuation file.
+- `docs/planning_queue/ACTION_ITEMS.md`: single source of truth for active ideas, action/native work, execution order, QA gates, rollback rules, and parked candidates.
+- `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`: owner-requested archive for completed action-item history that should not remain in the active queue.
 - `docs/README.md`: docs entrypoint and AI navigation order.
 - `docs/PROJECT_STATE.md`: current product state and high-level guardrails snapshot.
 - `docs/FEATURE_REGISTRY.md`: feature owner map and safe validation entrypoints.
@@ -191,27 +192,27 @@ Do not recreate those files unless the owner explicitly asks.
 - `docs/VALIDATION.md`: standard validation commands and completion bar.
 - `docs/HANDOFF.md`: rolling next-session handoff; update before finishing meaningful work.
 - `docs/agent_communication/README.md`: Taption Jammini pack mapping for this repo; points to `.agents/sentinel` as the physical handoff store.
-- `cooperation.md`: Dex/Jammini collaboration contract, role boundaries, route proof, NLE parallel packet protocol, and unknown-cause debugging protocol.
+- `docs/workflow_operations/cooperation.md`: Dex/Jammini collaboration contract, role boundaries, route proof, NLE parallel packet protocol, and unknown-cause debugging protocol.
 - `.agents/sentinel/BRIEFING.md`: compact Jammini orientation file for the current mission, constraints, artifact index, and source-of-truth pointers. Do not use it as a second queue.
-- `waste_action_item.md`: rejected or ineffective experiments. Check it before proposing or repeating optimization ideas.
-- `lesson_n_learned.md`: repeat-prevention lessons for bad diagnoses, ineffective optimizations, and risky shortcuts.
-- `README.md`: product overview and current user-facing workflow.
-- `test_case.md`: QA rules, fixture registry, and one-command QA expectations.
-- `test_result.md`: latest QA evidence and artifact references.
-- `RELEASE_v*.md`: release notes from `v04.00.07` onward.
+- `docs/planning_queue/waste_action_item.md`: rejected or ineffective experiments. Check it before proposing or repeating optimization ideas.
+- `docs/planning_queue/lesson_n_learned.md`: repeat-prevention lessons for bad diagnoses, ineffective optimizations, and risky shortcuts.
+- `docs/project_reference/PRODUCT_README.md`: product overview and current user-facing workflow.
+- `docs/quality_validation/test_case.md`: QA rules, fixture registry, and one-command QA expectations.
+- `docs/quality_validation/test_result.md`: latest QA evidence and artifact references.
+- `docs/release_notes/RELEASE_v*.md`: release notes from `v04.00.07` onward.
 
 Completed item rule:
 
-- When an item in `ACTION_ITEMS.md` is completed normally, remove it from the active queue and move the completed action-item summary to `COMPLETED_ACTION_ITEMS.md`.
-- Preserve detailed completion evidence in release notes, `test_result.md`, `output/manual_verification/latest/`, `waste_action_item.md`, or `lesson_n_learned.md` only when it is needed for future decisions.
+- When an item in `docs/planning_queue/ACTION_ITEMS.md` is completed normally, remove it from the active queue and move the completed action-item summary to `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`.
+- Preserve detailed completion evidence in release notes, `docs/quality_validation/test_result.md`, `output/manual_verification/latest/`, `docs/planning_queue/waste_action_item.md`, or `docs/planning_queue/lesson_n_learned.md` only when it is needed for future decisions.
 
 ## Development Documentation Organization
 
-- Use Taption-style role folders under `docs/` as navigation buckets only; root canonical files remain authoritative for compatibility.
-- Do not move `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `test_case.md`, `test_result.md`, `waste_action_item.md`, `lesson_n_learned.md`, or root `RELEASE_v*.md` unless the owner explicitly asks and automation compatibility is checked first.
+- Use Taption-style role folders under `docs/` as canonical development-documentation locations.
+- Do not create new root development docs. If a new doc is needed, place it under the matching `docs/` role folder and update `docs/README.md`.
 - Put new development docs in the matching role folder: `planning_queue/`, `workflow_operations/`, `project_reference/`, `quality_validation/`, `product_behavior/`, `nle_engine/`, `speech_stt/`, `validation_evidence/`, `release_notes/`, `archive_legacy/`, or `DECISIONS/`.
 - `docs/README.md` is the development-documentation hub. Update it when adding a new document category or changing canonical pointers.
-- `ACTION_ITEMS.md` must stay active-only: remaining work, current acceptance gates, rollback rules, and short archive pointers. Completed slices must move to `COMPLETED_ACTION_ITEMS.md`.
+- `docs/planning_queue/ACTION_ITEMS.md` must stay active-only: remaining work, current acceptance gates, rollback rules, and short archive pointers. Completed slices must move to `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`.
 - Docs, handoffs, and review packets are not behavior proof by themselves. Pair behavior claims with tests, runtime artifacts, generated evidence, or release validation.
 - Physical Jammini handoff files remain authoritative. Chat `ACK` / `WORKING` messages are diagnostic only until `덱스` reads and classifies the handoff file.
 - Clean-room reference rule: Taption docs and AGENTS may inform local structure, but do not copy external prompts/scripts/code or label this repo, delegated scope, artifact path, or proof target as Taption.
@@ -235,7 +236,7 @@ Completed item rule:
 - Latest release checkpoint scope:
   - `v04.01.00` - source-app NLE/Taption editing checkpoint, 04.01.00 version/schema bump, release docs, and code-review fixes.
 - Current NLE action source:
-  - `NLE_Action.md`
+  - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
 - Latest focused guard set for `v04.01.00`:
@@ -257,7 +258,7 @@ Completed item rule:
   - artifact: `output/manual_verification/latest/20260522_stt_zero_result_fallback_live`
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
-- Current active queue source: `ACTION_ITEMS.md`, section `Active Execution Queue`.
+- Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active item: `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`.
   - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
   - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
@@ -460,7 +461,7 @@ Completed item rule:
 
 ## Narrow Next Item
 
-Use `ACTION_ITEMS.md` as the executable queue. The current narrow target is `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`:
+Use `docs/planning_queue/ACTION_ITEMS.md` as the executable queue. The current narrow implementation target is group `G1. STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim` unless the owner explicitly chooses the Mac App Store launch group:
 
 1. Preserve the cut-boundary profiling method: non-profile elapsed runs for speed truth, profiler diagnostics only for ownership.
 2. Use the new true wall-clock stage spans as speed evidence; do not infer elapsed cost only from non-additive cProfile cumulative rows.
@@ -512,26 +513,26 @@ QA gate for that item:
 
 ## Persona Rules
 
-- When reviewing, correcting, or executing `ACTION_ITEMS.md`, act as a senior Apple Silicon MacBook developer: prefer macOS-native realities over generic optimization advice, use precise Apple terms such as ANE/Core ML/Metal/MLX/Accelerate, and reject ideas that add bridge cost, memory pressure, or subtitle-quality risk without measured benefit.
+- When reviewing, correcting, or executing `docs/planning_queue/ACTION_ITEMS.md`, act as a senior Apple Silicon MacBook developer: prefer macOS-native realities over generic optimization advice, use precise Apple terms such as ANE/Core ML/Metal/MLX/Accelerate, and reject ideas that add bridge cost, memory pressure, or subtitle-quality risk without measured benefit.
 - During implementation and code review, first use a meticulous senior developer viewpoint: check architecture boundaries, fallback paths, race conditions, resource lifetime, macOS process behavior, native bridge overhead, and maintainability.
 - During QA/test review, switch persona to a strict quality engineer: assume the implementation may be wrong, look for subtitle-quality drift, timing drift, UI/UX drift, flaky automation, fixture drift, memory leaks, stale workers, and misleading benchmark wins.
 - Code review and QA review must be separate passes when the change touches performance, native code, STT, LLM, VAD, timing, app-command, project save/load, or queue behavior.
 
 ## Idea And Lesson Rules
 
-- Before proposing or executing performance ideas, read `ACTION_ITEMS.md`, `waste_action_item.md`, and `lesson_n_learned.md`.
-- Do not re-propose rejected ideas from `waste_action_item.md` unless new measurements clearly invalidate the old rejection.
-- If an `ACTION_ITEMS.md` experiment is slower, lower quality, less stable, or only wins on a short fixture while regressing X5, append it to `waste_action_item.md` with hypothesis, change, metrics, quality result, artifact path, and rejection reason.
-- Record repeat-prevention lessons in `lesson_n_learned.md` whenever a mistake pattern, false diagnosis, risky shortcut, or ineffective optimization should not be repeated.
+- Before proposing or executing performance ideas, read `docs/planning_queue/ACTION_ITEMS.md`, `docs/planning_queue/waste_action_item.md`, and `docs/planning_queue/lesson_n_learned.md`.
+- Do not re-propose rejected ideas from `docs/planning_queue/waste_action_item.md` unless new measurements clearly invalidate the old rejection.
+- If a `docs/planning_queue/ACTION_ITEMS.md` experiment is slower, lower quality, less stable, or only wins on a short fixture while regressing X5, append it to `docs/planning_queue/waste_action_item.md` with hypothesis, change, metrics, quality result, artifact path, and rejection reason.
+- Record repeat-prevention lessons in `docs/planning_queue/lesson_n_learned.md` whenever a mistake pattern, false diagnosis, risky shortcut, or ineffective optimization should not be repeated.
 - Do not treat short Macau speed gains as sufficient. Check X5 3-minute rolling verification when quality or rolling-window performance can be affected. Run Tinyping only when the owner explicitly requests long-flow validation.
-- After a normal successful idea/action/native item completion, remove that completed item from `ACTION_ITEMS.md` so it shows only remaining executable work.
+- After a normal successful idea/action/native item completion, remove that completed item from `docs/planning_queue/ACTION_ITEMS.md` so it shows only remaining executable work.
 
 ## Release Rules
 
 - Release handoff is allowed only when the owner explicitly asks.
 - Use `core/runtime/config.py` as version source of truth.
 - Read only the immediately previous release note when drafting a new release note.
-- Keep release history out of `ACTION_ITEMS.md` and `AGENTS.md`.
+- Keep release history out of `docs/planning_queue/ACTION_ITEMS.md` and `AGENTS.md`.
 - DMG/installer/App Store packaging is not part of default release work. Run it only when explicitly requested.
 
 ## Report Format

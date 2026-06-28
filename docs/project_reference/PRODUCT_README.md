@@ -5,7 +5,7 @@
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
 [![App Version](https://img.shields.io/badge/app-04.01.00-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.01.00-30D158?style=for-the-badge)](RELEASE_v04.01.00.md)
+[![Release](https://img.shields.io/badge/release-v04.01.00-30D158?style=for-the-badge)](../release_notes/RELEASE_v04.01.00.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -197,23 +197,23 @@ Use the documents below as the current navigation set for this repository:
 
 | File | Role |
 | --- | --- |
-| `AGENTS.md` | Agent bootstrap rules, role split, and guarded working rules. |
-| `ACTION_ITEMS.md` | Single source of truth for the active execution queue and hard rules. |
+| `AGENTS.md` | Root agent bootstrap rules, role split, and guarded working rules. |
+| `docs/planning_queue/ACTION_ITEMS.md` | Single source of truth for the active execution queue and hard rules. |
 | `docs/README.md` | Documentation index and read order. |
 | `docs/PROJECT_STATE.md` | Current product direction, constraints, and verified scope. |
 | `docs/HANDOFF.md` | Latest continuation snapshot, open risks, and next step. |
-| `README.md` | Setup, product summary, and high-level operational guidance. |
-| `RELEASE_v*.md` | Release checkpoints kept for recent continuity only. |
-| `test_case.md` | Validation expectations and fixture guidance. |
-| `test_result.md` | Latest recorded validation outcomes. |
-| `anti_agents.md` | Antigravity and `잼민이` delegation rules. |
-| `cooperation.md` | Cross-project Codex x Antigravity cooperation contract and prompt templates. |
-| `idea.md` | Shared scratchpad for ideas that still need `덱스` review before execution. |
+| `docs/project_reference/PRODUCT_README.md` | Setup, product summary, and high-level operational guidance. |
+| `docs/release_notes/RELEASE_v*.md` | Release checkpoints kept for recent continuity only. |
+| `docs/quality_validation/test_case.md` | Validation expectations and fixture guidance. |
+| `docs/quality_validation/test_result.md` | Latest recorded validation outcomes. |
+| `docs/workflow_operations/anti_agents.md` | Antigravity and `잼민이` delegation rules. |
+| `docs/workflow_operations/cooperation.md` | Cross-project Codex x Antigravity cooperation contract and prompt templates. |
+| `docs/planning_queue/idea.md` | Shared scratchpad for ideas that still need `덱스` review before execution. |
 
 Recommended read order for a fresh continuation:
 
 1. `AGENTS.md`
-2. `ACTION_ITEMS.md`
+2. `docs/planning_queue/ACTION_ITEMS.md`
 3. `docs/README.md`
 4. `docs/PROJECT_STATE.md`
 5. `docs/HANDOFF.md`
@@ -257,7 +257,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.01.00.md`](RELEASE_v04.01.00.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.01.00.md`](../release_notes/RELEASE_v04.01.00.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

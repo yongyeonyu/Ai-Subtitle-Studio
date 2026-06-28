@@ -19,7 +19,7 @@ This file is the execution source of truth for four connected workstreams:
 
 Current NLE status:
 
-- Completed workstream history is archived in `COMPLETED_ACTION_ITEMS.md#nle-action-completed-workstream-baseline` and the related completed NLE sections in that file; this plan keeps only open status and future gates.
+- Completed workstream history is archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#nle-action-completed-workstream-baseline` and the related completed NLE sections in that file; this plan keeps only open status and future gates.
 - Open status: persisted NLE project fields are not approved, and per-pixel drag writes to NLE state remain explicitly out of scope. Additional runtime mutation sources require a fresh owner-map and focused audit before adoption.
 - Latest owner-map audit: `output/manual_verification/latest/nle_drag_commit_boundary_guard_20260628/nle_runtime_owner_map_audit.md`; current release/commit NLE runtime mutation owners are covered `24/24` across `12` operation families, including output-domain `roughcut_range_edit`, and commit-boundary guards are covered `1/1` for `timeline_center_drag_preview_only_until_release`; runtime behavior changed `false`, and blocked candidates remain persisted NLE disk fields, per-pixel NLE writes, and QML/GPU timeline default surface changes.
 - Latest adapter/cache consistency audit: `output/manual_verification/latest/nle_adapter_consistency_audit_20260628/nle_adapter_consistency_audit.md`; repeated save/reopen cycles pass `6/6`, runtime-only `_nle_project_state` markers do not persist after cache clear/reopen, storage stays clean, final invalid/non-monotonic/overlap stays `0/0/0`, global max-active stays `1`, and the project file LRU cache respects its `4` entry limit.

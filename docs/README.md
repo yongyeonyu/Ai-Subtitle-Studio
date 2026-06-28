@@ -1,32 +1,39 @@
 # Developer Documentation Hub
 
-이 폴더는 `AI Subtitle Studio` 개발 문서 허브입니다. Taption식 역할 폴더 구조를 참고하되, 이 저장소의 기존 부트스트랩과 자동화 호환성을 지키기 위해 root canonical 문서는 물리적으로 이동하지 않습니다.
+This folder is the canonical documentation home for `AI Subtitle Studio`.
+The repository root keeps only `AGENTS.md` as a development-documentation file;
+all active plans, release notes, validation notes, reference maps, and workflow
+docs live under `docs/`.
 
-현재 제품 라인은 macOS Apple Silicon 우선의 Python/PyQt6 source app입니다. Native migration, Swift rewrite, QML/GPU timeline default, App Store packaging/signing/upload는 owner가 명시적으로 다시 열기 전까지 active direction이 아닙니다.
+The current product line remains the macOS Apple Silicon first Python/PyQt6
+source app. Native migration, Swift rewrite, QML/GPU timeline defaults, App
+Store packaging/signing/upload, and DMG release work stay opt-in unless the
+owner explicitly reopens that scope.
 
 ## Start Here
 
 1. `../AGENTS.md`
-2. `../ACTION_ITEMS.md`
-3. `../COMPLETED_ACTION_ITEMS.md`
-4. `../File_structure.txt`
-5. `docs/README.md`
-6. `docs/PROJECT_STATE.md`
-7. `docs/FEATURE_REGISTRY.md`
-8. `docs/ARCHITECTURE.md`
-9. `docs/VALIDATION.md`
-10. `docs/HANDOFF.md`
-
-없는 파일은 건너뛰되, root `ACTION_ITEMS.md`와 `COMPLETED_ACTION_ITEMS.md`는 위치를 바꾸지 않습니다.
+2. `planning_queue/ACTION_ITEMS.md`
+3. `planning_queue/COMPLETED_ACTION_ITEMS.md`
+4. `PROJECT_STATE.md`
+5. `FEATURE_REGISTRY.md`
+6. `ARCHITECTURE.md`
+7. `VALIDATION.md`
+8. `HANDOFF.md`
+9. `project_reference/PRODUCT_README.md`
+10. `quality_validation/test_case.md`
+11. `quality_validation/test_result.md`
+12. Latest `release_notes/RELEASE_v*.md`
 
 ## Current Snapshot
 
 - App checkpoint: `04.01.00` / `v04.01.00`
-- Active queue: `../ACTION_ITEMS.md`
-- Completed archive: `../COMPLETED_ACTION_ITEMS.md`
+- Active queue: `planning_queue/ACTION_ITEMS.md`
+- Completed archive: `planning_queue/COMPLETED_ACTION_ITEMS.md`
 - Handoff: `HANDOFF.md`
 - Validation: `VALIDATION.md`
-- NLE plan: `../NLE_Action.md`
+- Product README: `project_reference/PRODUCT_README.md`
+- NLE plan: `nle_engine/NLE_Action.md`
 - App Store readiness: `APP_STORE_SUBMISSION_READINESS.md`
 - Jammini mapping: `agent_communication/README.md`
 
@@ -34,29 +41,38 @@
 
 | Folder | Role | Canonical pointers |
 | --- | --- | --- |
-| `planning_queue/` | Active queue and completed-action navigation. | `../ACTION_ITEMS.md`, `../COMPLETED_ACTION_ITEMS.md`, `../waste_action_item.md`, `../lesson_n_learned.md` |
-| `workflow_operations/` | Handoff, agent route, watchdog, and operational workflow docs. | `HANDOFF.md`, `agent_communication/README.md`, `../cooperation.md`, `.agents/sentinel/` |
-| `project_reference/` | Product state, feature ownership, repo structure, and architecture references. | `PROJECT_STATE.md`, `FEATURE_REGISTRY.md`, `ARCHITECTURE.md`, `../README.md` |
-| `quality_validation/` | Validation commands, fixture rules, and test-result pointers. | `VALIDATION.md`, `../test_case.md`, `../test_result.md` |
-| `product_behavior/` | User-visible behavior, submission readiness, UI/UX guardrails, and product policy. | `APP_STORE_SUBMISSION_READINESS.md`, `../README.md`, `../AGENTS.md` |
-| `nle_engine/` | NLE/source-app transition contracts, runtime projection, and Taption parity evidence. | `../NLE_Action.md`, `../COMPLETED_ACTION_ITEMS.md`, `HANDOFF.md` |
-| `speech_stt/` | STT/VAD/LLM generation policy, latency gates, and cache/default evidence. | `../ACTION_ITEMS.md`, `../COMPLETED_ACTION_ITEMS.md`, `../test_result.md` |
-| `validation_evidence/` | Pointers to generated local proof artifacts. | `../output/manual_verification/latest/`, `../.codex_work/benchmarks/` |
-| `agent_communication/` | Taption-derived Jammini communication mapping for this repo. | `.agents/sentinel/handoffs/`, `.agents/sentinel/handoff.md` |
-| `release_notes/` | Release-note navigation and retention policy. | `../RELEASE_v04.00.07.md` and newer |
+| `planning_queue/` | Active queue, completed-action archive, rejected ideas, and lessons. | `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `waste_action_item.md`, `lesson_n_learned.md`, `idea.md` |
+| `workflow_operations/` | Handoff, Jammini cooperation, Antigravity role docs, watchdog and operational workflow. | `cooperation.md`, `anti_agents.md`, `../HANDOFF.md`, `../agent_communication/README.md`, `../../.agents/sentinel/` |
+| `project_reference/` | Product README, repo structure, code map, owner maps, and stable project references. | `PRODUCT_README.md`, `File_structure.txt`, `CODEMAP.md`, `LONG_FILE_OWNERSHIP_MAP.md`, `SUBTITLE_GENERATION_DOMAIN_MAP.md` |
+| `quality_validation/` | Validation commands, fixture rules, benchmark plans, and current result records. | `test_case.md`, `test_result.md`, `NAS_SUBTITLE_BENCHMARK_50_PLAN.md`, `NAS_SUBTITLE_BENCHMARK_RECORDING_CONTEXT.md`, `../VALIDATION.md` |
+| `product_behavior/` | User-visible behavior, submission readiness, UI/UX guardrails, and product policy. | `../APP_STORE_SUBMISSION_READINESS.md`, `../PROJECT_STATE.md`, `../../AGENTS.md` |
+| `nle_engine/` | NLE/source-app transition contracts, runtime projection, Taption parity evidence, and NLE gates. | `NLE_Action.md`, `../planning_queue/COMPLETED_ACTION_ITEMS.md`, `../HANDOFF.md` |
+| `speech_stt/` | STT/VAD/LLM generation policy, latency gates, and cache/default evidence. | `../planning_queue/ACTION_ITEMS.md`, `../planning_queue/COMPLETED_ACTION_ITEMS.md`, `../quality_validation/test_result.md` |
+| `validation_evidence/` | Pointers to generated local proof artifacts. | `../../output/manual_verification/latest/`, `../../.codex_work/benchmarks/` |
+| `agent_communication/` | Taption-derived Jammini communication mapping for this repo. | `../../.agents/sentinel/handoffs/`, `../../.agents/sentinel/handoff.md` |
+| `release_notes/` | Release-note files and retention policy. | `RELEASE_v04.00.07.md` and newer |
 | `DECISIONS/` | Durable architecture decisions. | `DECISIONS/README.md` |
 | `archive_legacy/` | Historical or deprecated docs only. | Do not use for active queue or current proof. |
 
 ## Write Rules
 
-- Keep `ACTION_ITEMS.md` active-only: remaining work, current acceptance gates, rollback rules, and short archive pointers.
-- Move completed action-item summaries to `COMPLETED_ACTION_ITEMS.md`; do not duplicate completed histories back into the active queue.
-- Keep detailed proof in `test_result.md`, release notes, `output/manual_verification/latest/`, or specific audit reports when future decisions need it.
+- Keep `planning_queue/ACTION_ITEMS.md` active-only: remaining work, current acceptance gates, rollback rules, and short archive pointers.
+- Move completed action-item summaries to `planning_queue/COMPLETED_ACTION_ITEMS.md`; do not duplicate completed histories back into the active queue.
+- Keep detailed proof in `quality_validation/test_result.md`, release notes, `output/manual_verification/latest/`, or specific audit reports when future decisions need it.
 - Treat docs, handoffs, and review packets as navigation and rationale. They are not behavior proof without tests, runtime artifacts, or generated evidence.
 - Put new development docs in the role folder that matches their owner area, then update this hub if a new category is created.
 - Do not copy Taption prompts/scripts/code into this repo. Taption is a reference project; this lane must remain labeled `AI Subtitle Studio`.
-- Do not move root canonical docs unless the owner explicitly asks and the automation/Jammini compatibility risk is handled.
+- Do not add new root development docs. `AGENTS.md` is the only root dev-doc exception.
+
+## Archive Policy
+
+- Keep release notes from `release_notes/RELEASE_v04.00.07.md` onward.
+- Move stale, superseded, or historical documents to `archive_legacy/` only when they are not active gates, not current proof, and not needed by scripts/tests.
+- Do not archive `.agents/sentinel/` handoff files; those are physical handoff evidence.
+- Do not delete old release notes or validation records unless the owner explicitly approves a retention change.
 
 ## Temporary Working Memory
 
-Use `.codex_work/` for local Codex scratch output and `output/manual_verification/latest/` for generated validation artifacts. These are proof surfaces, not a place to hide active queue state.
+Use `.codex_work/` for local Codex scratch output and
+`output/manual_verification/latest/` for generated validation artifacts. These
+are proof surfaces, not a place to hide active queue state.

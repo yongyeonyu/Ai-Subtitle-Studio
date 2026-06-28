@@ -574,7 +574,7 @@ roughcut 영상 렌더와 exact-join sidecar smoke가 필요하면 source app에
 
 ```bash
 find docs -maxdepth 2 -type f | sort
-rg -n "## AI agent read order|## Before coding|## Temporary working memory" docs/README.md
+rg -n "^## Start Here|^## Folder Map|^## Archive Policy" docs/README.md
 rg -n "^# Project State|^# Feature Registry|^# Architecture|^# Validation Guide|^# Handoff" docs/*.md
 ```
 
@@ -613,7 +613,7 @@ git status --short
 
 - `docs/HANDOFF.md`가 이번 세션 상태를 반영하는지
 - 변경으로 인해 `docs/PROJECT_STATE.md`, `docs/FEATURE_REGISTRY.md`, `docs/ARCHITECTURE.md`, `docs/VALIDATION.md` 중 갱신이 필요한 파일이 빠지지 않았는지
-- `ACTION_ITEMS.md`와 현재 작업 상태가 충돌하지 않는지
+- `docs/planning_queue/ACTION_ITEMS.md`와 현재 작업 상태가 충돌하지 않는지
 
 ## Minimum validation before claiming completion
 

@@ -215,7 +215,11 @@ HELP_QA_COVERAGE = {
     },
     "단축키 / 문제상황": {
         "profiles": ["quick", "major", "full"],
-        "owners": ["test_case.md", "README.md", "tools/qa_suite_runner.py"],
+        "owners": [
+            "docs/quality_validation/test_case.md",
+            "docs/project_reference/PRODUCT_README.md",
+            "tools/qa_suite_runner.py",
+        ],
         "artifacts": ["suite_result.json", "suite_result.md"],
     },
 }

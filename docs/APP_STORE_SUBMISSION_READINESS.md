@@ -1,10 +1,11 @@
 # Mac App Store Submission Readiness
 
-This document tracks the non-code and release-proof material needed before AI Subtitle Studio can be treated as a Mac App Store submission candidate.
+This document tracks the release-proof and owner-input material needed before
+AI Subtitle Studio can be treated as a Mac App Store submission candidate.
 
 ## Current Status
 
-- Status: blocked until owner-approved packaging/signing/validation is run.
+- Status: blocked until owner-approved packaging/signing/validation and owner metadata are complete.
 - Source app version: `04.01.00`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
@@ -13,59 +14,121 @@ This document tracks the non-code and release-proof material needed before AI Su
 - Submission target: Mac App Store `.pkg` built from a signed, sandboxed `.app`.
 - Separate distribution track: Developer ID beta `.dmg` is opt-in local/beta distribution evidence, not Mac App Store submission proof.
 
-## Distribution Track Boundary
+## Readiness Definition
 
-- Mac App Store package: primary submission target. Required evidence is signed `.app`, strict `codesign`, signed `.pkg`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, and completed non-code metadata.
-- Developer ID beta DMG: separate opt-in track for beta distribution. It can help owner testing, but it must not be counted as App Store submission readiness.
-- Normal source-app pytest/QA: useful runtime confidence, but not App Store submission proof by itself.
+The app is ready to submit only when all of these proof surfaces exist:
 
-## Code-Side Gates
+1. Signed sandboxed `.app` using the correct Apple Distribution identity.
+2. Strict `codesign --verify --deep --strict --verbose=2` output for that exact app.
+3. Signed Mac App Store `.pkg` using the installer identity.
+4. `pkgutil --check-signature` output for that exact package.
+5. Sandboxed smoke proof for launch, user-selected media open, audio/STT, optional network/model access, save/reopen, SRT export, rendered subtitle output, and quit/cleanup.
+6. App Store Connect or Transporter validation output for the exact package.
+7. Owner-approved App Store metadata, privacy answers, export compliance, review notes, screenshots, support URL, and release notes.
 
-- Signed `.app` with Apple Distribution identity: pending.
-- Strict `codesign --verify --deep --strict`: pending.
-- Signed Mac App Store `.pkg` with installer identity: pending.
-- `pkgutil --check-signature`: pending.
-- Sandboxed smoke for launch, user-selected file access, audio/STT, model/network access, save/reopen, and export: pending.
-- App Store Connect validation: pending.
+Source-app pytest, quick QA, release notes, and documentation updates are useful
+confidence signals, but none of them is App Store submission proof by itself.
 
-## Entitlement Explanation Draft
+## Launch Plan
 
-- App Sandbox: required for Mac App Store distribution and enabled in `packaging/macos/AI Subtitle Studio.entitlements`.
-- User-selected read/write: needed so editors can open, save, and export owner-selected media, subtitle, and project files.
-- App-scope bookmarks: needed so user-approved file locations can survive app relaunches.
-- Network client: needed for optional local or remote model calls.
-- Audio input: needed for optional dictation and STT workflows.
-- Temporary exception entitlements: none currently present.
+### Phase 0. Owner Inputs
 
-## App Store Connect Owner Inputs
+- Confirm App Store Connect app record, team, bundle ID, SKU, primary locale, category, pricing/free status, and availability.
+- Provide or approve support URL, privacy policy URL, marketing URL, screenshots, app subtitle, keywords, description, promotional text, review notes, age rating answers, and release-note copy.
+- Confirm App Privacy answers for local media, audio/STT, optional network/model calls, diagnostics, crash/analytics policy, and user data retention.
+- Confirm Export Compliance answers, including encryption/network behavior.
 
-- Privacy policy URL: owner input required.
-- App privacy data type answers: owner input required.
+Exit gate: every owner-input item is either approved or explicitly marked not applicable.
+
+### Phase 1. Source-App Baseline
+
+- Run a current source quick QA before building packages.
+- Preserve subtitle quality gates and UI/UX behavior.
+- Record baseline in `docs/quality_validation/test_result.md` or `output/manual_verification/latest/`.
+
+Exit gate: source-app baseline passes, and no runtime work is hidden inside packaging.
+
+### Phase 2. Sandboxed App Bundle
+
+- Build the app bundle with `packaging/macos/build_app_bundle.sh`.
+- Sign nested binaries and the outer app with `packaging/macos/sign_app_bundle.sh`.
+- Use `packaging/macos/AI Subtitle Studio.entitlements`.
+- Verify strict codesign.
+- Smoke launch and editor workflows under sandbox constraints.
+
+Exit gate: exact `.app` path, signing identity, entitlements, strict verification, and sandbox smoke artifact are recorded.
+
+### Phase 3. Mac App Store Package
+
+- Build the signed package with `packaging/macos/build_app_store_pkg.sh` using `INSTALLER_IDENTITY`.
+- Run `pkgutil --check-signature`.
+- Keep the `.pkg` artifact path and signature output tied together in the report.
+
+Exit gate: package signature is valid and points to the same app candidate from Phase 2.
+
+### Phase 4. App Store Connect Validation
+
+- Run `packaging/macos/upload_app_store_build.sh validate` or Transporter validation.
+- Do not upload yet unless the owner explicitly approves upload.
+- Preserve validation output under `output/manual_verification/latest/`.
+
+Exit gate: validation succeeds for the exact `.pkg` candidate.
+
+### Phase 5. Submission Assembly
+
+- Attach screenshots, release notes, privacy answers, export compliance, sandbox entitlement explanation, and review notes.
+- Check that metadata does not overclaim speed, native migration, App Store readiness, or unsupported format behavior.
+- Submit only after explicit owner approval.
+
+Exit gate: App Store Connect submission is owner-approved and all non-code material is complete.
+
+### Phase 6. Review / Release
+
+- Track Apple review messages separately from local QA.
+- If rejected, create a narrow fix item with the exact rejection text, owner file, proof command, and rollback plan.
+- After approval, update `docs/release_notes/` and `docs/HANDOFF.md` with the release state.
+
+## Current Blockers
+
+- Signed `.app`: missing.
+- Signed `.pkg`: missing.
+- Strict codesign output: missing.
+- Package signature output: missing.
+- Sandboxed workflow smoke: missing.
+- App Store Connect validation artifact: missing.
+- Apple Distribution signing identity: not configured in local proof.
+- Installer signing identity: not configured in local proof.
+- Privacy answers: owner input required.
 - Export compliance answers: owner input required.
+- Screenshots: owner input required.
 - Support URL: owner input required.
-- App screenshots: owner input required.
-- App review notes: owner input required.
-- Age rating answers: owner input required.
-- Release notes: owner input required.
+- Review notes: owner input required.
+- Age rating and release-note copy: owner input required.
 
-## Submission Contents Audit
+## Latest Audit Evidence
 
-- Latest audit: `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`
-- Submission content status: blocked.
-- Pending owner-input items: `8/8`.
-- Drafted item count: `8`.
-- The audit itemizes each non-code submission field with `status`, `draft`, `owner_decision_required`, and `acceptance_gate` so metadata work stays separate from packaging/signing/upload proof.
+- `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_readiness_target_lock_20260628/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_submission_contents_audit_20260628/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_readiness_gate_refresh_20260628/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_readiness_v040100_20260628/app_store_readiness_audit.md`
 
-## Non-Code Submission Metadata Draft
+Latest known state: `status=blocked`, `local_packaging_ready=true`,
+`app_store_submission_ready=false`, blocker count `14`.
 
-- Privacy policy URL: pending owner URL.
-- App privacy data type answers: pending owner confirmation for media files, audio/STT workflows, optional network/model calls, diagnostics, and any analytics/crash collection policy.
-- Export compliance answers: pending owner confirmation for encryption/export answers.
-- Screenshots: pending App Store screenshot set after the signed/sandboxed app candidate exists.
-- Support URL: pending owner URL.
-- App review notes: pending sandbox entitlement explanation, model/network behavior notes, and test-account or fixture notes if needed.
-- Age rating answers: pending owner confirmation.
-- Release notes: source release note exists at `RELEASE_v04.01.00.md`; App Store release-note copy still needs owner approval before submission.
+## Owner-Approved Command Sequence
+
+These commands are not part of normal source-app development. Run them only
+after owner approval for the corresponding packaging/signing/validation step.
+
+```bash
+AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick
+CODESIGN_IDENTITY="Apple Distribution: ..." packaging/macos/build_app_bundle.sh
+CODESIGN_IDENTITY="Apple Distribution: ..." packaging/macos/sign_app_bundle.sh
+packaging/macos/validate_app_bundle.sh
+INSTALLER_IDENTITY="3rd Party Mac Developer Installer: ..." packaging/macos/build_app_store_pkg.sh
+ASC_API_KEY="..." ASC_API_ISSUER="..." packaging/macos/upload_app_store_build.sh validate
+```
 
 ## Official References
 
@@ -74,15 +137,3 @@ This document tracks the non-code and release-proof material needed before AI Su
 - Export compliance: <https://developer.apple.com/help/app-store-connect/manage-app-information/overview-of-export-compliance>
 - Screenshots and previews: <https://developer.apple.com/help/app-store-connect/manage-app-information/upload-app-previews-and-screenshots>
 - App Sandbox information: <https://developer.apple.com/help/app-store-connect/reference/app-uploads/app-sandbox-information>
-
-## Owner-Approved Command Sequence
-
-These commands are not part of normal source-app development. Run them only after owner approval for packaging/signing/upload validation.
-
-```bash
-CODESIGN_IDENTITY="Apple Distribution: ..." packaging/macos/build_app_bundle.sh
-CODESIGN_IDENTITY="Apple Distribution: ..." packaging/macos/sign_app_bundle.sh
-packaging/macos/validate_app_bundle.sh
-INSTALLER_IDENTITY="3rd Party Mac Developer Installer: ..." packaging/macos/build_app_store_pkg.sh
-ASC_API_KEY="..." ASC_API_ISSUER="..." packaging/macos/upload_app_store_build.sh validate
-```

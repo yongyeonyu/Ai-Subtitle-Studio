@@ -8,12 +8,12 @@ fi
 
 target_root="$1"
 owner_name="${2:-대표님}"
-target_file="${target_root%/}/cooperation.md"
+target_file="${target_root%/}/docs/workflow_operations/cooperation.md"
 
-mkdir -p "$target_root"
+mkdir -p "$(dirname "$target_file")"
 
 if [[ -e "$target_file" ]]; then
-  echo "cooperation.md already exists: $target_file" >&2
+  echo "docs/workflow_operations/cooperation.md already exists: $target_file" >&2
   exit 1
 fi
 
@@ -29,10 +29,10 @@ Purpose: This file defines how Dex (Codex) and Jammini / Antigravity collaborate
 ## Read Order
 
 1. AGENTS.md
-2. ACTION_ITEMS.md
+2. docs/planning_queue/ACTION_ITEMS.md
 3. docs/HANDOFF.md
-4. README.md
-5. cooperation.md
+4. docs/project_reference/PRODUCT_README.md
+5. docs/workflow_operations/cooperation.md
 
 ## Working Split
 
@@ -76,7 +76,7 @@ ag-send-last "DEX_REVIEW_READY ..."
 
 \`\`\`text
 이 프로젝트에서 Codex(덱스)와 협업합니다.
-작업 전 AGENTS.md, ACTION_ITEMS.md, docs/HANDOFF.md, README.md, cooperation.md를 읽으세요.
+작업 전 AGENTS.md, docs/planning_queue/ACTION_ITEMS.md, docs/HANDOFF.md, docs/project_reference/PRODUCT_README.md, docs/workflow_operations/cooperation.md를 읽으세요.
 덱스는 최종 구현과 검증을 담당하고, 잼민이는 bounded support work만 수행합니다.
 단순하고 bounded한 일은 기본적으로 잼민이에게 먼저 위임됩니다.
 delegated slice가 끝나면 DEX_REVIEW_READY로 반환하고 멈추세요.

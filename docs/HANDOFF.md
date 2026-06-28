@@ -31,9 +31,76 @@
 - 상대 경로를 사용합니다.
 - 사실만 적고 과장하지 않습니다.
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
-- `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
+- `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 v04.01.00 Source-App Release
+## Current Handoff - 2026-06-28 Documentation Relocation And App Store Launch Plan
+
+### Scope
+
+- Moved root development documents under `docs/`, leaving `AGENTS.md` as the only root development-documentation file.
+- Reworked `docs/planning_queue/ACTION_ITEMS.md` into grouped active plans:
+  - `G0. Mac App Store Launch Program`
+  - `G1. STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`
+  - `G2. Source-App NLE / Taption Editing Continuity`
+- Expanded `docs/APP_STORE_SUBMISSION_READINESS.md` into a phase-based Mac App Store launch plan.
+- Updated docs hub, folder READMEs, project state, feature registry, validation docs, Jammini mapping, product README, code map, and file-structure map.
+- Updated scripts/tests that depended on old root document paths.
+- No runtime subtitle-generation, UI/UX, package build, upload, DMG, notarization, signing, or App Store submission was performed.
+
+### Moved Development Docs
+
+- `ACTION_ITEMS.md` -> `docs/planning_queue/ACTION_ITEMS.md`
+- `COMPLETED_ACTION_ITEMS.md` -> `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`
+- `NLE_Action.md` -> `docs/nle_engine/NLE_Action.md`
+- `README.md` -> `docs/project_reference/PRODUCT_README.md`
+- `test_case.md` -> `docs/quality_validation/test_case.md`
+- `test_result.md` -> `docs/quality_validation/test_result.md`
+- `docs/NAS_SUBTITLE_BENCHMARK_50_PLAN.md` -> `docs/quality_validation/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`
+- `docs/NAS_SUBTITLE_BENCHMARK_RECORDING_CONTEXT.md` -> `docs/quality_validation/NAS_SUBTITLE_BENCHMARK_RECORDING_CONTEXT.md`
+- `RELEASE_v*.md` -> `docs/release_notes/`
+- `CODEMAP.md`, `File_structure.txt`, `LONG_FILE_OWNERSHIP_MAP.md`, `SUBTITLE_GENERATION_DOMAIN_MAP.md` -> `docs/project_reference/`
+- `anti_agents.md`, `cooperation.md` -> `docs/workflow_operations/`
+- `idea.md`, `waste_action_item.md`, `lesson_n_learned.md` -> `docs/planning_queue/`
+
+### Updated Compatibility Surfaces
+
+- `tools/jammini_watchdog.sh` now reads `docs/planning_queue/ACTION_ITEMS.md`.
+- `tools/jammini_delegate.sh` bootstrap read order now points to docs paths.
+- `tools/cooperation_bootstrap.sh` now creates `docs/workflow_operations/cooperation.md`.
+- `tests/test_subtitle_generation_domain_map.py` now reads domain maps from `docs/project_reference/`.
+- `ui/help/help_content.py` now points help QA ownership to `docs/quality_validation/test_case.md` and `docs/project_reference/PRODUCT_README.md`.
+- `tools/nas_truth_learning.py` and `core/personalization/nas_truth_learning.py` now default to `docs/quality_validation/NAS_SUBTITLE_BENCHMARK_50_PLAN.md`.
+
+### Jammini Support
+
+- Route probe: `.agents/sentinel/handoffs/20260628-211017-watchdog-handoff-probe.md`.
+- Docs relocation scout: `.agents/sentinel/handoffs/20260628-211046-docs-relocation-risk-scout.md`.
+- Dex classification: accepted script/test/path-risk findings; proceeded with the owner-requested move while patching the compatibility points instead of preserving root `ACTION_ITEMS.md`.
+
+### Verification
+
+- `bash -n tools/jammini_watchdog.sh tools/jammini_delegate.sh tools/cooperation_bootstrap.sh` -> pass.
+- `./venv/bin/python -m py_compile core/personalization/nas_truth_learning.py tools/nas_truth_learning.py tests/test_subtitle_generation_domain_map.py ui/help/help_content.py` -> pass.
+- `test -f docs/planning_queue/ACTION_ITEMS.md && test -f docs/project_reference/PRODUCT_README.md && test -f docs/release_notes/RELEASE_v04.01.00.md && test ! -f ACTION_ITEMS.md && test ! -f README.md && test ! -f RELEASE_v04.01.00.md` -> `docs_presence_and_root_doc_move=pass`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_generation_domain_map.py tests/test_help_dialog.py -k "subtitle_generation_domain_map or help"` -> `7 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_generation_domain_map.py tests/test_help_dialog.py tests/test_nas_truth_learning.py -k "subtitle_generation_domain_map or help or nas_truth"` -> `12 passed`.
+- `tools/jammini_watchdog.sh --status` -> active/canonical conversation `d2075935-3595-4188-baed-4ee0b45cb7a8`.
+- `tools/jammini_watchdog.sh --once --dry-run` -> rendered a DEX task packet without dispatching work.
+- `tools/jammini_delegate.sh --bootstrap --dry-run` -> read order uses docs paths.
+- `rg -n "docs/NAS_SUBTITLE_BENCHMARK" docs core tools tests --glob '!docs/quality_validation/test_result.md'` -> no old-path matches.
+- `git diff --check -- .` -> pass.
+
+### Known Notes
+
+- Root still contains non-doc files such as `.gitignore`, `.env`, `main.py`, and `requirements-mac.txt`; the owner request was applied to development docs.
+- App Store launch is now planned in detail but still blocked until owner metadata, signing identities, sandbox smoke, signed `.app`, signed `.pkg`, and App Store Connect validation exist.
+- Historical release notes and old validation history may contain old root-path names as historical records; current hub and current docs point to the new `docs/` paths.
+
+### Next Recommended Action
+
+- If the owner says "다음 액션", start from `docs/planning_queue/ACTION_ITEMS.md` group `G0` for App Store launch planning/owner inputs, or `G1` if the request is generation-latency focused.
+
+## Previous Handoff - 2026-06-28 v04.01.00 Source-App Release
 
 ### Scope
 
