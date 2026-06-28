@@ -25,6 +25,7 @@ from core.project.nle_dual_write import (
     apply_gap_delete_dual_write_pilot,
     apply_gap_generate_dual_write_pilot,
     apply_marker_edit_dual_write_pilot,
+    apply_roughcut_range_edit_dual_write_pilot,
 )
 from core.project.nle_operations import (
     NLEEditorOperation,
@@ -248,7 +249,118 @@ def _operation_cases() -> list[tuple[str, dict[str, Any], Any]]:
             commit_source="provisional_cut_boundary_create",
         ),
     ))
+
+    project = _roughcut_range_edit_project()
+    after_candidate = deepcopy(project["roughcut_state"]["candidates"][0])
+    first, second = after_candidate["outputs"]["edl"]["segments"]
+    reordered_second = dict(second)
+    reordered_second.update({"output_start": 0.0, "output_end": 3.0})
+    reordered_first = dict(first)
+    reordered_first.update({"output_start": 3.0, "output_end": 5.0})
+    stitched = [
+        {
+            "time": 3.0,
+            "timeline_sec": 3.0,
+            "source": "roughcut_concat_join",
+            "segment_before_id": "chapter_0002",
+            "segment_after_id": "chapter_0001",
+        }
+    ]
+    after_candidate["outputs"]["edl"]["segments"] = [reordered_second, reordered_first]
+    after_candidate["outputs"]["edl"]["stitched_cut_boundaries"] = stitched
+    after_candidate["outputs"]["render_plan"]["segment_manifest"] = [
+        {
+            "segment_id": row["segment_id"],
+            "source_path": row["source_path"],
+            "source_start": row["source_start"],
+            "source_end": row["source_end"],
+            "output_start": row["output_start"],
+            "output_end": row["output_end"],
+        }
+        for row in (reordered_second, reordered_first)
+    ]
+    after_candidate["outputs"]["render_plan"]["stitched_cut_boundaries"] = stitched
+    cases.append((
+        "roughcut_range_edit",
+        project,
+        apply_roughcut_range_edit_dual_write_pilot(
+            project,
+            candidate_id="roughcut_a",
+            target_ids=["chapter_0002", "chapter_0001"],
+            after_candidate=after_candidate,
+            edit_type="chapter_reorder",
+            commit_boundary="release",
+            commit_source="roughcut_chapter_reorder",
+        ),
+    ))
     return cases
+
+
+def _roughcut_range_edit_project() -> dict[str, Any]:
+    media_path = "/tmp/roughcut_range_edit_source.mov"
+    first_segment = {
+        "segment_id": "chapter_0001",
+        "source_path": media_path,
+        "source_start": 0.0,
+        "source_end": 2.0,
+        "output_start": 0.0,
+        "output_end": 2.0,
+        "chapter_id": "chapter_0001",
+    }
+    second_segment = {
+        "segment_id": "chapter_0002",
+        "source_path": media_path,
+        "source_start": 3.0,
+        "source_end": 6.0,
+        "output_start": 2.0,
+        "output_end": 5.0,
+        "chapter_id": "chapter_0002",
+    }
+    manifest_rows = [
+        {
+            "segment_id": row["segment_id"],
+            "source_path": row["source_path"],
+            "source_start": row["source_start"],
+            "source_end": row["source_end"],
+            "output_start": row["output_start"],
+            "output_end": row["output_end"],
+        }
+        for row in (first_segment, second_segment)
+    ]
+    stitched = [
+        {
+            "time": 2.0,
+            "timeline_sec": 2.0,
+            "source": "roughcut_concat_join",
+            "segment_before_id": "chapter_0001",
+            "segment_after_id": "chapter_0002",
+        }
+    ]
+    project = _three_caption_project()
+    project["project_name"] = "nle_operation_journal_roughcut_range_edit"
+    project["roughcut_state"] = {
+        "selected_candidate_id": "roughcut_a",
+        "candidates": [
+            {
+                "candidate_id": "roughcut_a",
+                "name": "roughcut A",
+                "outputs": {
+                    "edl": {
+                        "duration": 5.0,
+                        "segments": [first_segment, second_segment],
+                        "stitched_cut_boundaries": stitched,
+                    },
+                    "render_plan": {
+                        "output_path": "/tmp/roughcut_range_edit.mov",
+                        "render_mode": "sync_safe",
+                        "segment_manifest": manifest_rows,
+                        "stitched_cut_boundaries": stitched,
+                    },
+                },
+            }
+        ],
+    }
+    return project
 
 
 def _audit_case(work_dir: Path, family: str, project: dict[str, Any], result: Any) -> dict[str, Any]:
@@ -317,7 +429,7 @@ def build_nle_operation_journal_report(*, output_dir: Path) -> dict[str, Any]:
     all_passed = all(
         row["operation_schema_ok"]
         and row["target_count"] > 0
-        and row["time_domain"] == "sequence"
+        and row["time_domain"] == ("output" if row["operation_family"] == "roughcut_range_edit" else "sequence")
         and row["frame_policy_unit"] == "frame"
         and row["frame_policy_allow_final_overlap"] is False
         and row["release_metadata"]
@@ -378,14 +490,15 @@ def _markdown_report(report: dict[str, Any]) -> str:
         "",
         "## Operation Matrix",
         "",
-        "| family | kind | release | undo_release | runtime_journal | undo_rows | invalid | non_monotonic | overlap | max_active | storage_clean |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| family | kind | domain | release | undo_release | runtime_journal | undo_rows | invalid | non_monotonic | overlap | max_active | storage_clean |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in report["checks"]:
         lines.append(
-            "| {family} | {kind} | {release} | {undo_release} | {runtime_journal} | {undo_rows} | {invalid} | {non_monotonic} | {overlap} | {max_active} | {storage_clean} |".format(
+            "| {family} | {kind} | {domain} | {release} | {undo_release} | {runtime_journal} | {undo_rows} | {invalid} | {non_monotonic} | {overlap} | {max_active} | {storage_clean} |".format(
                 family=row["operation_family"],
                 kind=row["operation_kind"],
+                domain=row["time_domain"],
                 release=row["release_metadata"],
                 undo_release=row["undo_release_metadata"],
                 runtime_journal=row["runtime_journal_latest_schema_ok"],

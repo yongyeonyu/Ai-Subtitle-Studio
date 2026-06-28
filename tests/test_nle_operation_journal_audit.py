@@ -15,11 +15,11 @@ def test_nle_operation_journal_audit_covers_release_undo_contracts():
     assert report["ready"] is True
     assert report["runtime_change_applied"] is False
     assert report["runtime_nle_journal_applied"] is True
-    assert report["operation_family_count"] == 11
-    assert report["release_metadata_count"] == 11
-    assert report["undo_snapshot_count"] == 11
-    assert report["runtime_journal_count"] == 11
-    assert report["storage_clean_count"] == 11
+    assert report["operation_family_count"] == 12
+    assert report["release_metadata_count"] == 12
+    assert report["undo_snapshot_count"] == 12
+    assert report["runtime_journal_count"] == 12
+    assert report["storage_clean_count"] == 12
     families = {row["operation_family"] for row in report["checks"]}
     assert families == {
         "candidate_confirm",
@@ -33,11 +33,13 @@ def test_nle_operation_journal_audit_covers_release_undo_contracts():
         "gap_delete",
         "gap_generate",
         "marker_edit",
+        "roughcut_range_edit",
     }
     for row in report["checks"]:
         assert row["operation_schema_ok"] is True
         assert row["target_count"] > 0
-        assert row["time_domain"] == "sequence"
+        expected_domain = "output" if row["operation_family"] == "roughcut_range_edit" else "sequence"
+        assert row["time_domain"] == expected_domain
         assert row["frame_policy_unit"] == "frame"
         assert row["frame_policy_allow_final_overlap"] is False
         assert row["release_metadata"] is True
@@ -76,6 +78,7 @@ def test_nle_operation_journal_audit_writes_json_and_markdown_reports():
         assert markdown.startswith("# NLE Operation Journal Contract Audit")
         assert "## Operation Matrix" in markdown
         assert "Runtime NLE journal applied: `True`" in markdown
-        assert "Runtime journal count: `11`" in markdown
-        assert "| caption_move | caption_move | True | True | True |" in markdown
-        assert "| marker_edit | marker_edit | True | True | True |" in markdown
+        assert "Runtime journal count: `12`" in markdown
+        assert "| caption_move | caption_move | sequence | True | True | True |" in markdown
+        assert "| marker_edit | marker_edit | sequence | True | True | True |" in markdown
+        assert "| roughcut_range_edit | roughcut_range_edit | output | True | True | True |" in markdown

@@ -317,6 +317,41 @@
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_runtime_memory_manager.py tests/test_trace_log_bundle_audit.py -k "preview_cache or trace_log_bundle"` -> `3 passed, 25 deselected`.
   - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628` -> pass.
 
+## NLE Roughcut Range Edit Operation Coverage - 2026-06-28 KST
+
+- 실행 모드: source-app NLE output-domain `roughcut_range_edit` dual-write support plus NAS HeyDealer first-180s regression.
+- 결과: pass; roughcut candidate order/range edits can be recorded as output-time NLE operations without changing final subtitle rows, global canvas ownership, roughcut UI schemas, or persisted NLE disk fields.
+- 저장 위치:
+  - Operation journal audit: `output/manual_verification/latest/nle_roughcut_range_edit_operation_journal_20260628/nle_operation_journal_audit.md`
+  - Owner-map audit: `output/manual_verification/latest/nle_roughcut_range_edit_owner_map_20260628/nle_runtime_owner_map_audit.md`
+  - NAS preflight: `output/manual_verification/latest/nle_roughcut_range_edit_nas_heydealer_20260628/preflight/reference_fixture_availability.md`
+  - NAS acceptance: `output/manual_verification/latest/nle_roughcut_range_edit_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_143939/benchmark_results.json`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-153300-nle-roughcut-range-edit-owner-map.md`
+- 수정 요약:
+  - `core/project/nle_dual_write.py` now exposes `apply_roughcut_range_edit_dual_write_pilot(...)`.
+  - `roughcut_range_edit` uses `time_domain=output`, target roughcut ids, release commit/source metadata, undo snapshot metadata, and runtime-only NLE operation-journal entries.
+  - `tools/audit_nle_operation_journal.py` and `tools/audit_nle_runtime_owner_map.py` now include the 12th operation family and the 24th owner evidence row.
+  - No UI layout/labels/colors/menus/popups, roughcut sidecar schema, final subtitle timing/text, STT/STT2 policy, detector thresholds, persisted NLE project fields, App Store packaging/signing/upload, or DMG behavior changed.
+- 실제 감사 결과:
+  - Operation journal ready `true`; operation families `12`; release metadata `12`; undo snapshots `12`; runtime journal `12`; storage clean `12`.
+  - `roughcut_range_edit` row: domain `output`, release `true`, undo release `true`, runtime journal `true`, undo rows `3`, final invalid/non-monotonic/overlap `0/0/0`, max active `1`, storage clean `true`.
+  - Owner map ready `true`; covered owners `24/24`; missing owners `0`; `roughcut_range_edit_candidate_order` covered `2/2`.
+- NAS HeyDealer regression:
+  - Preflight ready `true`; media and reference SRT exist; clipped reference rows `89`.
+  - Acceptance `true`; elapsed `51.429s`; raw/final/reference `58/56/89`.
+  - Quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; final short/long `0/0`; global max active `1`.
+  - Stage spans: STT1 `18.578131s`, STT2 `17.372568s`, word precision `14.804677s`, subtitle postprocess `0.582754s`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_dual_write.py tools/audit_nle_operation_journal.py tools/audit_nle_runtime_owner_map.py tests/test_project_nle_dual_write.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `32 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `5 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `43 passed`.
+  - `./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_roughcut_range_edit_operation_journal_20260628` -> pass.
+  - `./venv/bin/python tools/audit_nle_runtime_owner_map.py --output-dir output/manual_verification/latest/nle_roughcut_range_edit_owner_map_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_143939/benchmark_results.json --output-dir output/manual_verification/latest/nle_roughcut_range_edit_nas_heydealer_20260628/acceptance` -> accepted `true`.
+
 ## NLE Preview Skimming Cache Contract - 2026-06-28 KST
 
 - 실행 모드: source-app NLE preview/skimming frame-cache provenance contract audit.

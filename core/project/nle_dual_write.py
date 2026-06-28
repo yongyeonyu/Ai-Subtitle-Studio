@@ -19,6 +19,7 @@ from core.project.nle_projection_parity import (
     ProjectionParityReport,
     build_project_nle_projection_parity_report,
 )
+from core.project.nle_snapshot import build_project_nle_snapshot
 from core.project.project_context import (
     build_editor_state,
     project_clip_boundaries,
@@ -1965,6 +1966,155 @@ def apply_marker_edit_dual_write_pilot(
     )
 
 
+def _roughcut_candidates(project: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    state = project.get("roughcut_state") if isinstance(project.get("roughcut_state"), dict) else {}
+    candidates = [dict(item) for item in list(state.get("candidates") or []) if isinstance(item, dict)]
+    return dict(state), candidates
+
+
+def _roughcut_candidate_index(project: dict[str, Any], candidate_id: str = "") -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    state, candidates = _roughcut_candidates(project)
+    selected_id = str(candidate_id or state.get("selected_candidate_id") or "").strip()
+    for index, candidate in enumerate(candidates):
+        if str(candidate.get("candidate_id") or "") == selected_id:
+            return state, candidates, index
+    if not selected_id and candidates:
+        return state, candidates, 0
+    raise ValueError(f"nle_roughcut_range_edit_candidate_missing:{selected_id}")
+
+
+def _roughcut_output_counts(candidate: dict[str, Any]) -> dict[str, int]:
+    outputs = candidate.get("outputs") if isinstance(candidate.get("outputs"), dict) else {}
+    edl = outputs.get("edl") if isinstance(outputs.get("edl"), dict) else {}
+    render_plan = outputs.get("render_plan") if isinstance(outputs.get("render_plan"), dict) else {}
+    return {
+        "edl_segment_count": len([row for row in list(edl.get("segments") or []) if isinstance(row, dict)]),
+        "render_manifest_count": len([row for row in list(render_plan.get("segment_manifest") or []) if isinstance(row, dict)]),
+        "stitched_boundary_count": len(
+            [
+                row
+                for row in list(render_plan.get("stitched_cut_boundaries") or edl.get("stitched_cut_boundaries") or [])
+                if isinstance(row, dict)
+            ]
+        ),
+    }
+
+
+def apply_roughcut_range_edit_dual_write_pilot(
+    project: dict[str, Any],
+    *,
+    candidate_id: str = "",
+    target_ids: list[str] | tuple[str, ...] | None = None,
+    after_candidate: dict[str, Any],
+    edit_type: str = "range_edit",
+    commit_boundary: str = "",
+    commit_source: str = "",
+    project_path: str = "",
+) -> NLEDualWritePilotResult:
+    if not isinstance(project, dict):
+        raise TypeError("project_required")
+    if not isinstance(after_candidate, dict):
+        raise TypeError("after_candidate_required")
+    state_payload, candidates, index = _roughcut_candidate_index(project, candidate_id=candidate_id)
+    before_candidate = deepcopy(candidates[index])
+    target_candidate_id = str(candidate_id or before_candidate.get("candidate_id") or after_candidate.get("candidate_id") or "").strip()
+    if not target_candidate_id:
+        raise ValueError("nle_roughcut_range_edit_candidate_id_required")
+    updated_candidate = deepcopy(after_candidate)
+    updated_candidate["candidate_id"] = target_candidate_id
+    targets = tuple(str(item).strip() for item in list(target_ids or ()) if str(item).strip())
+    if not targets:
+        raise ValueError("nle_roughcut_range_edit_targets_required")
+
+    before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+    before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
+
+    candidates[index] = updated_candidate
+    after_state = dict(state_payload)
+    after_state["selected_candidate_id"] = target_candidate_id
+    after_state["candidates"] = candidates
+    shadow_after = deepcopy(project)
+    shadow_after["roughcut_state"] = after_state
+    after_projection = build_project_nle_projection_parity_report(shadow_after, project_path=project_path)
+    if int(after_projection.invalid_duration_count or 0) != 0:
+        raise ValueError("nle_roughcut_range_edit_final_invalid_duration")
+    if int(after_projection.non_monotonic_count or 0) != 0:
+        raise ValueError("nle_roughcut_range_edit_final_non_monotonic")
+    if int(after_projection.overlap_count or 0) != 0:
+        raise ValueError("nle_roughcut_range_edit_final_overlap")
+    if int(after_projection.max_active_segments or 0) > 1:
+        raise ValueError("nle_roughcut_range_edit_final_max_active_segments")
+    if not bool(after_projection.render_export_stable):
+        raise ValueError("nle_roughcut_range_edit_render_export_drift")
+
+    edit_key = str(edit_type or "range_edit").strip() or "range_edit"
+    commit_boundary_key = str(commit_boundary or "").strip()
+    commit_source_key = str(commit_source or "").strip()
+    before_counts = _roughcut_output_counts(before_candidate)
+    after_counts = _roughcut_output_counts(updated_candidate)
+    undo = build_nle_undo_snapshot(
+        operation_id=f"dual_write_roughcut_range_edit:{target_candidate_id}:{edit_key}",
+        editor_rows=before_rows,
+        candidate_lanes=_candidate_lanes(project, before_rows),
+        silence_gaps=[row for row in before_rows if isinstance(row, dict) and bool(row.get("is_gap"))],
+        ui_state_ref={
+            "operation_family": "roughcut_range_edit",
+            "candidate_id": target_candidate_id,
+            "target_ids": list(targets),
+            "edit_type": edit_key,
+            "commit_boundary": commit_boundary_key,
+            "commit_source": commit_source_key,
+            "before_counts": before_counts,
+            "after_counts": after_counts,
+        },
+        metadata={"pilot": "dual_write_roughcut_range_edit"},
+    )
+    metadata: dict[str, Any] = {
+        "pilot": "dual_write",
+        "operation_family": "roughcut_range_edit",
+        "candidate_id": target_candidate_id,
+        "edit_type": edit_key,
+        "before_counts": before_counts,
+        "after_counts": after_counts,
+    }
+    if commit_boundary_key:
+        metadata["commit_boundary"] = commit_boundary_key
+    if commit_source_key:
+        metadata["commit_source"] = commit_source_key
+    operation = build_nle_editor_operation(
+        operation_id=undo.operation_id,
+        kind="roughcut_range_edit",
+        target_ids=targets,
+        before_projection=before_projection,
+        after_projection=after_projection,
+        time_domain="output",
+        undo_snapshot=undo,
+        metadata=metadata,
+    )
+
+    project["roughcut_state"] = after_state
+    state = sync_project_nle_state_from_editor_rows(project, before_rows, project_path=project_path)
+    state.snapshot = build_project_nle_snapshot(project, project_path=project_path)
+    state.metadata = {
+        **dict(state.metadata or {}),
+        "dual_write_pilot_family": "roughcut_range_edit",
+        "dual_write_last_operation_id": operation.operation_id,
+        "dual_write_projected_count": len(before_rows),
+        "dual_write_roughcut_candidate_id": target_candidate_id,
+        "dual_write_roughcut_edit_type": edit_key,
+    }
+    record_nle_operation_journal_entry(state, operation, projected_count=len(before_rows))
+    projected_rows = project_segments_from_nle_state(project, project_path=project_path)
+    assert_nle_editor_rows_consistent(before_rows, projected_rows, primary_fps=project_primary_fps(project))
+    return NLEDualWritePilotResult(
+        operation_family="roughcut_range_edit",
+        operation=operation,
+        before_projection=before_projection,
+        after_projection=after_projection,
+        projected_rows=tuple(dict(row) for row in projected_rows),
+    )
+
+
 __all__ = [
     "NLEDualWritePilotResult",
     "apply_candidate_confirm_dual_write_pilot",
@@ -1979,4 +2129,5 @@ __all__ = [
     "apply_gap_delete_dual_write_pilot",
     "apply_gap_generate_dual_write_pilot",
     "apply_marker_edit_dual_write_pilot",
+    "apply_roughcut_range_edit_dual_write_pilot",
 ]

@@ -33,6 +33,53 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Roughcut Range Edit Operation Coverage
+
+### Scope
+
+- Added output-domain NLE `roughcut_range_edit` operation support for roughcut candidate order/range edits.
+- Updated `core/project/nle_dual_write.py`, operation-journal/owner-map audits, focused tests, and NLE/status docs.
+- Preserved existing roughcut UI behavior, final subtitle rows, global canvas ownership, roughcut sidecar schemas, and legacy `.aissproj` storage shape.
+- No UI layout/labels/colors/menus/popups, STT/STT2 policy, subtitle quality gate, detector threshold, persisted NLE disk field, App Store packaging/signing/upload, DMG, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Operation journal audit: `output/manual_verification/latest/nle_roughcut_range_edit_operation_journal_20260628/nle_operation_journal_audit.md`
+- Owner-map audit: `output/manual_verification/latest/nle_roughcut_range_edit_owner_map_20260628/nle_runtime_owner_map_audit.md`
+- Operation families: `12`; release metadata `12`; undo snapshots `12`; runtime journals `12`; storage clean `12`.
+- Owner map covered owners: `24/24`; missing owners `0`.
+- `roughcut_range_edit` is constrained to `time_domain=output`; final invalid/non-monotonic/overlap stayed `0/0/0`; global max active stayed `1`.
+
+### NAS
+
+- NAS preflight: `output/manual_verification/latest/nle_roughcut_range_edit_nas_heydealer_20260628/preflight/reference_fixture_availability.md`
+- NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_143939/benchmark_results.json`
+- NAS acceptance: `output/manual_verification/latest/nle_roughcut_range_edit_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Accepted `true`; elapsed `51.429s`; raw/final/reference `58/56/89`.
+- Quality/text/timing `93.766/94.267/0.5808s`.
+- Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+- Stage spans: STT1 `18.578131s`, STT2 `17.372568s`, word precision `14.804677s`, subtitle postprocess `0.582754s`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-153300-nle-roughcut-range-edit-owner-map.md`
+- Dex classification: accept the bounded recommendation only within the verified scope: release commit, output-domain roughcut operation, final projection unchanged, and storage clean. Ignore overbroad "no risk" phrasing outside that proof.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_dual_write.py tools/audit_nle_operation_journal.py tools/audit_nle_runtime_owner_map.py tests/test_project_nle_dual_write.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `32 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `5 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `43 passed`.
+- `./venv/bin/python tools/audit_nle_operation_journal.py --output-dir output/manual_verification/latest/nle_roughcut_range_edit_operation_journal_20260628` -> pass.
+- `./venv/bin/python tools/audit_nle_runtime_owner_map.py --output-dir output/manual_verification/latest/nle_roughcut_range_edit_owner_map_20260628` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_143939/benchmark_results.json --output-dir output/manual_verification/latest/nle_roughcut_range_edit_nas_heydealer_20260628/acceptance` -> accepted `true`.
+
+### Next Recommended Action
+
+- Continue NLE work through the next owner-map-backed mutable/edit surface only if a new bounded source is found.
+- Keep persisted NLE project fields, runtime undo/redo UI changes, per-pixel writes, QML/GPU timeline defaults, and App Store work blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Preserved Marker Policy Audit
 
 ### Scope

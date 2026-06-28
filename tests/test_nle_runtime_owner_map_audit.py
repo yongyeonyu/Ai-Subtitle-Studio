@@ -30,6 +30,7 @@ def test_nle_runtime_owner_map_audit_covers_current_release_commit_sources():
         "gap_delete",
         "gap_generate",
         "marker_edit",
+        "roughcut_range_edit",
     }
     assert report["operation_family_counts"]["caption_text_edit"] >= 6
     assert report["operation_family_counts"]["caption_move"] >= 5

@@ -17,6 +17,7 @@ from core.project.nle_dual_write import (
     apply_gap_delete_dual_write_pilot,
     apply_gap_generate_dual_write_pilot,
     apply_marker_edit_dual_write_pilot,
+    apply_roughcut_range_edit_dual_write_pilot,
 )
 from core.project.nle_operations import NLEOperationValidationError
 from core.project.nle_project_state import (
@@ -92,6 +93,84 @@ def _project_with_three_captions():
             cut_boundaries=[{"time": 2.0, "source": "visual", "status": "confirmed"}],
             primary_fps=30.0,
         ),
+    }
+
+
+def _project_with_roughcut_outputs():
+    media_path = "/tmp/roughcut_source.mov"
+    first_segment = {
+        "segment_id": "chapter_0001",
+        "source_path": media_path,
+        "source_start": 0.0,
+        "source_end": 2.0,
+        "output_start": 0.0,
+        "output_end": 2.0,
+        "chapter_id": "chapter_0001",
+    }
+    second_segment = {
+        "segment_id": "chapter_0002",
+        "source_path": media_path,
+        "source_start": 3.0,
+        "source_end": 6.0,
+        "output_start": 2.0,
+        "output_end": 5.0,
+        "chapter_id": "chapter_0002",
+    }
+    manifest = [
+        {
+            "segment_id": row["segment_id"],
+            "source_path": row["source_path"],
+            "source_start": row["source_start"],
+            "source_end": row["source_end"],
+            "output_start": row["output_start"],
+            "output_end": row["output_end"],
+        }
+        for row in (first_segment, second_segment)
+    ]
+    stitched = [
+        {
+            "time": 2.0,
+            "timeline_sec": 2.0,
+            "source": "roughcut_concat_join",
+            "segment_before_id": "chapter_0001",
+            "segment_after_id": "chapter_0002",
+        }
+    ]
+    return {
+        "project_name": "nle_roughcut_range_edit_pilot",
+        "mode": "single",
+        "video": {"duration_sec": 6.0, "primary_fps": 30.0},
+        "editor_state": build_editor_state(
+            mode="single",
+            media_files=[media_path],
+            segments=[
+                {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "first", "speaker": "00"},
+                {"id": "caption_2", "start": 2.0, "end": 3.0, "text": "second", "speaker": "01"},
+            ],
+            primary_fps=30.0,
+        ),
+        "roughcut_state": {
+            "selected_candidate_id": "roughcut_a",
+            "candidates": [
+                {
+                    "candidate_id": "roughcut_a",
+                    "name": "roughcut A",
+                    "outputs": {
+                        "edl": {
+                            "duration": 5.0,
+                            "segments": [first_segment, second_segment],
+                            "stitched_cut_boundaries": stitched,
+                        },
+                        "render_plan": {
+                            "output_path": "/tmp/roughcut.mov",
+                            "render_mode": "sync_safe",
+                            "segment_manifest": manifest,
+                            "stitched_cut_boundaries": stitched,
+                        },
+                    },
+                }
+            ],
+        },
     }
 
 
@@ -194,6 +273,88 @@ class NLEDualWritePilotTests(unittest.TestCase):
         self.assertNotIn(NLE_OPERATION_JOURNAL_ENTRY_SCHEMA, storage_text)
         self.assertNotIn(move.operation.operation_id, storage_text)
         self.assertNotIn(edit.operation.operation_id, storage_text)
+
+    def test_roughcut_range_edit_dual_write_records_output_time_operation_without_final_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "roughcut-range-edit.aissproj"
+            project = _project_with_roughcut_outputs()
+            before_candidate = copy.deepcopy(project["roughcut_state"]["candidates"][0])
+            first, second = before_candidate["outputs"]["edl"]["segments"]
+            reordered_second = dict(second)
+            reordered_second.update({"output_start": 0.0, "output_end": 3.0})
+            reordered_first = dict(first)
+            reordered_first.update({"output_start": 3.0, "output_end": 5.0})
+            stitched = [
+                {
+                    "time": 3.0,
+                    "timeline_sec": 3.0,
+                    "source": "roughcut_concat_join",
+                    "segment_before_id": "chapter_0002",
+                    "segment_after_id": "chapter_0001",
+                }
+            ]
+            after_candidate = copy.deepcopy(before_candidate)
+            after_candidate["outputs"]["edl"]["segments"] = [reordered_second, reordered_first]
+            after_candidate["outputs"]["edl"]["stitched_cut_boundaries"] = stitched
+            after_candidate["outputs"]["render_plan"]["segment_manifest"] = [
+                {
+                    "segment_id": row["segment_id"],
+                    "source_path": row["source_path"],
+                    "source_start": row["source_start"],
+                    "source_end": row["source_end"],
+                    "output_start": row["output_start"],
+                    "output_end": row["output_end"],
+                }
+                for row in (reordered_second, reordered_first)
+            ]
+            after_candidate["outputs"]["render_plan"]["stitched_cut_boundaries"] = stitched
+
+            result = apply_roughcut_range_edit_dual_write_pilot(
+                project,
+                candidate_id="roughcut_a",
+                target_ids=["chapter_0002", "chapter_0001"],
+                after_candidate=after_candidate,
+                edit_type="chapter_reorder",
+                commit_boundary="release",
+                commit_source="roughcut_chapter_reorder",
+                project_path=str(project_path),
+            )
+
+            legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+            nle_rows = project_segments_from_nle_state(project)
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            reopened = read_project_file(str(project_path))
+
+        self.assertEqual(result.operation_family, "roughcut_range_edit")
+        self.assertEqual(result.operation.kind, "roughcut_range_edit")
+        self.assertEqual(result.operation.time_domain, "output")
+        self.assertEqual(result.operation.target_ids, ("chapter_0002", "chapter_0001"))
+        self.assertEqual(result.operation.metadata["commit_boundary"], "release")
+        self.assertEqual(result.operation.metadata["commit_source"], "roughcut_chapter_reorder")
+        self.assertEqual(result.operation.metadata["edit_type"], "chapter_reorder")
+        self.assertTrue(result.after_projection.render_export_stable)
+        self.assert_final_projection_is_release_stable(result)
+        self.assertEqual([row.get("id") for row in legacy_rows], ["subtitle_vector_0001", "subtitle_vector_0002"])
+        self.assertEqual([row.get("id") for row in nle_rows], ["subtitle_vector_0001", "subtitle_vector_0002"])
+        self.assertEqual(
+            [row["segment_id"] for row in project["roughcut_state"]["candidates"][0]["outputs"]["edl"]["segments"]],
+            ["chapter_0002", "chapter_0001"],
+        )
+        state = project[NLE_PROJECT_STATE_RUNTIME_KEY]
+        self.assertEqual(state.operation_journal[-1].operation_kind, "roughcut_range_edit")
+        self.assertEqual(state.operation_journal[-1].operation_family, "roughcut_range_edit")
+        self.assertEqual(state.operation_journal[-1].commit_boundary, "release")
+        self.assertEqual(state.metadata["dual_write_pilot_family"], "roughcut_range_edit")
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertNotIn(NLE_OPERATION_JOURNAL_ENTRY_SCHEMA, str(storage))
+        self.assertNotIn(result.operation.operation_id, str(storage))
+        reopened_candidate = reopened["roughcut_state"]["candidates"][0]
+        self.assertEqual(
+            [row["segment_id"] for row in reopened_candidate["outputs"]["edl"]["segments"]],
+            ["chapter_0002", "chapter_0001"],
+        )
 
     def test_caption_move_dual_write_supports_taption_neighbor_reorder_contract(self):
         project = _project_with_three_captions()

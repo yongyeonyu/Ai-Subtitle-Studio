@@ -304,6 +304,18 @@ OWNER_EVIDENCE: tuple[dict[str, Any], ...] = (
             ],
         },
     },
+    {
+        "owner_id": "roughcut_range_edit_candidate_order",
+        "operation_family": "roughcut_range_edit",
+        "commit_boundary": "release",
+        "source_surface": "roughcut_candidate_order",
+        "evidence": {
+            "core/project/nle_dual_write.py": ["def apply_roughcut_range_edit_dual_write_pilot"],
+            "tests/test_project_nle_dual_write.py": [
+                "test_roughcut_range_edit_dual_write_records_output_time_operation_without_final_drift"
+            ],
+        },
+    },
 )
 
 BLOCKED_CANDIDATES: tuple[dict[str, Any], ...] = (
