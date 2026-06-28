@@ -33,6 +33,43 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 Project IO Trace Contract
+
+### Scope
+
+- Added best-effort async trace events for project save, disk open, and cache-hit open paths.
+- Updated `core/project/project_io.py`, `tests/test_trace_logger.py`, `tools/audit_project_io_trace_contract.py`, and NLE/status docs.
+- Trace events use project basename plus path hash only; raw project paths are not emitted.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/project_io_trace_contract_20260628/project_io_trace_contract.md`
+- `passed=true`; project IO event count `3`.
+- Save/disk-open/cache-hit counts `1/1/1`.
+- Raw path leak `false`; storage clean `true`.
+- Disk/cache NLE runtime state attached `true/true`.
+- Events include `event_type`, cache source, elapsed time, NLE runtime-state attachment, storage-clean flags, payload codec/compression, and stripped runtime-key count.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-155100-project-io-save-load-trace.md`
+- Dex classification: accept the bounded recommendation for project IO trace instrumentation. Keep the event names aligned with existing trace style as `project_file_save` / `project_file_open`; include the scout's `event_type`, codec/compression, hydration, and storage-clean evidence fields.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/project_io.py tools/audit_project_io_trace_contract.py tests/test_trace_logger.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> `18 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_runtime_cutover.py tests/test_project_context.py -k "nle or project_file_cache or write_project_file or read_project_file or save_project_routes_editor_rows_through_runtime_nle_state_without_drift or strips_external_runtime_views"` -> `26 passed, 85 deselected, 4 subtests passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py` -> `86 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `43 passed`.
+- `./venv/bin/python tools/audit_project_io_trace_contract.py --output-dir output/manual_verification/latest/project_io_trace_contract_20260628` -> pass.
+
+### Next Recommended Action
+
+- Continue NLE adoption through the next source-app runtime contract or owner-map-backed mutation source.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, and App Store packaging/submission work blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Roughcut Range Edit Operation Coverage
 
 ### Scope

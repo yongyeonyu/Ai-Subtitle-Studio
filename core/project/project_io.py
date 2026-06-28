@@ -6,8 +6,10 @@ from __future__ import annotations
 import os
 import struct
 import threading
+import time
 import zlib
 from collections import OrderedDict
+from hashlib import sha256
 from typing import Any
 
 from core.native_json import dumps_json_bytes, json_default, loads_json
@@ -54,6 +56,40 @@ def _project_file_signature(filepath: str) -> tuple[int, int] | None:
         return int(stat.st_mtime_ns), int(stat.st_size)
     except OSError:
         return None
+
+
+def _project_file_trace_fields(filepath: str) -> dict[str, Any]:
+    key = _project_cache_key(filepath)
+    signature = _project_file_signature(key)
+    return {
+        "project_basename": os.path.basename(key),
+        "project_path_hash": sha256(key.encode("utf-8", errors="replace")).hexdigest()[:16],
+        "project_exists": signature is not None,
+        "project_mtime_ns": int(signature[0]) if signature is not None else 0,
+        "project_size_bytes": int(signature[1]) if signature is not None else 0,
+        "project_extension": os.path.splitext(key)[1].lower(),
+    }
+
+
+def _trace_project_file_event(event: str, filepath: str, **fields: Any) -> bool:
+    try:
+        from core.runtime.trace_logger import current_app_trace_logger
+
+        logger = current_app_trace_logger()
+        if logger is None:
+            return False
+        payload = _project_file_trace_fields(filepath)
+        payload.update(fields)
+        return bool(
+            logger.log_event(
+                event,
+                stage="project-io",
+                level="INFO",
+                **payload,
+            )
+        )
+    except Exception:
+        return False
 
 
 def clear_project_file_cache(filepath: str | None = None) -> None:
@@ -172,6 +208,31 @@ def _pack_project_payload(project: dict[str, Any]) -> bytes:
     return _PROJECT_BINARY_MAGIC + _PROJECT_BINARY_HEADER.pack(len(header_bytes)) + header_bytes + body
 
 
+def _packed_project_trace_metadata(data: bytes) -> dict[str, Any]:
+    if not data.startswith(_PROJECT_BINARY_MAGIC):
+        return {
+            "payload_codec": "json",
+            "payload_compression": "none",
+            "payload_raw_size_bytes": len(data),
+            "payload_body_size_bytes": len(data),
+        }
+    try:
+        offset = len(_PROJECT_BINARY_MAGIC)
+        header_size = _PROJECT_BINARY_HEADER.unpack(data[offset:offset + _PROJECT_BINARY_HEADER.size])[0]
+        offset += _PROJECT_BINARY_HEADER.size
+        header = loads_json(data[offset:offset + header_size])
+        if not isinstance(header, dict):
+            return {}
+        return {
+            "payload_codec": str(header.get("payload") or ""),
+            "payload_compression": str(header.get("compression") or ""),
+            "payload_raw_size_bytes": int(header.get("raw_size") or 0),
+            "payload_body_size_bytes": int(header.get("body_size") or 0),
+        }
+    except Exception:
+        return {}
+
+
 def _unpack_project_payload(data: bytes) -> dict[str, Any]:
     if data.startswith(_PROJECT_BINARY_MAGIC):
         offset = len(_PROJECT_BINARY_MAGIC)
@@ -216,27 +277,75 @@ def read_project_storage_payload(filepath: str) -> dict[str, Any]:
 def read_project_file(filepath: str) -> dict[str, Any]:
     """Read a project file with the app-wide encoding/settings."""
     key = _project_cache_key(filepath)
+    start = time.perf_counter()
     signature = _project_file_signature(key)
     with _PROJECT_FILE_CACHE_LOCK:
         cached = _PROJECT_FILE_CACHE.get(key)
         if cached and cached.get("signature") == signature:
             _PROJECT_FILE_CACHE.move_to_end(key)
             project = cached.get("project")
-            return _attach_project_path(project, key) if isinstance(project, dict) else {}
+            loaded = _attach_project_path(project, key) if isinstance(project, dict) else {}
+            _trace_project_file_event(
+                "project_file_open",
+                key,
+                event_type="project_io_read",
+                action="open_project",
+                source="project_file_cache",
+                cache_hit=True,
+                elapsed_ms=round((time.perf_counter() - start) * 1000.0, 3),
+                nle_runtime_state_attached=bool(
+                    isinstance(loaded, dict) and NLE_PROJECT_STATE_RUNTIME_KEY in loaded
+                ),
+            )
+            return loaded
 
     data = _read_project_payload_from_disk(key)
     project = _attach_project_path(data if isinstance(data, dict) else {}, key)
     hydrate_project_runtime_views(project)
     _cache_project_payload(key, signature, project)
+    _trace_project_file_event(
+        "project_file_open",
+        key,
+        event_type="project_io_read",
+        action="open_project",
+        source="project_file_disk",
+        cache_hit=False,
+        elapsed_ms=round((time.perf_counter() - start) * 1000.0, 3),
+        nle_runtime_state_attached=bool(NLE_PROJECT_STATE_RUNTIME_KEY in project),
+    )
     return project
 
 
 def write_project_file(filepath: str, project: dict[str, Any]) -> None:
     """Write a project file as an atomic binary envelope."""
     key = _project_cache_key(filepath)
+    start = time.perf_counter()
     folder = os.path.dirname(key)
     if folder:
         os.makedirs(folder, exist_ok=True)
     payload = _project_payload_for_disk(project)
-    _write_bytes_atomic(key, _pack_project_payload(payload))
+    packed = _pack_project_payload(payload)
+    stripped_runtime_key_count = sum(
+        1
+        for runtime_key in _PROJECT_RUNTIME_KEYS
+        if isinstance(project, dict) and runtime_key in project and runtime_key not in payload
+    )
+    _write_bytes_atomic(key, packed)
     prime_project_file_cache(key, project)
+    _trace_project_file_event(
+        "project_file_save",
+        key,
+        event_type="project_io_write",
+        action="save_project",
+        source="project_file_disk",
+        elapsed_ms=round((time.perf_counter() - start) * 1000.0, 3),
+        storage_clean_nle_runtime=(
+            NLE_PROJECT_STATE_RUNTIME_KEY not in payload
+            and NLE_PERSISTENCE_QUARANTINE_KEY not in payload
+        ),
+        storage_has_runtime_nle_key=NLE_PROJECT_STATE_RUNTIME_KEY in payload,
+        storage_has_quarantine_key=NLE_PERSISTENCE_QUARANTINE_KEY in payload,
+        packed_size_bytes=len(packed),
+        stripped_runtime_key_count=stripped_runtime_key_count,
+        **_packed_project_trace_metadata(packed),
+    )

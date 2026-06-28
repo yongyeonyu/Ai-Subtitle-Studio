@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Project IO Trace Contract - 2026-06-28 KST
+
+- 실행 모드: source-app NLE save/load diagnostic trace contract.
+- 결과: pass for project save/open/cache-hit trace events, raw path exclusion, runtime NLE hydration evidence, and clean legacy storage. No UI/UX, subtitle quality, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/project_io_trace_contract_20260628/project_io_trace_contract.md`
+  - Audit JSON: `output/manual_verification/latest/project_io_trace_contract_20260628/project_io_trace_contract.json`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-155100-project-io-save-load-trace.md`
+- 실제 결과:
+  - `passed=true`; project IO event count `3`.
+  - Save/disk-open/cache-hit counts `1/1/1`.
+  - Raw path leak `false`; storage clean `true`.
+  - Disk/cache NLE runtime state attached `true/true`.
+  - Events include `event_type`, basename, path hash, cache source, elapsed time, payload codec/compression, storage clean flags, and stripped runtime-key count.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/project_io.py tools/audit_project_io_trace_contract.py tests/test_trace_logger.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py` -> `18 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_runtime_cutover.py tests/test_project_context.py -k "nle or project_file_cache or write_project_file or read_project_file or save_project_routes_editor_rows_through_runtime_nle_state_without_drift or strips_external_runtime_views"` -> `26 passed, 85 deselected, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py` -> `86 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_dual_write.py tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `43 passed`.
+  - `./venv/bin/python tools/audit_project_io_trace_contract.py --output-dir output/manual_verification/latest/project_io_trace_contract_20260628` -> pass.
+
 ## NLE Preserved Marker Policy Audit - 2026-06-28 KST
 
 - 실행 모드: corrected source-fps scout plus detector-robustness evidence를 결합한 source-app fixed cut-boundary preserved-marker policy read-only audit.

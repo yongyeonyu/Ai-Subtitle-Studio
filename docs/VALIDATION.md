@@ -235,6 +235,16 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 
 The persistence cutover audit must also report provisional `marker_edit` save/reopen preservation plus render/export parity before any future persisted NLE format proposal: all 12 current dual-write operation families pass, including output-domain `roughcut_range_edit`; marker rows are preserved after reopen, stable `source_subtitles`, `final_overlay`, `global_canvas`, `roughcut_sidecar`, and `exported_assets` surfaces; final invalid/non-monotonic/overlap `0/0/0`; global max active `1`; and disk storage clean of unapproved NLE runtime fields.
 
+## Project IO trace validation
+
+Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.
+
+```bash
+./venv/bin/python -m py_compile core/project/project_io.py tools/audit_project_io_trace_contract.py tests/test_trace_logger.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py
+./venv/bin/python tools/audit_project_io_trace_contract.py --output-dir output/manual_verification/latest/project_io_trace_contract_YYYYMMDD
+```
+
 ## Post-generation editor readiness validation
 
 Post-generation editor readiness changes should prove command responsiveness, subtitle-time-edit interaction recovery, editor shell geometry stability, and any requested bottom-menu affordance.

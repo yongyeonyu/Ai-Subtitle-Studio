@@ -7,6 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import core.runtime.trace_logger as trace_logger_module
+from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY
+from core.project.project_context import build_editor_state
+from core.project.project_io import clear_project_file_cache, read_project_file, write_project_file
 from core.runtime.temp_workspace import (
     REQUIRED_SUBDIRECTORIES,
     TEMP_WORKSPACE_DIRNAME,
@@ -18,6 +21,7 @@ from core.runtime.temp_workspace import (
     workspace_usage,
 )
 from core.runtime.trace_logger import TraceLogger, initialize_app_trace, media_fingerprint, reset_app_trace_after_fork
+from tools.audit_project_io_trace_contract import build_project_io_trace_report
 from tools.collect_trace_package import collect_trace_package
 
 
@@ -27,6 +31,38 @@ def _jsonl_rows(path: Path) -> list[dict]:
         if line.strip():
             rows.append(json.loads(line))
     return rows
+
+
+class _FakeProjectTraceLogger:
+    def __init__(self):
+        self.events = []
+
+    def log_event(self, event, **fields):
+        self.events.append({"event": event, **fields})
+        return True
+
+
+def _trace_project_payload():
+    return {
+        "project_name": "trace project",
+        "mode": "single",
+        "video": {"duration_sec": 2.0, "primary_fps": 30.0},
+        "editor_state": build_editor_state(
+            mode="single",
+            media_files=[],
+            segments=[
+                {
+                    "id": "subtitle_vector_0001",
+                    "start": 0.0,
+                    "end": 1.0,
+                    "text": "hello",
+                    "speaker": "00",
+                }
+            ],
+            primary_fps=30.0,
+        ),
+        NLE_PROJECT_STATE_RUNTIME_KEY: {"runtime_only": True},
+    }
 
 
 class TraceLoggerTests(unittest.TestCase):
@@ -257,6 +293,47 @@ class TraceLoggerTests(unittest.TestCase):
             self.assertTrue((package_dir / "runs" / "package-case" / "manifest.json").exists())
             self.assertTrue((package_dir / "runs" / "package-case" / "events.jsonl").exists())
             self.assertTrue((package_dir / "package_manifest.json").exists())
+
+    def test_project_file_open_and_save_emit_best_effort_trace_without_raw_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "trace-project.aissproj"
+            fake_logger = _FakeProjectTraceLogger()
+            with patch("core.runtime.trace_logger.current_app_trace_logger", return_value=fake_logger):
+                write_project_file(str(project_path), _trace_project_payload())
+                clear_project_file_cache(str(project_path))
+                disk_loaded = read_project_file(str(project_path))
+                cache_loaded = read_project_file(str(project_path))
+
+        save_events = [row for row in fake_logger.events if row["event"] == "project_file_save"]
+        open_events = [row for row in fake_logger.events if row["event"] == "project_file_open"]
+        self.assertEqual(len(save_events), 1)
+        self.assertEqual(len(open_events), 2)
+        self.assertTrue(any(row["cache_hit"] is False for row in open_events))
+        self.assertTrue(any(row["cache_hit"] is True for row in open_events))
+        self.assertTrue(save_events[0]["storage_clean_nle_runtime"])
+        self.assertEqual(save_events[0]["event_type"], "project_io_write")
+        self.assertIn(save_events[0]["payload_codec"], {"msgpack", "json"})
+        self.assertEqual(save_events[0]["payload_compression"], "none")
+        self.assertGreaterEqual(save_events[0]["stripped_runtime_key_count"], 1)
+        self.assertTrue(all(row["event_type"] == "project_io_read" for row in open_events))
+        self.assertTrue(disk_loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY))
+        self.assertTrue(cache_loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY))
+        event_text = json.dumps(fake_logger.events, ensure_ascii=False, sort_keys=True)
+        self.assertNotIn(tmp, event_text)
+        self.assertTrue(all("project_path" not in row for row in fake_logger.events))
+        self.assertTrue(all(row.get("project_path_hash") for row in fake_logger.events))
+        self.assertTrue(all(row.get("project_basename") == "trace-project.aissproj" for row in fake_logger.events))
+
+    def test_project_io_trace_contract_audit_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = build_project_io_trace_report(output_dir=Path(tmp))
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["save_event_count"], 1)
+        self.assertEqual(report["disk_open_event_count"], 1)
+        self.assertEqual(report["cache_hit_event_count"], 1)
+        self.assertFalse(report["raw_path_leak"])
+        self.assertTrue(report["storage_clean"])
 
     def test_collect_trace_package_trims_active_jsonl_partial_line(self):
         with tempfile.TemporaryDirectory() as tmp:
