@@ -42,6 +42,7 @@ _PROJECT_RUNTIME_KEYS = {
     "_hot_open_stt_preview_segments_cache",
     NLE_PROJECT_STATE_RUNTIME_KEY,
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    "_nle_snapshot_readback_parity",
     "project_path",
 }
 
@@ -128,6 +129,18 @@ def _attach_project_path(project: dict[str, Any], filepath: str) -> dict[str, An
         strip_unapproved_nle_persistence_fields(project, source="project_io.read")
         project["_project_file_path"] = _project_cache_key(filepath)
         attach_project_nle_state(project, project_path=filepath)
+    return project
+
+
+def _attach_nle_snapshot_readback_parity(project: dict[str, Any], filepath: str) -> dict[str, Any]:
+    if not isinstance(project, dict):
+        return project
+    try:
+        from core.project.nle_snapshot import attach_nle_snapshot_readback_parity
+
+        attach_nle_snapshot_readback_parity(project, project_path=filepath)
+    except Exception:
+        pass
     return project
 
 
@@ -285,6 +298,7 @@ def read_project_file(filepath: str) -> dict[str, Any]:
             _PROJECT_FILE_CACHE.move_to_end(key)
             project = cached.get("project")
             loaded = _attach_project_path(project, key) if isinstance(project, dict) else {}
+            _attach_nle_snapshot_readback_parity(loaded, key)
             _trace_project_file_event(
                 "project_file_open",
                 key,
@@ -302,6 +316,7 @@ def read_project_file(filepath: str) -> dict[str, Any]:
     data = _read_project_payload_from_disk(key)
     project = _attach_project_path(data if isinstance(data, dict) else {}, key)
     hydrate_project_runtime_views(project)
+    _attach_nle_snapshot_readback_parity(project, key)
     _cache_project_payload(key, signature, project)
     _trace_project_file_event(
         "project_file_open",

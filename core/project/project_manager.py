@@ -359,6 +359,7 @@ def _sanitize_project_workspace_fields(project: dict) -> dict:
     strip_unapproved_nle_persistence_fields(project, source="project_manager.sanitize")
     project.pop(NLE_PROJECT_STATE_RUNTIME_KEY, None)
     project.pop(NLE_PERSISTENCE_QUARANTINE_KEY, None)
+    project.pop("_nle_snapshot_readback_parity", None)
     project.pop("nle", None)
     project.pop("nle_snapshot", None)
     project["workspace"] = sanitize_workspace_state(project.get("workspace", {}) or {})

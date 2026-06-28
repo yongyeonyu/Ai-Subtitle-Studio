@@ -251,6 +251,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload.pop("media", None)
     payload.pop("project_path", None)
     payload.pop("_nle_project_state", None)
+    payload.pop("_nle_snapshot_readback_parity", None)
     payload.pop("nle", None)
     payload.pop("nle_snapshot", None)
     payload.pop(NLE_PERSISTENCE_QUARANTINE_KEY, None)

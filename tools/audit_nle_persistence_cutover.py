@@ -35,6 +35,7 @@ from core.project.nle_dual_write import (
 )
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
 from core.project.nle_render_export_parity import assert_project_nle_render_export_parity
+from core.project.nle_snapshot import NLE_SNAPSHOT_READBACK_PARITY_KEY
 from core.project.project_context import (
     build_editor_state,
     project_cut_boundary_provisional_segments,
@@ -343,6 +344,7 @@ def _approved_snapshot_persistence_check(work_dir: Path) -> dict[str, Any]:
         include_id=False,
     )
     loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    parity = loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY) if isinstance(loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY), dict) else {}
     snapshot = storage.get("nle_snapshot") if isinstance(storage.get("nle_snapshot"), dict) else {}
     persistence = snapshot.get("persistence") if isinstance(snapshot.get("persistence"), dict) else {}
     ready = (
@@ -351,6 +353,8 @@ def _approved_snapshot_persistence_check(work_dir: Path) -> dict[str, Any]:
         and str(persistence.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
         and expected_rows == loaded_rows
         and isinstance(loaded_state, NLEProjectState)
+        and bool(parity.get("stable"))
+        and int(parity.get("mismatch_count") or 0) == 0
         and "nle" not in storage
         and NLE_PROJECT_STATE_RUNTIME_KEY not in storage
         and NLE_PERSISTENCE_QUARANTINE_KEY not in storage
@@ -365,11 +369,49 @@ def _approved_snapshot_persistence_check(work_dir: Path) -> dict[str, Any]:
         else 0,
         "approval": str(persistence.get("approval") or ""),
         "legacy_rows_stable": expected_rows == loaded_rows,
+        "readback_parity_checked": bool(parity.get("checked")),
+        "readback_parity_stable": bool(parity.get("stable")),
+        "readback_mismatch_count": int(parity.get("mismatch_count") or 0),
         "loaded_runtime_state": isinstance(loaded_state, NLEProjectState),
         "storage_has_nle": "nle" in storage,
         "storage_has_runtime_nle_key": NLE_PROJECT_STATE_RUNTIME_KEY in storage,
         "storage_has_nle_snapshot": "nle_snapshot" in storage,
         "storage_has_quarantine": NLE_PERSISTENCE_QUARANTINE_KEY in storage,
+    }
+
+
+def _corrupted_snapshot_readback_check(work_dir: Path) -> dict[str, Any]:
+    project_path = work_dir / "corrupted-approved-nle-snapshot.aissproj"
+    project = _legacy_project()
+    project["nle_persistence"] = {
+        "persist_snapshot": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    }
+    expected_rows = _row_signature(
+        project_segments_to_editor(project, include_analysis_candidates=False),
+        include_id=False,
+    )
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+    storage["nle_snapshot"]["sequences"][0]["captions"][0]["sequence_start"] = 3.5
+    project_path.write_text(json.dumps(storage), encoding="utf-8")
+    clear_project_file_cache(str(project_path))
+    loaded = read_project_file(str(project_path))
+    parity = loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY) if isinstance(loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY), dict) else {}
+    loaded_rows = _row_signature(
+        project_segments_to_editor(loaded, include_analysis_candidates=False),
+        include_id=False,
+    )
+    write_project_file(str(project_path), loaded)
+    storage_after = read_project_storage_payload(str(project_path))
+    return {
+        "project_path": str(project_path),
+        "drift_detected": bool(parity.get("checked")) and not bool(parity.get("stable")),
+        "mismatch_count": int(parity.get("mismatch_count") or 0),
+        "legacy_rows_stable": loaded_rows == expected_rows,
+        "runtime_report_persisted": NLE_SNAPSHOT_READBACK_PARITY_KEY in storage_after,
+        "runtime_state_persisted": NLE_PROJECT_STATE_RUNTIME_KEY in storage_after,
+        "quarantine_persisted": NLE_PERSISTENCE_QUARANTINE_KEY in storage_after,
     }
 
 
@@ -578,6 +620,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     runtime_roundtrip = _runtime_roundtrip_check(out_dir / "roundtrip_fixture")
     future_payload = _future_payload_quarantine_check()
     approved_snapshot = _approved_snapshot_persistence_check(out_dir / "approved_snapshot_fixture")
+    corrupted_snapshot = _corrupted_snapshot_readback_check(out_dir / "corrupted_snapshot_fixture")
     operation_roundtrip_matrix = _operation_roundtrip_matrix(out_dir / "operation_roundtrip_matrix")
     render_export_parity = _render_export_parity_check(out_dir / "render_export_parity")
     operation_roundtrip_all_passed = all(
@@ -596,6 +639,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "runtime_roundtrip": runtime_roundtrip,
         "future_payload_quarantine": future_payload,
         "approved_snapshot_persistence": approved_snapshot,
+        "corrupted_snapshot_readback": corrupted_snapshot,
         "operation_roundtrip_matrix": operation_roundtrip_matrix,
         "render_export_parity": render_export_parity,
     }
@@ -605,6 +649,9 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and future_payload["quarantine_recorded"]
         and not future_payload["remaining_unapproved_fields"]
         and approved_snapshot["ready"]
+        and corrupted_snapshot["drift_detected"]
+        and corrupted_snapshot["legacy_rows_stable"]
+        and not corrupted_snapshot["runtime_report_persisted"]
         and operation_roundtrip_all_passed
         and render_export_parity["stable"]
         and render_export_parity["storage_clean"]
@@ -643,6 +690,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     runtime = checks.get("runtime_roundtrip") if isinstance(checks.get("runtime_roundtrip"), dict) else {}
     future = checks.get("future_payload_quarantine") if isinstance(checks.get("future_payload_quarantine"), dict) else {}
     approved = checks.get("approved_snapshot_persistence") if isinstance(checks.get("approved_snapshot_persistence"), dict) else {}
+    corrupted = checks.get("corrupted_snapshot_readback") if isinstance(checks.get("corrupted_snapshot_readback"), dict) else {}
     operations = checks.get("operation_roundtrip_matrix") if isinstance(checks.get("operation_roundtrip_matrix"), list) else []
     render_export = checks.get("render_export_parity") if isinstance(checks.get("render_export_parity"), dict) else {}
     render_surfaces = (
@@ -670,9 +718,18 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Snapshot persisted: `{bool(approved.get('snapshot_persisted'))}`",
         f"- Approval: `{approved.get('approval')}`",
         f"- Legacy rows stable: `{bool(approved.get('legacy_rows_stable'))}`",
+        f"- Read-back parity stable: `{bool(approved.get('readback_parity_stable'))}`",
+        f"- Read-back mismatch count: `{approved.get('readback_mismatch_count')}`",
         f"- Runtime NLE state hydrated: `{bool(approved.get('loaded_runtime_state'))}`",
         f"- Storage has NLE snapshot: `{bool(approved.get('storage_has_nle_snapshot'))}`",
         f"- Storage has top-level NLE/runtime/quarantine: `{bool(approved.get('storage_has_nle'))}/{bool(approved.get('storage_has_runtime_nle_key'))}/{bool(approved.get('storage_has_quarantine'))}`",
+        "",
+        "## Corrupted Snapshot Readback",
+        "",
+        f"- Drift detected: `{bool(corrupted.get('drift_detected'))}`",
+        f"- Mismatch count: `{corrupted.get('mismatch_count')}`",
+        f"- Legacy rows stable: `{bool(corrupted.get('legacy_rows_stable'))}`",
+        f"- Runtime report persisted: `{bool(corrupted.get('runtime_report_persisted'))}`",
         "",
         "## Render / Export Parity",
         "",

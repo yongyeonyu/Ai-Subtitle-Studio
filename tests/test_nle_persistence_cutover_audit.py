@@ -33,6 +33,16 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert approved["storage_has_nle"] is False
     assert approved["storage_has_runtime_nle_key"] is False
     assert approved["legacy_rows_stable"] is True
+    assert approved["readback_parity_checked"] is True
+    assert approved["readback_parity_stable"] is True
+    assert approved["readback_mismatch_count"] == 0
+    corrupted = report["checks"]["corrupted_snapshot_readback"]
+    assert corrupted["drift_detected"] is True
+    assert corrupted["mismatch_count"] > 0
+    assert corrupted["legacy_rows_stable"] is True
+    assert corrupted["runtime_report_persisted"] is False
+    assert corrupted["runtime_state_persisted"] is False
+    assert corrupted["quarantine_persisted"] is False
 
 
 def test_nle_persistence_cutover_audit_includes_render_export_parity_gate():
@@ -132,6 +142,9 @@ def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
         assert "## Render / Export Parity" in markdown
         assert "## Approved Snapshot Persistence" in markdown
         assert "- Snapshot persisted: `True`" in markdown
+        assert "- Read-back parity stable: `True`" in markdown
+        assert "## Corrupted Snapshot Readback" in markdown
+        assert "- Drift detected: `True`" in markdown
         assert "| exported_assets | True | 2 | 0 | 0 | 2 | 2 | 1 |" in markdown
         assert "## Operation Roundtrip Matrix" in markdown
         assert "| caption_text_edit | True | True | True | True | True | 0 | 1 |" in markdown

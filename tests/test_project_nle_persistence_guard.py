@@ -12,6 +12,10 @@ from core.project.nle_persistence_guard import (
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
 )
+from core.project.nle_snapshot import (
+    NLE_SNAPSHOT_READBACK_PARITY_KEY,
+    NLE_SNAPSHOT_READBACK_PARITY_SCHEMA,
+)
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_format import build_storage_project_payload, hydrate_project_runtime_views
@@ -164,6 +168,7 @@ class NLEPersistenceGuardTests(unittest.TestCase):
             clear_project_file_cache(str(project_path))
             loaded = read_project_file(str(project_path))
             loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            parity = loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY)
             loaded_rows = _row_signature(project_segments_to_editor(loaded, include_analysis_candidates=False))
             write_project_file(str(project_path), loaded)
             storage_after = read_project_storage_payload(str(project_path))
@@ -182,6 +187,12 @@ class NLEPersistenceGuardTests(unittest.TestCase):
             NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
         )
         self.assertEqual(storage["nle_snapshot"]["metadata"]["caption_count"], 1)
+        self.assertEqual(parity["schema"], NLE_SNAPSHOT_READBACK_PARITY_SCHEMA)
+        self.assertTrue(parity["checked"])
+        self.assertTrue(parity["stable"])
+        self.assertEqual(parity["mismatch_count"], 0)
+        self.assertEqual(parity["persisted_caption_count"], 1)
+        self.assertEqual(parity["fresh_caption_count"], 1)
         self.assertEqual(loaded_rows, expected_rows)
         self.assertIsInstance(loaded_state, NLEProjectState)
         self.assertIn("nle_snapshot", storage_after)
@@ -189,6 +200,40 @@ class NLEPersistenceGuardTests(unittest.TestCase):
             storage_after["nle_snapshot"]["persistence"]["approval"],
             NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
         )
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+
+    def test_corrupted_approved_nle_snapshot_records_runtime_readback_drift_without_persisting_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "corrupted-approved-nle-snapshot.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            }
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            storage["nle_snapshot"]["sequences"][0]["captions"][0]["sequence_start"] = 3.5
+            project_path.write_text(json.dumps(storage), encoding="utf-8")
+            clear_project_file_cache(str(project_path))
+
+            loaded = read_project_file(str(project_path))
+            parity = loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY)
+            loaded_rows = _row_signature(project_segments_to_editor(loaded, include_analysis_candidates=False))
+            expected_rows = _row_signature(project_segments_to_editor(project, include_analysis_candidates=False))
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+
+        self.assertEqual(loaded_rows, expected_rows)
+        self.assertEqual(parity["schema"], NLE_SNAPSHOT_READBACK_PARITY_SCHEMA)
+        self.assertTrue(parity["checked"])
+        self.assertFalse(parity["stable"])
+        self.assertGreater(parity["mismatch_count"], 0)
+        self.assertTrue(any("sequence_start" in item for item in parity["mismatches"]))
+        self.assertIn("nle_snapshot", storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
         self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
         self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
 

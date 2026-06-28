@@ -18,6 +18,8 @@ from core.roughcut.models import EDLSegment
 from core.roughcut.renderer_skeleton import RenderCommandPlan, build_concat_render_plan
 
 NLE_SNAPSHOT_SCHEMA = "ai_subtitle_studio.nle_snapshot.v1"
+NLE_SNAPSHOT_READBACK_PARITY_SCHEMA = "ai_subtitle_studio.nle_snapshot_readback_parity.v1"
+NLE_SNAPSHOT_READBACK_PARITY_KEY = "_nle_snapshot_readback_parity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +127,183 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _round_float(value: Any) -> float:
+    return round(_as_float(value, 0.0), 6)
+
+
+def _snapshot_dict(snapshot: NLESnapshot | dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(snapshot, NLESnapshot):
+        return snapshot.to_dict()
+    return deepcopy(snapshot) if isinstance(snapshot, dict) else {}
+
+
+def _signature_asset(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "asset_id": str(row.get("asset_id") or ""),
+        "path": str(row.get("path") or ""),
+        "kind": str(row.get("kind") or ""),
+        "duration": _round_float(row.get("duration")),
+        "fps": _round_float(row.get("fps")),
+        "width": _as_int(row.get("width"), 0),
+        "height": _as_int(row.get("height"), 0),
+        "missing": bool(row.get("missing")),
+    }
+
+
+def _signature_clip(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "clip_id": str(row.get("clip_id") or ""),
+        "asset_id": str(row.get("asset_id") or ""),
+        "source_start": _round_float(row.get("source_start")),
+        "source_end": _round_float(row.get("source_end")),
+        "sequence_start": _round_float(row.get("sequence_start")),
+        "sequence_end": _round_float(row.get("sequence_end")),
+        "clip_index": _as_int(row.get("clip_index"), 0),
+    }
+
+
+def _signature_caption(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "caption_id": str(row.get("caption_id") or ""),
+        "sequence_start": _round_float(row.get("sequence_start")),
+        "sequence_end": _round_float(row.get("sequence_end")),
+        "text": str(row.get("text") or ""),
+        "speaker": str(row.get("speaker") or ""),
+        "line": _as_int(row.get("line"), 0),
+        "clip_id": str(row.get("clip_id") or ""),
+    }
+
+
+def _signature_marker(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "marker_id": str(row.get("marker_id") or ""),
+        "kind": str(row.get("kind") or ""),
+        "time": _round_float(row.get("time")),
+        "time_domain": str(row.get("time_domain") or ""),
+        "source": str(row.get("source") or ""),
+    }
+
+
+def _signature_render_plan(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "plan_id": str(row.get("plan_id") or ""),
+        "render_mode": str(row.get("render_mode") or ""),
+        "output_duration": _round_float(row.get("output_duration")),
+        "segment_count": len(row.get("segments") or []),
+        "manifest_count": len(row.get("segment_manifest") or []),
+        "stitched_count": len(row.get("stitched_cut_boundaries") or []),
+    }
+
+
+def nle_snapshot_readback_signature(snapshot: NLESnapshot | dict[str, Any] | None) -> dict[str, Any]:
+    payload = _snapshot_dict(snapshot)
+    sequence_rows: list[dict[str, Any]] = []
+    for sequence in payload.get("sequences") or []:
+        if not isinstance(sequence, dict):
+            continue
+        sequence_rows.append(
+            {
+                "sequence_id": str(sequence.get("sequence_id") or ""),
+                "duration": _round_float(sequence.get("duration")),
+                "fps": _round_float(sequence.get("fps")),
+                "clips": [_signature_clip(row) for row in sequence.get("clips") or [] if isinstance(row, dict)],
+                "captions": [
+                    _signature_caption(row)
+                    for row in sequence.get("captions") or []
+                    if isinstance(row, dict)
+                ],
+                "markers": [
+                    _signature_marker(row)
+                    for row in sequence.get("markers") or []
+                    if isinstance(row, dict)
+                ],
+            }
+        )
+    return {
+        "schema": str(payload.get("schema") or ""),
+        "assets": [_signature_asset(row) for row in payload.get("assets") or [] if isinstance(row, dict)],
+        "sequences": sequence_rows,
+        "render_plans": [
+            _signature_render_plan(row)
+            for row in payload.get("render_plans") or []
+            if isinstance(row, dict)
+        ],
+    }
+
+
+def _signature_mismatches(left: Any, right: Any, *, path: str = "snapshot") -> list[str]:
+    if type(left) is not type(right):
+        return [f"{path}:type:{type(left).__name__}!={type(right).__name__}"]
+    if isinstance(left, dict):
+        mismatches: list[str] = []
+        for key in sorted(set(left) | set(right)):
+            if key not in left or key not in right:
+                mismatches.append(f"{path}.{key}:missing")
+                continue
+            mismatches.extend(_signature_mismatches(left[key], right[key], path=f"{path}.{key}"))
+        return mismatches
+    if isinstance(left, list):
+        mismatches = []
+        if len(left) != len(right):
+            mismatches.append(f"{path}:len:{len(left)}!={len(right)}")
+        for index, (left_item, right_item) in enumerate(zip(left, right)):
+            mismatches.extend(_signature_mismatches(left_item, right_item, path=f"{path}[{index}]"))
+        return mismatches
+    return [] if left == right else [f"{path}:value"]
+
+
+def build_nle_snapshot_readback_parity_report(
+    project: dict[str, Any] | None,
+    *,
+    project_path: str = "",
+) -> dict[str, Any]:
+    source = project if isinstance(project, dict) else {}
+    persisted_snapshot = source.get("nle_snapshot") if isinstance(source.get("nle_snapshot"), dict) else {}
+    if not persisted_snapshot:
+        return {
+            "schema": NLE_SNAPSHOT_READBACK_PARITY_SCHEMA,
+            "checked": False,
+            "stable": True,
+            "persisted_snapshot_present": False,
+            "mismatch_count": 0,
+            "mismatches": [],
+        }
+    fresh_signature = nle_snapshot_readback_signature(build_project_nle_snapshot(source, project_path=project_path))
+    persisted_signature = nle_snapshot_readback_signature(persisted_snapshot)
+    mismatches = _signature_mismatches(persisted_signature, fresh_signature)
+    return {
+        "schema": NLE_SNAPSHOT_READBACK_PARITY_SCHEMA,
+        "checked": True,
+        "stable": not mismatches,
+        "persisted_snapshot_present": True,
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches[:32],
+        "persisted_caption_count": sum(
+            len(seq.get("captions", [])) for seq in persisted_signature.get("sequences", [])
+        ),
+        "fresh_caption_count": sum(len(seq.get("captions", [])) for seq in fresh_signature.get("sequences", [])),
+        "persisted_marker_count": sum(len(seq.get("markers", [])) for seq in persisted_signature.get("sequences", [])),
+        "fresh_marker_count": sum(len(seq.get("markers", [])) for seq in fresh_signature.get("sequences", [])),
+        "persisted_render_plan_count": len(persisted_signature.get("render_plans", [])),
+        "fresh_render_plan_count": len(fresh_signature.get("render_plans", [])),
+    }
+
+
+def attach_nle_snapshot_readback_parity(
+    project: dict[str, Any],
+    *,
+    project_path: str = "",
+) -> dict[str, Any]:
+    if not isinstance(project, dict):
+        return project
+    report = build_nle_snapshot_readback_parity_report(project, project_path=project_path)
+    if report.get("checked"):
+        project[NLE_SNAPSHOT_READBACK_PARITY_KEY] = report
+    else:
+        project.pop(NLE_SNAPSHOT_READBACK_PARITY_KEY, None)
+    return project
 
 
 def _optional_float(value: Any) -> float | None:
@@ -568,6 +747,8 @@ def build_project_nle_snapshot(project: dict[str, Any], *, project_path: str = "
 __all__ = [
     "CaptionSegment",
     "Clip",
+    "NLE_SNAPSHOT_READBACK_PARITY_KEY",
+    "NLE_SNAPSHOT_READBACK_PARITY_SCHEMA",
     "NLE_SNAPSHOT_SCHEMA",
     "NLESnapshot",
     "ProjectAsset",
@@ -575,9 +756,12 @@ __all__ = [
     "Sequence",
     "TimelineMarker",
     "Track",
+    "attach_nle_snapshot_readback_parity",
     "build_project_nle_snapshot",
+    "build_nle_snapshot_readback_parity_report",
     "build_concat_render_plan_from_snapshot",
     "edl_segments_from_render_plan_snapshot",
     "markers_from_roughcut_sidecar_payload",
     "markers_from_stitched_cut_boundaries",
+    "nle_snapshot_readback_signature",
 ]

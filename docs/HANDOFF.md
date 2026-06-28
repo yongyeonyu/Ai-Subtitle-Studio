@@ -33,7 +33,64 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Approved Snapshot Persistence
+## Current Handoff - 2026-06-28 NLE Snapshot Readback Parity
+
+### Scope
+
+- Dex completed the next owner-approved persisted NLE structure slice: approved `nle_snapshot` read-back parity.
+- Persisted `nle_snapshot` remains non-canonical compatibility metadata. Legacy editor rows still load first, and runtime `NLEProjectState` is rebuilt from those legacy rows.
+- On project read, `_nle_snapshot_readback_parity` now compares the persisted approved snapshot signature against a freshly rebuilt snapshot. Drift is runtime diagnostic evidence only; it does not block load, does not overwrite legacy rows, and is not persisted back to disk.
+- Top-level `nle`, persisted `_nle_project_state`, canonical load ownership from `nle_snapshot`, per-pixel drag writes, UI layout/label/color changes, subtitle quality policy changes, and STT/default-cache policy changes remain out of this slice.
+
+### Modified Files
+
+- `core/project/nle_snapshot.py`
+- `core/project/project_io.py`
+- `core/project/project_format.py`
+- `core/project/project_manager.py`
+- `tools/audit_nle_persistence_cutover.py`
+- `tests/test_project_nle_persistence_guard.py`
+- `tests/test_nle_persistence_cutover_audit.py`
+- `.agents/sentinel/handoff.md`
+- `.agents/sentinel/handoffs/20260628-233748-nle-snapshot-read-back-parity-scout-jammini.md`
+- `.agents/sentinel/handoffs/20260628-233906-nle-persisted-snapshot-read-back-parity-architecture-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-223921-nle-persisted-snapshot-read-back-parity-qa-gates-seorin.md`
+- `.agents/sentinel/handoffs/20260628-223948-nle-persisted-snapshot-read-back-parity-workflow-yujin.md`
+- `docs/planning_queue/ACTION_ITEMS.md`
+- `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`
+- `docs/nle_engine/NLE_Action.md`
+- `docs/ARCHITECTURE.md`
+- `docs/FEATURE_REGISTRY.md`
+- `docs/HANDOFF.md`
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_snapshot.py core/project/project_io.py core/project/project_format.py core/project/project_manager.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py` -> `11 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "project_file_roundtrip or runtime_nle_project_state or direct_srt_rows or read_only_projection_parity"` -> `4 passed, 11 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "direct_srt or runtime_nle"` -> `3 passed, 86 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_snapshot_readback_parity_20260628_2345` -> wrote `nle_persistence_cutover_audit.md`; `prep_ready=true`, approved snapshot persistence `ready=true`, read-back parity stable `true`, mismatch count `0`, corrupted snapshot drift detected `true`, corrupted mismatch count `1`, legacy rows stable `true`, runtime report persisted `false`, operation roundtrip all passed, render/export parity passed, and full cutover `false`.
+
+### Jammini / Agent Review
+
+- Route status and handoff probe were verified before dispatch.
+- Jammini scout: `.agents/sentinel/handoffs/20260628-233748-nle-snapshot-read-back-parity-scout-jammini.md`.
+- `한결` architecture review: `.agents/sentinel/handoffs/20260628-233906-nle-persisted-snapshot-read-back-parity-architecture-hangyeol.md`.
+- `서린` QE gate review: `.agents/sentinel/handoffs/20260628-223921-nle-persisted-snapshot-read-back-parity-qa-gates-seorin.md`.
+- `유진` workflow review: `.agents/sentinel/handoffs/20260628-223948-nle-persisted-snapshot-read-back-parity-workflow-yujin.md`.
+- Accepted findings: start with save/reopen parity, keep legacy rows canonical, detect corrupted snapshot drift without misleading green, avoid UI warnings/popups in this slice, and defer direct SRT/roughcut sidecar parity expansion to the next dedicated proof.
+
+### Result
+
+- Approved `nle_snapshot` can now be persisted and read back with explicit parity evidence while remaining shadow metadata.
+- Corrupted persisted snapshot data is detected as runtime drift, but legacy-row load/save remains stable and storage stays clean of `_nle_snapshot_readback_parity`, `_nle_project_state`, and quarantine output.
+
+### Next Recommended Action
+
+- If continuing NLE, expand read-back parity to the direct SRT and roughcut sidecar surfaces as separate compatibility proofs, still without making `nle_snapshot` the canonical load owner.
+- If continuing App Store, install/configure Apple Distribution and 3rd Party Mac Developer Installer identities, then rerun `.app` signing, `.pkg` build, package signature, App Store Connect validation, and sandbox workflow smoke.
+
+## Previous Handoff - 2026-06-28 NLE Approved Snapshot Persistence
 
 ### Scope
 
