@@ -198,6 +198,17 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_detector_ev
 
 If this audit reports `weak_visual_change_not_threshold_candidate`, treat that as a threshold-tuning stop sign for the fixture. Preserve the boundary as frame-grid/marker evidence or revisit fixture truth instead of lowering visual detector thresholds from that evidence alone.
 
+When a corrected target is frame-preserved but not a detector-tuning candidate, freeze the marker policy before any broader NLE/cut-boundary work:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_preserved_marker_policy.py \
+  --source-fps-scout output/manual_verification/latest/nle_corrected_target_source_fps_scout_YYYYMMDD/source_fps_scout.json \
+  --detector-robustness output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_YYYYMMDD/cut_boundary_detector_evidence_robustness.json \
+  --output-dir output/manual_verification/latest/nle_preserved_marker_policy_YYYYMMDD
+```
+
+This audit should classify visually detected frames as `visual_marker_confirmed` and weak-but-preserved frames such as `2766` as `preserved_marker_required`. It must keep confirmed cuts as point evidence rather than clip spans, block visual threshold lowering from preserved markers, and reference the split/snap no-crossing guard in `tests/test_cut_boundary_fixture_2766_2677.py`.
+
 ## Preview frame cache validation
 
 Preview/skimming cache changes should prove temp-workspace cache lookup, nonblocking preview seek behavior, and unchanged timeline scrub routing.

@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-152200-nle-preserved-marker-policy.md`
+- `.agents/sentinel/handoffs/20260628-142200-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-151600-stt-nas-on-regression-gate.md`
 - `.agents/sentinel/handoffs/20260628-141544-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-141000-cut-boundary-2766-detector-scout.md`

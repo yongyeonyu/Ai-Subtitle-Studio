@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Preserved Marker Policy Audit - 2026-06-28 KST
+
+- 실행 모드: corrected source-fps scout plus detector-robustness evidence를 결합한 source-app fixed cut-boundary preserved-marker policy read-only audit.
+- 결과: pass for diagnostic tooling, fixed-fixture policy evidence, split/snap guard, and NAS availability preflight. No runtime detector threshold, subtitle quality policy, STT/STT2 policy, UI/UX, QML/GPU default, App Store packaging/signing/upload, DMG behavior, clip-span mapping, per-pixel NLE write, or persisted NLE disk field changed.
+- 저장 위치:
+  - Preserved-marker audit: `output/manual_verification/latest/nle_preserved_marker_policy_20260628/cut_boundary_preserved_marker_policy.md`
+  - Preserved-marker JSON: `output/manual_verification/latest/nle_preserved_marker_policy_20260628/cut_boundary_preserved_marker_policy.json`
+  - NAS preflight: `output/manual_verification/latest/nle_preserved_marker_policy_nas_preflight_20260628/reference_fixture_availability.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-142200-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-152200-nle-preserved-marker-policy.md`
+- 실제 fixed-fixture 결과:
+  - `passed=true`; all target frames have marker policy; review required frames `[]`.
+  - Frame `2676`: `visual_marker_confirmed`, source status `detected`, detector classification `visual_detection_available`, best score `72.293`, best hits `4`.
+  - Frame `2766`: `preserved_marker_required`, source status `preserved_only`, detector classification `weak_visual_change_not_threshold_candidate`, best score `3.812`, best hits `0`.
+  - Confirmed cuts remain point evidence rather than clip spans; preserved marker evidence can force subtitle split/snap but must not lower visual detector thresholds.
+  - Final subtitle guard requires invalid/non-monotonic/overlap `0/0/0`, global max active `1`, and no row crossing confirmed markers through `tests/test_cut_boundary_fixture_2766_2677.py::test_confirmed_fixture_cut_frames_split_snap_without_crossing_rows`.
+- NAS fixture:
+  - Current NAS HeyDealer first-180s preflight `ready_for_reference_scored_benchmark=true`; media and SRT both exist; clipped reference rows `89`.
+  - No new subtitle-generation benchmark was run because this slice is read-only policy evidence and does not change runtime generation behavior.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_cut_boundary_preserved_marker_policy.py tests/test_cut_boundary_preserved_marker_policy.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_preserved_marker_policy.py tests/test_cut_boundary_detector_evidence_robustness.py tests/test_cut_boundary_fixture_2766_2677.py` -> `10 passed, 1 skipped`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_preserved_marker_policy.py --source-fps-scout output/manual_verification/latest/nle_corrected_target_source_fps_scout_20260628/source_fps_scout.json --detector-robustness output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628/cut_boundary_detector_evidence_robustness.json --output-dir output/manual_verification/latest/nle_preserved_marker_policy_20260628` -> pass.
+  - `AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE=... AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2676" AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_preserved_marker_policy_nas_preflight_20260628` -> ready `true`.
+
 ## Live NAS HeyDealer STT Regression Refresh - 2026-06-28 KST
 
 - 실행 모드: owner-required HeyDealer first-180s NAS fixture preflight plus High-mode real-media regression after NAS was reported on again.

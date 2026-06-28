@@ -33,6 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Preserved Marker Policy Audit
+
+### Scope
+
+- Added a read-only preserved-marker policy audit for fixed cut-boundary frames `2766,2676`.
+- Added `tools/audit_cut_boundary_preserved_marker_policy.py`.
+- Added `tests/test_cut_boundary_preserved_marker_policy.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime detector threshold, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Preserved-marker audit: `output/manual_verification/latest/nle_preserved_marker_policy_20260628/cut_boundary_preserved_marker_policy.md`
+- Source-fps input: `output/manual_verification/latest/nle_corrected_target_source_fps_scout_20260628/source_fps_scout.json`
+- Robustness input: `output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628/cut_boundary_detector_evidence_robustness.json`
+- `passed=true`; review required frames `[]`.
+- Frame `2676`: `visual_marker_confirmed`, source status `detected`, detector classification `visual_detection_available`, best score `72.293`, best hits `4`.
+- Frame `2766`: `preserved_marker_required`, source status `preserved_only`, detector classification `weak_visual_change_not_threshold_candidate`, best score `3.812`, best hits `0`.
+- Confirmed cuts remain point evidence rather than clip spans; preserved marker evidence can force subtitle split/snap but must not lower visual detector thresholds.
+
+### NAS
+
+- NAS preflight: `output/manual_verification/latest/nle_preserved_marker_policy_nas_preflight_20260628/reference_fixture_availability.md`
+- Ready `true`; media and reference SRT exist; clipped reference rows `89`.
+- No new subtitle-generation benchmark was run because this slice is read-only policy evidence and does not change runtime generation behavior.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-142200-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-152200-nle-preserved-marker-policy.md`
+- Dex classification: accept the scout's preserved-marker recommendation. Correct the suggested new fixture test path to the existing owner path `tests/test_cut_boundary_fixture_2766_2677.py`, whose expected frames are now `2766,2676`.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_cut_boundary_preserved_marker_policy.py tests/test_cut_boundary_preserved_marker_policy.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_preserved_marker_policy.py tests/test_cut_boundary_detector_evidence_robustness.py tests/test_cut_boundary_fixture_2766_2677.py` -> `10 passed, 1 skipped`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_preserved_marker_policy.py --source-fps-scout output/manual_verification/latest/nle_corrected_target_source_fps_scout_20260628/source_fps_scout.json --detector-robustness output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628/cut_boundary_detector_evidence_robustness.json --output-dir output/manual_verification/latest/nle_preserved_marker_policy_20260628` -> pass.
+- `AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE=... AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2676" AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `6 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_preserved_marker_policy_nas_preflight_20260628` -> pass, ready `true`.
+
+### Next Recommended Action
+
+- Continue NLE work through the next owner-map-backed mutable/edit surface slice, preserving the `2766` marker policy instead of lowering visual detector thresholds.
+- Do not relax thresholds, change STT policy, promote cache defaults, alter UI, persist NLE disk fields, map point markers as clip spans, or perform App Store work from this slice.
+
 ## Current Handoff - 2026-06-28 Live NAS HeyDealer STT Regression Refresh
 
 ### Scope
