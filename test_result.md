@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Relink Parity Verification - 2026-06-28 KST
+
+- 실행 모드: source-app project-load/media relink parity validation between editor media files and runtime `NLEProjectState` snapshot assets/clips.
+- 결과: pass for updated relink media path parity, editor/timeline path drift rejection, runtime fps drift rejection, clean persisted storage, strict NAS HeyDealer first-180s acceptance, and no STT worker timeout. UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, project-storage relink schema, App Store packaging/signing/upload, DMG behavior, and per-pixel NLE writes did not change.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_relink_parity_20260628/nle_relink_parity.md`
+  - NAS preflight: `output/manual_verification/latest/nle_relink_parity_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_194124/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_relink_parity_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_relink_parity_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-103348-next-nle-taption-runtime-contract-scout.md`
+- 실제 결과:
+  - Audit `ready=true`; project/NLE media counts `1/1/1`; project/runtime/sequence fps `30.0/30.0/30.0`; project/sequence duration `6.0/6.0`.
+  - Relink parity consistent `true`; path drift rejected `true` with `nle_media_path_order_drift:0`; operation journal count `0`; storage forbidden key count `0`.
+  - NAS acceptance `accepted=true`, elapsed `48.693s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`; stage spans STT1 `18.621955s`, STT2 `16.476798s`, word precision `13.022902s`, subtitle postprocess `0.491175s`.
+  - Timeout audit `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_project_state.py tools/audit_nle_relink_parity.py tests/test_nle_relink_verification.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_relink_verification.py` -> `5 passed`.
+  - `./venv/bin/python tools/audit_nle_relink_parity.py --output-dir output/manual_verification/latest/nle_relink_parity_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "runtime_nle_project_state or direct_srt_rows or compatibility_characterization or read_only_projection_parity or relink"` -> `4 passed, 11 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_selection_sync_validation.py tests/test_project_nle_persistence_guard.py` -> `7 passed`.
+
 ## NLE Selection Sync Validation - 2026-06-28 KST
 
 - 실행 모드: source-app reload/restore active selection parity validation between visible editor rows and runtime `NLEProjectState`.

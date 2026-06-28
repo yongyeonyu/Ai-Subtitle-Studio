@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+import os
 from typing import Any
 
 from core.frame_time import frame_to_sec, normalize_fps, sec_to_nearest_frame
 from core.project.nle_snapshot import NLESnapshot, build_project_nle_snapshot
-from core.project.project_context import project_segments_to_editor
-from core.project.project_format import project_primary_fps
+from core.project.project_context import project_media_files, project_segments_to_editor
+from core.project.project_format import project_primary_fps, project_total_duration
 
 NLE_PROJECT_STATE_SCHEMA = "ai_subtitle_studio.nle_project_state.v1"
 NLE_PROJECT_STATE_RUNTIME_KEY = "_nle_project_state"
@@ -354,6 +355,92 @@ def assert_nle_editor_rows_consistent(
             raise ValueError(f"nle_editor_text_drift:{index}")
 
 
+def _normalized_media_path(path: Any) -> str:
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    return os.path.abspath(os.path.expanduser(text))
+
+
+def _dedupe_paths(paths: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in paths:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+    return out
+
+
+def nle_media_relink_parity_signature(
+    project: dict[str, Any],
+    state: NLEProjectState | None = None,
+    *,
+    project_path: str = "",
+) -> dict[str, Any]:
+    source = project if isinstance(project, dict) else {}
+    runtime_state = state if isinstance(state, NLEProjectState) else build_project_nle_state(source, project_path=project_path)
+    snapshot = runtime_state.snapshot
+    sequence = snapshot.sequences[0] if snapshot.sequences else None
+    clip_paths: list[str] = []
+    if sequence is not None:
+        for clip in sequence.clips:
+            boundary_span = clip.metadata.get("boundary_span") if isinstance(clip.metadata, dict) else {}
+            clip_paths.append(_normalized_media_path(boundary_span.get("file") if isinstance(boundary_span, dict) else ""))
+    asset_paths = [_normalized_media_path(asset.path) for asset in snapshot.assets]
+    expected_paths = [_normalized_media_path(path) for path in project_media_files(source)]
+    return {
+        "project_media_paths": expected_paths,
+        "nle_clip_paths": clip_paths,
+        "nle_asset_paths": asset_paths,
+        "project_media_count": len(expected_paths),
+        "nle_clip_count": len(clip_paths),
+        "nle_asset_count": len(asset_paths),
+        "project_unique_media_paths": _dedupe_paths(expected_paths),
+        "nle_unique_asset_paths": _dedupe_paths(asset_paths),
+        "project_primary_fps": normalize_fps(project_primary_fps(source)),
+        "runtime_primary_fps": normalize_fps(runtime_state.primary_fps),
+        "sequence_fps": normalize_fps(sequence.fps) if sequence is not None else 0.0,
+        "project_duration": round(project_total_duration(source), 6),
+        "sequence_duration": round(float(sequence.duration), 6) if sequence is not None else 0.0,
+        "operation_journal_count": len(runtime_state.operation_journal),
+        "snapshot_source_project_path": snapshot.source_project_path,
+        "runtime_source_project_path": runtime_state.source_project_path,
+    }
+
+
+def assert_nle_media_relink_parity(
+    project: dict[str, Any],
+    state: NLEProjectState | None = None,
+    *,
+    project_path: str = "",
+) -> dict[str, Any]:
+    signature = nle_media_relink_parity_signature(project, state, project_path=project_path)
+    project_paths = list(signature["project_media_paths"])
+    clip_paths = list(signature["nle_clip_paths"])
+    asset_paths = list(signature["nle_unique_asset_paths"])
+    if len(project_paths) != len(clip_paths):
+        raise ValueError(f"nle_media_path_count_drift:{len(project_paths)}!={len(clip_paths)}")
+    for index, (project_path_value, clip_path_value) in enumerate(zip(project_paths, clip_paths)):
+        if project_path_value != clip_path_value:
+            raise ValueError(f"nle_media_path_order_drift:{index}")
+    if _dedupe_paths(project_paths) != asset_paths:
+        raise ValueError("nle_asset_media_path_drift")
+    project_fps = float(signature["project_primary_fps"])
+    runtime_fps = float(signature["runtime_primary_fps"])
+    sequence_fps = float(signature["sequence_fps"])
+    if abs(project_fps - runtime_fps) > 1e-6:
+        raise ValueError(f"nle_runtime_fps_drift:{project_fps}!={runtime_fps}")
+    if abs(project_fps - sequence_fps) > 1e-6:
+        raise ValueError(f"nle_sequence_fps_drift:{project_fps}!={sequence_fps}")
+    project_duration = float(signature["project_duration"])
+    sequence_duration = float(signature["sequence_duration"])
+    if project_duration > 0.0 and abs(project_duration - sequence_duration) > 1e-6:
+        raise ValueError(f"nle_sequence_duration_drift:{project_duration}!={sequence_duration}")
+    return signature
+
+
 def nle_active_selection_signature(
     rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     *,
@@ -433,8 +520,10 @@ __all__ = [
     "attach_project_nle_state",
     "assert_nle_active_selection_consistent",
     "assert_nle_editor_rows_consistent",
+    "assert_nle_media_relink_parity",
     "build_project_nle_state",
     "nle_active_selection_signature",
+    "nle_media_relink_parity_signature",
     "project_nle_state",
     "project_segments_from_nle_state",
     "record_nle_operation_journal_entry",
