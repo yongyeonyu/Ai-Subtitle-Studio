@@ -19,6 +19,12 @@ def _file_rows(helpers: SimpleNamespace, outputs: list[tuple[str, str]]) -> list
     ]
 
 
+def _srt_save_export_segments(segs: list[dict], *, fps: Any) -> list[dict]:
+    from core.project.nle_runtime_cutover import nle_save_export_segments_from_editor_rows
+
+    return nle_save_export_segments_from_editor_rows(segs, primary_fps=fps or 30.0)
+
+
 _GLOBAL_MENU_ACTION_ALIASES = {
     "settings": "left_설정",
     "left-settings": "left_설정",
@@ -878,7 +884,8 @@ def _handle_save_export_command(
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 from core.engine.subtitle_engine import save_srt
 
-                save_srt(segs, output_path, fps=float(getattr(editor, "video_fps", 30.0) or 30.0), write_backup=False)
+                fps = float(getattr(editor, "video_fps", 30.0) or 30.0)
+                save_srt(_srt_save_export_segments(segs, fps=fps), output_path, fps=fps, write_backup=False)
             except Exception as exc:
                 return fail("subtitle_export_failed", message=str(exc))
             result = helpers.file_result(output_path)

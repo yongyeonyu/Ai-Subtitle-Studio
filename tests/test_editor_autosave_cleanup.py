@@ -707,6 +707,25 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual(save_mock.call_args.args[1], "/tmp/opened.assets/subtitles/final.srt")
         self.assertEqual(editor._last_saved_srt_outputs, [("/tmp/opened.assets/subtitles/final.srt", "/tmp/media.mp4")])
 
+    def test_persist_editor_srts_projects_direct_srt_micro_overlap_to_shared_boundary(self):
+        editor = _SourceSrtSaveEditor()
+        editor.video_fps = 60.0
+
+        with patch("ui.editor.editor_save_manager.save_srt") as save_mock:
+            ok = editor._persist_editor_srts(
+                [
+                    {"start": 162.233, "end": 163.633, "text": "첫째"},
+                    {"start": 163.6, "end": 166.9, "text": "둘째"},
+                ],
+                autosave=False,
+            )
+
+        saved_rows = save_mock.call_args.args[0]
+        self.assertTrue(ok)
+        self.assertEqual([row["text"] for row in saved_rows], ["첫째", "둘째"])
+        self.assertEqual(saved_rows[0]["end_frame"], saved_rows[1]["start_frame"])
+        self.assertEqual(saved_rows[1]["_nle_runtime_overlap_repaired"], "shared_boundary")
+
     def test_segments_for_srt_output_reads_lightweight_project_payload_only(self):
         editor = _DeferredProjectSaveEditor()
         segs = [{"start": 0.0, "end": 1.0, "text": "순서 유지"}]

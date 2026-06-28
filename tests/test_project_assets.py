@@ -176,6 +176,35 @@ class ProjectAssetsTests(unittest.TestCase):
         self.assertEqual(len(gap_rows), 1)
         self.assertEqual([row.get("_nle_runtime_surface") for row in metadata], ["save_export", "save_export"])
 
+    def test_externalize_project_text_assets_repairs_srt_quantized_micro_overlap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "project.json"
+            project = {
+                "project_path": str(project_path),
+                "video": {"primary_fps": 60.0},
+                "subtitles": {},
+                "editor_state": {"stt": {"candidate_tracks": {}}},
+                "analysis": {},
+            }
+
+            externalize_project_text_assets(
+                str(project_path),
+                project,
+                final_segments=[
+                    {"id": "caption_1", "start": 162.233, "end": 163.633, "text": "첫째", "speaker": "00"},
+                    {"id": "caption_2", "start": 163.6, "end": 166.9, "text": "둘째", "speaker": "01"},
+                ],
+                stt_tracks={},
+            )
+
+            final_srt = (Path(tmp) / "project.assets" / "subtitles" / "final.srt").read_text(encoding="utf-8")
+            metadata = project["asset_storage"]["tracks"]["final"]["metadata"]
+
+        self.assertIn("00:02:42,233 --> 00:02:43,633", final_srt)
+        self.assertIn("00:02:43,633 --> 00:02:46,900", final_srt)
+        self.assertEqual(metadata[0]["end_frame"], metadata[1]["start_frame"])
+        self.assertEqual(project["subtitles"]["segment_count"], 2)
+
     def test_externalize_project_text_assets_normalizes_vector_canvas_time_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_path = Path(tmp) / "project.json"

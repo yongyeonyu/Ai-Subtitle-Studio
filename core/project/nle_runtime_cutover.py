@@ -19,6 +19,7 @@ _CANDIDATE_KEYS = (
 )
 _OVERLAY_DROP_KEYS = set(_PREVIEW_KEYS + _CANDIDATE_KEYS + ("is_gap", "quality_candidates"))
 _MICRO_OVERLAP_MAX_FRAMES = 1
+_MICRO_OVERLAP_MAX_SEC = 0.035
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -110,8 +111,13 @@ def _final_surface_rows_without_overlap(
             continue
         if previous_end_frame is not None and start_frame < previous_end_frame:
             overlap_frames = previous_end_frame - start_frame
+            overlap_sec = overlap_frames / max(1.0, primary_fps)
+            micro_overlap_limit_sec = max(
+                _MICRO_OVERLAP_MAX_FRAMES / max(1.0, primary_fps),
+                _MICRO_OVERLAP_MAX_SEC,
+            )
             can_share_boundary = (
-                overlap_frames <= _MICRO_OVERLAP_MAX_FRAMES
+                overlap_sec <= micro_overlap_limit_sec + 1e-9
                 and end_frame > previous_end_frame
             )
             if not can_share_boundary:

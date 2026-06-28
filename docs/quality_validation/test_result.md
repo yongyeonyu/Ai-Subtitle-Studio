@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.10 G2/G3 Final Save-Export Micro-Overlap Shared-Boundary Repair - 2026-06-29 KST
+
+- 실행 모드: source-app G2/G3 final save/export micro-overlap repair, direct SRT/export-subtitles projection routing, and version/schema bump.
+- 결과: pass for focused final save/export micro-overlap projection behavior. This is not same-media quality/speed, save/reopen, global-canvas, or final export acceptance.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.10.md`
+  - Live SRT projection: `output/manual_verification/latest/nle_save_export_micro_overlap_v040110_20260629/micro_overlap_report.md`
+  - Project-5 projection: `output/manual_verification/latest/nle_save_export_micro_overlap_v040110_20260629/project5_micro_overlap_report.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-032124-watchdog-handoff-probe.md`
+- 실제 결과:
+  - App version updated to `04.01.10`.
+  - Project schema version updated to `04.01.10`.
+  - `core/project/nle_runtime_cutover.py` repairs final save/export overlaps up to the greater of one frame or `0.035s` to a shared boundary when the later row remains valid.
+  - Broader or collapse-risk final overlaps still raise `nle_save_export_final_overlap`.
+  - Direct opened-media SRT persistence and `export-subtitles` now route rows through the same NLE save/export projection before writing SRT.
+  - Live SRT projection stayed `64 -> 64` rows, overlap changed `1 -> 0`, and repaired row count was `1`.
+  - Project-5 projection stayed `170 -> 170` rows, repair count was `2`, and projected overlap count was `0`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py ui/editor/editor_save_manager.py ui/main/app_command_bridge_handlers.py tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py tests/test_app_command_bridge.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "save_export_cutover or micro_overlap"` -> `8 passed, 7 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_assets.py -k "externalize_project_text_assets"` -> `5 passed, 3 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_autosave_cleanup.py -k "persist_editor_srts or deferred_project_save or close_flush_failure"` -> `9 passed, 43 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "export_subtitles_command or save_subtitles_command or status"` -> `22 passed, 59 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py tests/test_app_command_bridge.py` -> `156 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.10`, `PROJECT_SCHEMA_VERSION=04.01.10`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.09 G3/G2 Final-Overlap Deferred-Save Retry Guard - 2026-06-29 KST
 
 - 실행 모드: source-app G3/G2 deferred-save retry guard, final-overlap nonretryable cleanup, retryable deferred-save preservation, and version/schema bump.

@@ -33,7 +33,56 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.09 / G3-G2 Final-Overlap Deferred-Save Retry Guard
+## Current Handoff - 2026-06-29 v04.01.10 / G2-G3 Final Save-Export Micro-Overlap Shared-Boundary Repair
+
+### Scope
+
+- Completed the final save/export micro-overlap shared-boundary repair slice for `G2. Source-App NLE / Taption Editing Continuity` and `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`.
+- Bumped source-app version and project schema from `04.01.09` to `04.01.10`.
+- Added `docs/release_notes/RELEASE_v04.01.10.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.10`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.10`.
+- `core/project/nle_runtime_cutover.py` repairs final save/export overlaps up to the greater of one frame or `0.035s` to a shared boundary when the later row remains valid.
+- Broader or collapse-risk final overlaps still raise `nle_save_export_final_overlap`.
+- Direct opened-media SRT persistence and `export-subtitles` now route rows through the same NLE save/export projection before writing SRT.
+- Multiclip SRT persistence was intentionally left unchanged because local-offset rows need a separate owner-map before widening this path.
+- No visible UI layout/label/color/menu/shortcut change, STT/VAD algorithm change, worker fan-out change, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/project/nle_runtime_cutover.py ui/editor/editor_save_manager.py ui/main/app_command_bridge_handlers.py tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py tests/test_app_command_bridge.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused save/export micro-overlap guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "save_export_cutover or micro_overlap"` -> `8 passed, 7 deselected`.
+- Focused project asset guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_assets.py -k "externalize_project_text_assets"` -> `5 passed, 3 deselected`.
+- Focused autosave/SRT guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_autosave_cleanup.py -k "persist_editor_srts or deferred_project_save or close_flush_failure"` -> `9 passed, 43 deselected`.
+- Focused app-command export guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "export_subtitles_command or save_subtitles_command or status"` -> `22 passed, 59 deselected`.
+- Combined NLE save/export/autosave/app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py tests/test_app_command_bridge.py` -> `156 passed`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.10`, `PROJECT_SCHEMA_VERSION=04.01.10`.
+- `git diff --check -- .` -> pass.
+- Live SRT projection: `output/manual_verification/latest/nle_save_export_micro_overlap_v040110_20260629/micro_overlap_report.md` -> source/projected `64/64`, overlap `1 -> 0`, repaired row count `1`.
+- Project-5 projection: `output/manual_verification/latest/nle_save_export_micro_overlap_v040110_20260629/project5_micro_overlap_report.md` -> source/projected `170/170`, repair count `2`, projected overlap count `0`.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-032124-watchdog-handoff-probe.md`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints; all warned to keep the fix narrow and not overclaim full save/reopen/final-export acceptance.
+
+### Remaining Risks
+
+- G3 still needs same-media quality/speed, save/reopen, final export, global-canvas, and UI/app-command responsiveness acceptance before the broader runtime-visibility gate can close.
+- Multiclip SRT persistence needs a separate owner-map before applying the same projection route.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G2/G3, run same-media quality/speed/save-reopen/final-export/global-canvas proof against the NAS-derived live proof media and keep it separate from runtime/status observability proof.
+- If a final-surface defect remains, keep `nle_save_export_final_overlap` strict and add a bounded fixture before widening projection behavior.
+
+## Previous Handoff - 2026-06-29 v04.01.09 / G3-G2 Final-Overlap Deferred-Save Retry Guard
 
 ### Scope
 

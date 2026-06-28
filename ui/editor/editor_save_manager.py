@@ -45,6 +45,12 @@ def _deferred_project_save_error_is_nonretryable(error: Any, *, force_reason: st
     return "nle_save_export_final_overlap" in str(error or "")
 
 
+def _srt_save_export_segments(segs: list[dict], *, fps: Any) -> list[dict]:
+    from core.project.nle_runtime_cutover import nle_save_export_segments_from_editor_rows
+
+    return nle_save_export_segments_from_editor_rows(segs, primary_fps=fps or 30.0)
+
+
 def reusable_cache_paths() -> list[str]:
     output_dir = os.path.abspath(str(config.OUTPUT_DIR or ""))
     cache_paths = [
@@ -708,7 +714,7 @@ class EditorSaveManagerMixin:
                 get_logger().log("⚠️ 저장 실패: SRT 저장 경로를 만들 수 없습니다.")
                 return False
             save_srt(
-                srt_output_segs,
+                _srt_save_export_segments(srt_output_segs, fps=getattr(self, "video_fps", 30.0)),
                 srt_path,
                 fps=getattr(self, "video_fps", 30.0),
                 write_backup=write_backup,

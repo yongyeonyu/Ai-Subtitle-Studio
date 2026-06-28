@@ -27,7 +27,7 @@ owner explicitly reopens that scope.
 
 ## Current Snapshot
 
-- App checkpoint: `04.01.09` / `v04.01.09`
+- App checkpoint: `04.01.10` / `v04.01.10`
 - Active queue: `planning_queue/ACTION_ITEMS.md`
 - Completed archive: `planning_queue/COMPLETED_ACTION_ITEMS.md`
 - Handoff: `HANDOFF.md`

@@ -920,6 +920,23 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertEqual(result["data"]["output"]["path"], str(export_path))
         self.assertTrue(result["data"]["output"]["exists"])
 
+    def test_export_subtitles_command_projects_micro_overlap_to_shared_boundary(self):
+        owner = _DummyOwner()
+        owner._editor_widget.video_fps = 60.0
+        owner._editor_widget._segments = [
+            {"line": 0, "start": 162.233, "end": 163.633, "text": "첫째", "is_gap": False},
+            {"line": 1, "start": 163.6, "end": 166.9, "text": "둘째", "is_gap": False},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            export_path = Path(tmp) / "manual_export.srt"
+
+            result = execute_app_command(owner, {"command": "export-subtitles", "path": str(export_path)})
+            exported = export_path.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ok"])
+        self.assertIn("00:02:42,233 --> 00:02:43,633", exported)
+        self.assertIn("00:02:43,633 --> 00:02:46,900", exported)
+
     def test_export_subtitle_video_command_writes_mov_outputs(self):
         owner = _DummyOwner()
         with tempfile.TemporaryDirectory() as tmp:

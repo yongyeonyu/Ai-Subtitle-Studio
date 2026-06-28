@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.09-codemap
+Document-Version: 04.01.10-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.

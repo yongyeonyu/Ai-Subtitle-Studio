@@ -226,6 +226,40 @@ class ProjectNleRuntimeCutoverTests(unittest.TestCase):
         self.assertEqual(overlay[1]["start"], 1.0)
         self.assertEqual(overlay[1]["_nle_runtime_overlap_repaired"], "shared_boundary")
 
+    def test_save_export_cutover_repairs_srt_quantized_micro_overlap_at_60fps(self):
+        rows = [
+            {"id": "caption_1", "start": 162.233, "end": 163.633, "text": "first"},
+            {"id": "caption_2", "start": 163.6, "end": 166.9, "text": "second"},
+        ]
+
+        export_rows = nle_save_export_segments_from_editor_rows(rows, primary_fps=60.0)
+
+        self.assertEqual([row["text"] for row in export_rows], ["first", "second"])
+        self.assertEqual(export_rows[0]["end_frame"], export_rows[1]["start_frame"])
+        self.assertGreater(export_rows[1]["end_frame"], export_rows[1]["start_frame"])
+        self.assertEqual(export_rows[1]["_nle_runtime_overlap_repaired"], "shared_boundary")
+
+    def test_save_export_cutover_repairs_two_frame_quantized_overlap_at_5994fps(self):
+        fps = 60000 / 1001
+        rows = [
+            {
+                "id": "caption_1",
+                "time": {"unit": "frame", "start_frame": 20000, "end_frame": 20108, "timeline_frame_rate": fps},
+                "text": "first",
+            },
+            {
+                "id": "caption_2",
+                "time": {"unit": "frame", "start_frame": 20106, "end_frame": 20280, "timeline_frame_rate": fps},
+                "text": "second",
+            },
+        ]
+
+        export_rows = nle_save_export_segments_from_editor_rows(rows, primary_fps=fps)
+
+        self.assertEqual([row["text"] for row in export_rows], ["first", "second"])
+        self.assertEqual(export_rows[0]["end_frame"], export_rows[1]["start_frame"])
+        self.assertEqual(export_rows[1]["_nle_runtime_overlap_repaired"], "shared_boundary")
+
     def test_global_canvas_cutover_drops_unfixable_overlap_instead_of_drawing_two_final_rows(self):
         rows = [
             {"id": "caption_1", "start": 0.0, "end": 2.0, "text": "first"},
@@ -281,7 +315,7 @@ class ProjectNleRuntimeCutoverTests(unittest.TestCase):
             },
             {
                 "id": "caption_2",
-                "time": {"unit": "frame", "start_frame": 118, "end_frame": 180, "timeline_frame_rate": 60.0},
+                "time": {"unit": "frame", "start_frame": 117, "end_frame": 180, "timeline_frame_rate": 60.0},
                 "text": "second",
             },
         ]

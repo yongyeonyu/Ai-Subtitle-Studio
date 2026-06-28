@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.09-source-app
+Document-Version: 04.01.10-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,22 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.10 G2/G3 Final Save-Export Micro-Overlap Shared-Boundary Repair
+
+Source request: continue remaining action-item execution after owner approval for App Store packaging/signing/upload/metadata work and persisted NLE/UI structure scope; distribute work through Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.10"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.10`.
+3. `core/project/nle_runtime_cutover.py` now repairs final save/export micro-overlaps up to the greater of one frame or `0.035s` by moving the later row to the previous shared boundary when the row remains valid.
+4. Broader or collapse-risk final overlaps still raise `nle_save_export_final_overlap`; the strict final-authority guard was not weakened, bypassed, or converted into acceptance.
+5. Direct opened-media SRT persistence and the `export-subtitles` app-command path now route final rows through the same NLE save/export projection before writing SRT, so live-proof SRT quantization does not preserve a tiny overlap.
+6. Existing multiclip SRT persistence was intentionally left unchanged in this slice because local-offset rows may carry global frame metadata and need a separate owner-map before widening.
+7. Evidence artifacts were written under `output/manual_verification/latest/nle_save_export_micro_overlap_v040110_20260629/`: live SRT projection `64 -> 64` rows, overlap `1 -> 0`, repaired row count `1`; project-5 projection `170 -> 170` rows, repair count `2`, projected overlap count `0`.
+8. Jammini route proof was refreshed at `.agents/sentinel/handoffs/20260629-032124-watchdog-handoff-probe.md`, and three sub-agent reviews were used as architecture/QE/editor-workflow guardrails.
+9. The three review viewpoints converged on the narrow boundary: fix only tiny SRT/frame-quantization save/export overlaps, preserve final authority, do not drop rows, do not add visible UI changes, and do not claim full same-media save/reopen/final-export acceptance yet.
+10. Focused verification passed before final docs: compile check for touched modules/tests; `tests/test_project_nle_runtime_cutover.py -k "save_export_cutover or micro_overlap"` -> `8 passed, 7 deselected`; `tests/test_project_assets.py -k "externalize_project_text_assets"` -> `5 passed, 3 deselected`; `tests/test_editor_autosave_cleanup.py -k "persist_editor_srts or deferred_project_save or close_flush_failure"` -> `9 passed, 43 deselected`; `tests/test_app_command_bridge.py -k "export_subtitles_command or save_subtitles_command or status"` -> `22 passed, 59 deselected`; combined save/export/app-command/autosave guard -> `156 passed`.
+11. This slice does not close the full G3 same-media quality/speed, save/reopen, final export, global-canvas, or UI/app-command responsiveness gate. Those remain active proof requirements.
 
 ## v04.01.09 G3/G2 Final-Overlap Deferred-Save Retry Guard
 
