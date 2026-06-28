@@ -33,6 +33,56 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 STT Cache Real-Media Backfill Attempt
+
+### Scope
+
+- Responded to the owner signal that NAS is back online.
+- Mounted/observed `/Volumes/photo` as the SMB share and verified the exact HeyDealer MP4/SRT pair.
+- Ran the representative HeyDealer first-180s STT collect-cache write plus cache-hit replay using the same STT1, STT2/word, and macro response cache paths.
+- Did not change runtime behavior, cache defaults, STT/STT2 policy, word precision policy, subtitle timing algorithms, UI/UX, save/load, render/export, packaging, signing, upload, notarization, App Store Connect, or DMG behavior.
+
+### Results
+
+- Evidence root: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/`
+- Preflight: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/preflight/reference_fixture_availability.md`; ready `true`, reference SRT rows `615`, clipped rows `89`.
+- Cache-write run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_103556/benchmark_results.json`
+- Cache-hit run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_103745/benchmark_results.json`
+- Write/hit elapsed: `62.492s -> 1.186s`.
+- Raw/final/reference: `58/56/89` on both runs.
+- Quality/text/timing: `93.745/94.267/0.583s` on both runs.
+- Final invalid/non-monotonic/overlap: `0/0/0`; final short/long counts `0/0`; global max active `1`; global stable `true`.
+- Hit replay proved STT1/STT2/word collect cache hits with provider calls `false`; collect elapsed values were `0.0/0.0/0.0s`.
+- High-context keep-cache also replayed on the hit run: hit count `2`, LLM calls `0`.
+
+### Hold Reason
+
+- Strict write acceptance: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_write/reference_benchmark_acceptance.md`
+- Strict hit acceptance: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_hit/reference_benchmark_acceptance.md`
+- Both strict acceptance reports are `accepted=false` with reason `final_last_end_beyond_duration_bound`.
+- Final last end is `180.256s`; duration bound is `180.0s`; max final-end slack is `0.25s`. The failure margin is `0.006s`.
+- Readiness refresh: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/readiness_refresh/stt_cache_backfill_readiness.md`; result stays `production_default_recommendation=hold_default_off`, strict real-media write/hit counts `0/0`, because failed strict acceptance cannot count as promotion evidence.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-103424-watchdog-handoff-probe.md`
+- Checklist scout: `.agents/sentinel/handoffs/20260628-103500-stt-cache-real-media-backfill-checklist.md`
+- Dex classification: accept the checklist. The run satisfies cache-efficiency and final overlap/global-canvas gates but does not satisfy strict acceptance due to the first-180s tail-bound failure.
+
+### Verification
+
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/preflight` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high ... --setting stt_primary_collect_cache_enabled=true --setting stt_recheck_collect_cache_enabled=true --setting subtitle_llm_macro_response_cache_enabled=true` -> write run `20260628_103556`, pass.
+- Same benchmark command with same cache paths -> hit run `20260628_103745`, pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_103556/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_write` -> expected exit `2`, `accepted=false`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_103745/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_hit` -> expected exit `2`, `accepted=false`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/readiness_refresh --representative-media "/Volumes/photo/.../헤이딜러_최종.MP4" --representative-reference-srt "/Volumes/photo/.../헤이딜러_최종.srt"` -> pass, still hold.
+
+### Next Recommended Action
+
+- Do not enable `stt_primary_collect_cache_enabled` or `stt_recheck_collect_cache_enabled` by default yet.
+- Next safe implementation target is the strict first-180s tail-bound failure: either repair the benchmark/source-app final projection so final subtitles do not exceed the requested window, then rerun write/hit acceptance, or keep this as owner-review-only evidence with the tail-bound exception explicitly approved.
+
 ## Current Handoff - 2026-06-28 Active Queue Gate Refresh
 
 ### Scope

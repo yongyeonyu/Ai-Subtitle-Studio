@@ -1,5 +1,40 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## STT Cache Real-Media Backfill Attempt - 2026-06-28 KST
+
+- 실행 모드: NAS HeyDealer first-180s representative real-media collect-cache write/hit replay.
+- 결과: cache efficiency proved, but strict acceptance blocked; collect-cache production defaults remain `false/false`.
+- 저장 위치:
+  - Evidence root: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/`
+  - Preflight: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/preflight/reference_fixture_availability.md`
+  - Write benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_103556/benchmark_results.json`
+  - Hit benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_103745/benchmark_results.json`
+  - Write acceptance: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_write/reference_benchmark_acceptance.md`
+  - Hit acceptance: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_hit/reference_benchmark_acceptance.md`
+  - Readiness refresh: `output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/readiness_refresh/stt_cache_backfill_readiness.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-103424-watchdog-handoff-probe.md`
+  - Jammini checklist: `.agents/sentinel/handoffs/20260628-103500-stt-cache-real-media-backfill-checklist.md`
+- 실제 결과:
+  - Preflight ready `true`; reference SRT rows `615`, clipped rows `89`.
+  - Write/hit elapsed `62.492s -> 1.186s`.
+  - Raw/final/reference `58/56/89` on both runs.
+  - Quality/text/timing `93.745/94.267/0.583s` on both runs.
+  - Final invalid/non-monotonic/overlap `0/0/0`, final short/long `0/0`, global max active `1`, global stable `true`.
+  - Hit replay STT1/STT2/word collect cache hit `true/true/true`, provider calls `false/false/false`, collect elapsed `0.0/0.0/0.0s`.
+  - Hit replay high-context keep-cache hit count `2`, high-context LLM calls `0`.
+- Strict acceptance:
+  - Write and hit acceptance both `accepted=false`.
+  - Rejection reason: `final_last_end_beyond_duration_bound`.
+  - Final last end / duration bound: `180.256/180.0`, max final-end slack `0.25`; failure margin `0.006s`.
+  - Readiness refresh remains `production_default_recommendation=hold_default_off`; strict real-media write/hit counts remain `0/0` because failed strict acceptance is not promotion evidence.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media "/Volumes/photo/.../헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/.../헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/preflight` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high ...` with STT1/STT2/word/macro cache paths -> write run `20260628_103556`, pass.
+  - Same command with same cache paths -> hit run `20260628_103745`, pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_103556/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_write` -> expected exit `2`, `accepted=false`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_103745/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/acceptance_hit` -> expected exit `2`, `accepted=false`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_real_media_backfill_20260628_1035/readiness_refresh --representative-media "/Volumes/photo/.../헤이딜러_최종.MP4" --representative-reference-srt "/Volumes/photo/.../헤이딜러_최종.srt"` -> pass, still hold.
+
 ## Active Queue Gate Refresh - 2026-06-28 KST
 
 - 실행 모드: non-destructive active gate refresh after all parked candidates were closed.

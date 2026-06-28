@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-103500-stt-cache-real-media-backfill-checklist.md`
+- `.agents/sentinel/handoffs/20260628-103424-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-093300-active-queue-blocker-refresh.md`
 - `.agents/sentinel/handoffs/20260628-093036-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-092600-nle-playhead-dirty-rect-scout.md`
