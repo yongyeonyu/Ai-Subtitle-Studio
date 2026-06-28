@@ -143,7 +143,16 @@ class TimelineInputMixin(TimelineInputShadowMixin):
         if pair is None:
             return
         seen: set[int] = set()
-        for raw_idx in tuple(pair)[:2]:
+        ordered_pair = tuple(pair)[:2]
+        try:
+            left_idx = int(ordered_pair[0])
+            current = self._snap_to_frame(float(self.segments[left_idx].get("end", 0.0) or 0.0))
+            original = self._snap_to_frame(float(getattr(self, "_drag_diamond_orig", current) or current))
+        except Exception:
+            current = original = 0.0
+        if current < original:
+            ordered_pair = tuple(reversed(ordered_pair))
+        for raw_idx in ordered_pair:
             try:
                 idx = int(raw_idx)
             except Exception:

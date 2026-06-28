@@ -33,6 +33,50 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Drag Commit-Boundary Guard
+
+### Scope
+
+- Added a focused PyQt guard for Taption-style center body drag behavior: preview may update during mouse move, but runtime NLE dual-write must wait until release.
+- Updated `ui/editor/ux/timeline_input.py`, `tests/test_editor_timeline_drag_release.py`, `tools/audit_nle_runtime_owner_map.py`, `tests/test_nle_runtime_owner_map_audit.py`, NLE/status docs, and completed action history.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_drag_commit_boundary_guard_20260628/nle_runtime_owner_map_audit.md`
+- Owner map ready `true`; covered owners `24/24`; missing owners `0`.
+- Commit-boundary guards `1/1`; missing guards `0`.
+- Guard: `timeline_center_drag_preview_only_until_release` / `taption_preview_only_until_release_commit`.
+- PyQt test proves NLE move call count `0` during mouse move, editor rows unchanged until release, canvas preview rows updated during drag, and NLE move call count `1` on release.
+- Direction-aware diamond shared-boundary release ordering keeps left/right diamond drags gap-free.
+- NAS preflight: `output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`.
+- NAS acceptance: `output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`; accepted `true`, elapsed `53.919s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`.
+- NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_drag_commit_guard_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-161800-next-nle-taption-ux-scout.md`
+- Dex classification: defer the scout's preview/skimming cache-miss UI-thread block-prevention candidate until this commit-boundary guard is landed. It remains the next safe, non-UI-design NLE/Taption candidate.
+
+### Verification
+
+- `./venv/bin/python -m py_compile ui/editor/ux/timeline_input.py tools/audit_nle_runtime_owner_map.py tests/test_nle_runtime_owner_map_audit.py tests/test_editor_timeline_drag_release.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_timeline_drag_release.py -k "center_drag_preview_waits_until_release"` -> `1 passed, 7 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_timeline_drag_release.py` -> `8 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_owner_map_audit.py` -> `3 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_owner_map_audit.py tests/test_project_nle_dual_write.py` -> `35 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_drag or reorder or diamond"` -> `32 passed, 161 deselected`.
+- `./venv/bin/python tools/audit_nle_runtime_owner_map.py --output-dir output/manual_verification/latest/nle_drag_commit_boundary_guard_20260628` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_drag_commit_guard_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Next safe NLE/Taption slice: preview/skimming cache-miss UI-thread block-prevention tooling, using the Jammini scout above.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, and App Store packaging/submission work blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Operation Journal Trace Events
 
 ### Scope

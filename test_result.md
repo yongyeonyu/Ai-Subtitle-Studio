@@ -1,5 +1,44 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Drag Commit-Boundary Guard - 2026-06-28 KST
+
+- 실행 모드: source-app Taption-style timeline body-drag commit-boundary guard.
+- 결과: pass for preview-only mouse-move behavior, release-only NLE commit, diamond shared-boundary no-gap behavior, runtime owner-map guard coverage, NAS HeyDealer first-180s strict acceptance, and timeout comparison. No UI/UX layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_drag_commit_boundary_guard_20260628/nle_runtime_owner_map_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_drag_commit_boundary_guard_20260628/nle_runtime_owner_map_audit.json`
+  - NAS preflight: `output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_drag_commit_guard_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-161800-next-nle-taption-ux-scout.md`
+- 실제 결과:
+  - Owner map ready `true`; covered owners `24/24`; missing owners `0`.
+  - Commit-boundary guards `1/1`; missing guards `0`.
+  - Guard `timeline_center_drag_preview_only_until_release` is covered as `taption_preview_only_until_release_commit`.
+  - Focused PyQt drag test: NLE move call count `0` during mouse move, unchanged editor rows until release, changed canvas preview rows during drag, and NLE move call count `1` on release.
+  - Direction-aware diamond shared-boundary release ordering keeps left/right diamond drags gap-free.
+- NAS 상태:
+  - Preflight ready `true`; media exists `true`; reference SRT exists `true`; clipped reference rows `89`.
+  - Acceptance `true`; elapsed `53.919s`; raw/final/reference `58/56/89`.
+  - Quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max-active `1`.
+  - STT1/STT2/word selected `21/37/7`.
+  - Stage spans: STT1 `18.472196s`, STT2 `18.348319s`, word precision `16.007801s`, subtitle postprocess `0.947687s`.
+  - Timeout comparison against baseline `20260628_141640`: `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/ux/timeline_input.py tools/audit_nle_runtime_owner_map.py tests/test_nle_runtime_owner_map_audit.py tests/test_editor_timeline_drag_release.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_timeline_drag_release.py -k "center_drag_preview_waits_until_release"` -> `1 passed, 7 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_timeline_drag_release.py` -> `8 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_owner_map_audit.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_owner_map_audit.py tests/test_project_nle_dual_write.py` -> `35 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "center_drag or reorder or diamond"` -> `32 passed, 161 deselected`.
+  - `./venv/bin/python tools/audit_nle_runtime_owner_map.py --output-dir output/manual_verification/latest/nle_drag_commit_boundary_guard_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_preflight_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> wrote `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_drag_commit_boundary_guard_nas_heydealer_20260628/acceptance` -> accepted `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_drag_commit_guard_nas_20260628` -> timeout detected `false`.
+
 ## NLE Operation Journal Trace Event Audit - 2026-06-28 KST
 
 - 실행 모드: source-app runtime-only NLE operation journal trace contract.

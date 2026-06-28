@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -8,6 +9,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 from ui.editor.editor_widget import EditorWidget
+from ui.editor.ux import editor_timeline_video as timeline_video_module
 from ui.timeline.timeline_constants import DIAMOND_Y, SEG_TOP
 
 
@@ -62,6 +64,52 @@ class EditorTimelineDragReleaseTests(unittest.TestCase):
             self.assertEqual(
                 [(float(seg["start"]), float(seg["end"])) for seg in canvas.segments],
                 [(0.5, 2.0)],
+            )
+        finally:
+            editor.close()
+
+    def test_center_drag_preview_waits_until_release_before_nle_commit(self):
+        editor = self._make_editor([
+            {"start": 0.0, "end": 1.0, "text": "앞", "speaker": "00"},
+            {"start": 2.0, "end": 3.0, "text": "현재", "speaker": "00"},
+            {"start": 5.0, "end": 6.0, "text": "뒤", "speaker": "00"},
+        ])
+        try:
+            canvas = editor.timeline.canvas
+            canvas.set_active(2.0)
+            self.app.processEvents()
+
+            start = QPoint(canvas._x(2.5), SEG_TOP + 32)
+            end = QPoint(canvas._x(3.5), SEG_TOP + 32)
+            original_editor_rows = self._current_rows(editor)
+
+            with patch(
+                "ui.editor.ux.editor_timeline_video.apply_caption_move_dual_write_pilot",
+                wraps=timeline_video_module.apply_caption_move_dual_write_pilot,
+            ) as nle_move:
+                QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+                QTest.mouseMove(canvas, end, delay=5)
+                self.app.processEvents()
+
+                self.assertEqual(nle_move.call_count, 0)
+                self.assertEqual(self._current_rows(editor), original_editor_rows)
+                self.assertEqual(
+                    [(float(seg["start"]), float(seg["end"])) for seg in canvas.segments],
+                    [(0.0, 1.0), (3.0, 4.0), (5.0, 6.0)],
+                )
+
+                QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+                self.app.processEvents()
+
+                self.assertEqual(nle_move.call_count, 1)
+
+            self.assertEqual(
+                self._current_rows(editor),
+                [(0.0, 1.0, "앞"), (3.0, 4.0, "현재"), (5.0, 6.0, "뒤")],
+            )
+            self.assertEqual(
+                [(float(seg["start"]), float(seg["end"])) for seg in canvas.segments],
+                [(0.0, 1.0), (3.0, 4.0), (5.0, 6.0)],
             )
         finally:
             editor.close()

@@ -248,6 +248,19 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_
 
 The audit must report operation trace event count `12`, trace event contract ok `True`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, clean legacy storage, and no emitted caption text, raw project path, or raw `target_ids`.
 
+## NLE drag commit-boundary validation
+
+Timeline body drag changes must prove Taption-style preview-only behavior until release. Mouse-move previews may update the canvas insertion/neighbor preview, but runtime NLE dual-write must stay at `0` calls until the release commit.
+
+```bash
+./venv/bin/python -m py_compile ui/editor/ux/timeline_input.py tools/audit_nle_runtime_owner_map.py tests/test_nle_runtime_owner_map_audit.py tests/test_editor_timeline_drag_release.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_timeline_drag_release.py -k "center_drag_preview_waits_until_release"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_owner_map_audit.py
+./venv/bin/python tools/audit_nle_runtime_owner_map.py --output-dir output/manual_verification/latest/nle_drag_commit_boundary_guard_YYYYMMDD
+```
+
+The audit must report runtime owner map ready `True`, covered owners `24/24`, commit-boundary guards `1/1`, missing commit-boundary guards `0`, and `timeline_center_drag_preview_only_until_release` covered. The focused PyQt test must prove NLE move call count `0` during mouse move, call count `1` on release, unchanged editor rows until release, and updated canvas preview rows before release. Broader drag validation should also keep left/right diamond shared-boundary drags gap-free.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.

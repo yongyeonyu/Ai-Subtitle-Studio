@@ -336,6 +336,26 @@ BLOCKED_CANDIDATES: tuple[dict[str, Any], ...] = (
     },
 )
 
+COMMIT_BOUNDARY_GUARDS: tuple[dict[str, Any], ...] = (
+    {
+        "guard_id": "timeline_center_drag_preview_only_until_release",
+        "contract": "taption_preview_only_until_release_commit",
+        "source_surface": "timeline_body_drag",
+        "evidence": {
+            "ui/editor/ux/timeline_input.py": [
+                "def mouseMoveEvent(self, ev):",
+                "def mouseReleaseEvent(self, ev):",
+                "self.seg_time_changed.emit(",
+            ],
+            "tests/test_editor_timeline_drag_release.py": [
+                "test_center_drag_preview_waits_until_release_before_nle_commit",
+                "self.assertEqual(nle_move.call_count, 0)",
+                "self.assertEqual(nle_move.call_count, 1)",
+            ],
+        },
+    },
+)
+
 
 def _read_text(path: Path) -> str:
     try:
@@ -370,26 +390,59 @@ def _evaluate_owner(owner: dict[str, Any], *, root: Path) -> dict[str, Any]:
     }
 
 
+def _evaluate_commit_boundary_guard(guard: dict[str, Any], *, root: Path) -> dict[str, Any]:
+    evidence = dict(guard.get("evidence") or {})
+    missing: list[dict[str, str]] = []
+    found_count = 0
+    expected_count = 0
+    for rel_path, patterns in evidence.items():
+        text = _read_text(root / rel_path)
+        for pattern in list(patterns or []):
+            expected_count += 1
+            if pattern in text:
+                found_count += 1
+            else:
+                missing.append({"file": rel_path, "pattern": str(pattern)})
+    status = "covered" if not missing and expected_count > 0 else "missing_evidence"
+    return {
+        "guard_id": str(guard.get("guard_id") or ""),
+        "contract": str(guard.get("contract") or ""),
+        "source_surface": str(guard.get("source_surface") or ""),
+        "status": status,
+        "evidence_pattern_count": expected_count,
+        "evidence_pattern_found_count": found_count,
+        "missing_evidence": missing,
+    }
+
+
 def build_nle_runtime_owner_map_report(*, root: Path | None = None) -> dict[str, Any]:
     repo_root = Path(root or ROOT)
     owners = [_evaluate_owner(owner, root=repo_root) for owner in OWNER_EVIDENCE]
     missing = [owner for owner in owners if owner["status"] != "covered"]
+    commit_boundary_guards = [
+        _evaluate_commit_boundary_guard(guard, root=repo_root) for guard in COMMIT_BOUNDARY_GUARDS
+    ]
+    missing_guards = [guard for guard in commit_boundary_guards if guard["status"] != "covered"]
     family_counts = Counter(owner["operation_family"] for owner in owners)
     source_surface_counts = Counter(owner["source_surface"] for owner in owners)
     return {
         "schema": SCHEMA,
         "repo_root": str(repo_root),
-        "runtime_owner_map_ready": not missing,
+        "runtime_owner_map_ready": not missing and not missing_guards,
         "runtime_change_applied": False,
         "owner_count": len(owners),
         "covered_owner_count": len(owners) - len(missing),
         "missing_owner_count": len(missing),
+        "commit_boundary_guard_count": len(commit_boundary_guards),
+        "covered_commit_boundary_guard_count": len(commit_boundary_guards) - len(missing_guards),
+        "missing_commit_boundary_guard_count": len(missing_guards),
         "operation_family_counts": dict(sorted(family_counts.items())),
         "source_surface_counts": dict(sorted(source_surface_counts.items())),
         "owners": owners,
+        "commit_boundary_guards": commit_boundary_guards,
         "blocked_candidates": list(BLOCKED_CANDIDATES),
         "next_gate": {
-            "status": "fresh_owner_map_ready" if not missing else "missing_evidence",
+            "status": "fresh_owner_map_ready" if not missing and not missing_guards else "missing_evidence",
             "required_before_new_runtime_adoption": [
                 "identify_new_mutation_source",
                 "prove_taption_release_commit_contract",
@@ -411,6 +464,8 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Runtime change applied: `{bool(payload.get('runtime_change_applied'))}`",
         f"- Covered owners: `{payload.get('covered_owner_count')}/{payload.get('owner_count')}`",
         f"- Missing owners: `{payload.get('missing_owner_count')}`",
+        f"- Commit-boundary guards: `{payload.get('covered_commit_boundary_guard_count')}/{payload.get('commit_boundary_guard_count')}`",
+        f"- Missing commit-boundary guards: `{payload.get('missing_commit_boundary_guard_count')}`",
         "",
         "## Operation Families",
         "",
@@ -438,6 +493,28 @@ def _markdown_report(payload: dict[str, Any]) -> str:
                 status=owner.get("status"),
                 found=owner.get("evidence_pattern_found_count"),
                 expected=owner.get("evidence_pattern_count"),
+                missing=missing,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Commit Boundary Guards",
+            "",
+            "| guard_id | contract | source_surface | status | found/expected | missing |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for guard in list(payload.get("commit_boundary_guards") or []):
+        missing = len(list(guard.get("missing_evidence") or []))
+        lines.append(
+            "| {guard_id} | {contract} | {surface} | {status} | {found}/{expected} | {missing} |".format(
+                guard_id=guard.get("guard_id"),
+                contract=guard.get("contract"),
+                surface=guard.get("source_surface"),
+                status=guard.get("status"),
+                found=guard.get("evidence_pattern_found_count"),
+                expected=guard.get("evidence_pattern_count"),
                 missing=missing,
             )
         )
