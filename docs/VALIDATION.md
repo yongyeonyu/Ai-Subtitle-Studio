@@ -187,6 +187,17 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_tar
 
 This command may correct QA target frames such as historical `2677 -> 2676`, but it must not approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
 
+When a corrected target remains only frame-preserved, audit whether the miss is a real detector-tuning candidate across existing scorer modes and widths:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_detector_evidence_robustness.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --pairs 2765:2766,2675:2676 \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_YYYYMMDD
+```
+
+If this audit reports `weak_visual_change_not_threshold_candidate`, treat that as a threshold-tuning stop sign for the fixture. Preserve the boundary as frame-grid/marker evidence or revisit fixture truth instead of lowering visual detector thresholds from that evidence alone.
+
 ## Preview frame cache validation
 
 Preview/skimming cache changes should prove temp-workspace cache lookup, nonblocking preview seek behavior, and unchanged timeline scrub routing.

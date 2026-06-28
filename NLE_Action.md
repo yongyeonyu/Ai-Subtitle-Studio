@@ -31,7 +31,8 @@ Current NLE status:
 - Latest confirmed cut-boundary decision trace audit: `output/manual_verification/latest/nle_confirmed_cut_trace_audit_20260628/trace_log_bundle_audit.md`; confirmed visual-cut split/snap/drop decisions now emit async `confirmed_cut_split_snap` events with `event_type=cut_boundary_decision`, `decision`, `provisional_frame`, `drop_reason`, exact `fps_num/fps_den`, and no detector-threshold, UI, or persisted-NLE behavior change. NAS HeyDealer first-180s regression after this slice is accepted at `output/manual_verification/latest/nle_confirmed_cut_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`.
 - Latest cut-boundary fixture target correction audit: `output/manual_verification/latest/nle_cut_boundary_fixture_target_correction_20260628/cut_boundary_fixture_target_correction.md`; the fixed fixture QA target is corrected from historical `2677` to `2676`, with current target frames `2766,2676` and source-fps pairs `2765:2766,2675:2676`. Runtime detector thresholds, subtitle policy, STT policy, UI, App Store work, and persisted NLE disk fields remain unchanged.
 - Latest corrected source-fps scout: `output/manual_verification/latest/nle_corrected_target_source_fps_scout_20260628/source_fps_scout.md`; decoder extraction succeeds, frame `2676` is visually detected with score `71.932`, and frame `2766` remains `preserved_only` with score `2.059`, so `strict_visual_detection_passed=false` still blocks visual-detection claims for the full pair.
-- Latest corrected visual window / frame-semantics / convention audits: `output/manual_verification/latest/nle_corrected_target_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`, `output/manual_verification/latest/nle_corrected_target_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`, and `output/manual_verification/latest/nle_corrected_target_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`; the corrected `2676` target is target-best and convention-clean, semantic mismatch count is now `0`, and only frame `2766` remains detector-evidence work. The frame-semantics audit exits `1` while `2766` is not detected; the convention audit exits `0`.
+- Latest corrected visual window / frame-semantics / convention audits: `output/manual_verification/latest/nle_corrected_target_visual_window_audit_20260628/cut_boundary_visual_window_audit.md`, `output/manual_verification/latest/nle_corrected_target_frame_semantics_audit_20260628/cut_boundary_frame_semantics_audit.md`, and `output/manual_verification/latest/nle_corrected_target_fixture_convention_audit_20260628/cut_boundary_fixture_convention_audit.md`; the corrected `2676` target is target-best and convention-clean, semantic mismatch count is now `0`, and frame `2766` remains not visually detected while frame-preserved.
+- Latest `2766` detector-evidence robustness audit: `output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628/cut_boundary_detector_evidence_robustness.md`; modes `fast4,cross5,full9` across widths `320,480,960,1920` classify frame `2766` as `weak_visual_change_not_threshold_candidate` with best score `3.812`, best hits `0`, best pixel `0.034849`, and best motion `1.315`, while frame `2676` remains visually detected. Detector threshold tuning candidate count is `0`; preserve `2766` as frame-grid/marker evidence or revisit fixture truth instead of lowering visual thresholds from this fixture.
 - Current NAS fixture preflight after the target-correction slice is ready at `output/manual_verification/latest/nle_target_correction_nas_preflight_20260628/reference_fixture_availability.md`; media and reference SRT exist and clipped reference rows are `89`. Runtime generation behavior was not changed, so no new subtitle-generation benchmark was run for this QA-target correction.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
@@ -470,6 +471,17 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_fixture_tar
 ```
 
 This command is read-only for runtime behavior. It may update future QA target inputs, but it must not approve threshold relaxation, subtitle/STT policy changes, UI/QML work, persisted NLE fields, or App Store work.
+
+When a corrected target remains preserved-only, prove whether it is actually a detector tuning candidate across scorer modes and widths:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_detector_evidence_robustness.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --pairs 2765:2766,2675:2676 \
+  --output-dir output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_YYYYMMDD
+```
+
+This command is read-only for runtime behavior. If it reports `weak_visual_change_not_threshold_candidate`, keep the frame as preserved marker/frame-grid evidence or revisit fixture truth; do not lower visual detector thresholds from that fixture alone.
 
 Trace:
 

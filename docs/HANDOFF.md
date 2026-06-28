@@ -33,6 +33,42 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Cut-Boundary 2766 Detector Evidence Robustness
+
+### Scope
+
+- Added a read-only robustness audit for fixed cut-boundary frame `2766`.
+- Added `tools/audit_cut_boundary_detector_evidence_robustness.py`.
+- Added `tests/test_cut_boundary_detector_evidence_robustness.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Robustness audit: `output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628/cut_boundary_detector_evidence_robustness.md`
+- Target frames `2766,2676`; source-fps pairs `2765:2766,2675:2676`.
+- Modes `fast4,cross5,full9`; widths `320,480,960,1920`.
+- Frame `2766`: `weak_visual_change_not_threshold_candidate`; detected any mode `false`; best mode `cross5`; best width `1920`; best score `3.812`; best hits `0`; best pixel `0.034849`; best motion `1.315`.
+- Frame `2676`: `visual_detection_available`; detected any mode `true`; best score `72.293`; best hits `4`; best pixel `0.884247`; best motion `65.37`.
+- Detector tuning candidate count `0`; threshold relaxation allowed `false`; runtime change allowed `false`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-140524-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-141000-cut-boundary-2766-detector-scout.md`
+- Dex classification: accept the scout's warning not to lower detector thresholds. Dex implemented a broader mode/width robustness audit rather than only a preserved-only regression test.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_cut_boundary_detector_evidence_robustness.py tests/test_cut_boundary_detector_evidence_robustness.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_detector_evidence_robustness.py tests/test_cut_boundary_fixture_target_correction.py tests/test_cut_boundary_fixture_2766_2677.py` -> `9 passed, 1 skipped`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_detector_evidence_robustness.py "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" --pairs 2765:2766,2675:2676 --output-dir output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628` -> pass.
+
+### Next Recommended Action
+
+- Treat frame `2766` as preserved frame-grid/marker evidence or revisit fixture truth; do not lower visual detector thresholds from this fixture alone.
+- Continue NLE work through marker/preserved-boundary policy or the next owner-map-backed mutable/edit surface slice.
+
 ## Current Handoff - 2026-06-28 NLE Cut-Boundary Fixture Target Correction
 
 ### Scope

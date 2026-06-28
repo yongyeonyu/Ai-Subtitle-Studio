@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Cut-Boundary 2766 Detector Evidence Robustness Audit - 2026-06-28 KST
+
+- 실행 모드: source-app fixed cut-boundary frame `2766` detector-evidence read-only robustness audit.
+- 결과: pass for diagnostic tooling and real fixed-fixture evidence; no runtime detector thresholds, subtitle quality policy, STT/STT2 policy, UI/UX, QML/GPU default, App Store packaging/signing/upload, DMG behavior, or persisted NLE disk field changed.
+- 저장 위치:
+  - Robustness audit: `output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628/cut_boundary_detector_evidence_robustness.md`
+  - Robustness JSON: `output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628/cut_boundary_detector_evidence_robustness.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-140524-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-141000-cut-boundary-2766-detector-scout.md`
+- 수정 요약:
+  - Added `tools/audit_cut_boundary_detector_evidence_robustness.py`.
+  - Added `tests/test_cut_boundary_detector_evidence_robustness.py`.
+  - Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `docs/HANDOFF.md`.
+- 실제 fixed-fixture 결과:
+  - Target frames `2766,2676`; pairs `2765:2766,2675:2676`.
+  - Modes `fast4,cross5,full9`; widths `320,480,960,1920`.
+  - Frame `2766`: classification `weak_visual_change_not_threshold_candidate`; detected any mode `false`; best mode `cross5`, best width `1920`, best score `3.812`, best hits `0`, best pixel `0.034849`, best motion `1.315`.
+  - Frame `2676`: classification `visual_detection_available`; detected any mode `true`; best score `72.293`, best hits `4`, best pixel `0.884247`, best motion `65.37`.
+  - Detector tuning candidate count `0`; threshold relaxation allowed `false`; runtime change allowed `false`.
+- 해석:
+  - `2766`은 visual detector threshold를 낮춰 살릴 후보가 아니라 low-contrast/static frame-grid marker evidence로 취급해야 한다.
+  - 다음 NLE cut-boundary 작업은 `2766`을 preserved marker/frame-grid evidence로 유지하거나 fixture truth를 재검토하는 쪽이어야 하며, threshold relaxation은 이 fixture만으로 승인하지 않는다.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_cut_boundary_detector_evidence_robustness.py tests/test_cut_boundary_detector_evidence_robustness.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_detector_evidence_robustness.py tests/test_cut_boundary_fixture_target_correction.py tests/test_cut_boundary_fixture_2766_2677.py` -> `9 passed, 1 skipped`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_cut_boundary_detector_evidence_robustness.py "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" --pairs 2765:2766,2675:2676 --output-dir output/manual_verification/latest/nle_cut_boundary_2766_detector_robustness_20260628` -> pass.
+
 ## NLE Cut-Boundary Fixture Target Correction - 2026-06-28 KST
 
 - 실행 모드: source-app fixed cut-boundary QA target correction from historical frame `2677` to corrected frame `2676`.
