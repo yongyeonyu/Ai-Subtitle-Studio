@@ -18,6 +18,7 @@ from tools.benchmark_subtitle_pipeline_variants import (
     _native_segments_summary_for_variant,
     _native_stt_segments_summary_for_variant,
     _parse_setting_overrides,
+    _project_segments_to_benchmark_window,
     _rank_rows,
     _run_postprocess,
     _stage_wall_clock_summary,
@@ -313,6 +314,25 @@ class BenchmarkModeProfilesTests(unittest.TestCase):
         self.assertEqual(summary["short_segment_count"], 1)
         self.assertEqual(summary["long_segment_threshold_sec"], 12.0)
         self.assertEqual(summary["long_segment_count"], 1)
+
+    def test_project_segments_to_benchmark_window_clamps_tail_and_drops_outside_rows(self):
+        rows = [
+            {"start": -0.2, "end": 1.0, "text": "leading"},
+            {"start": 8.0, "end": 10.256, "text": "tail"},
+            {"start": 10.0, "end": 10.4, "text": "outside"},
+        ]
+
+        projected, diagnostics = _project_segments_to_benchmark_window(rows, duration_sec=10.0)
+
+        self.assertEqual(len(projected), 2)
+        self.assertEqual(projected[0]["start"], 0.0)
+        self.assertEqual(projected[0]["end"], 1.0)
+        self.assertEqual(projected[1]["start"], 8.0)
+        self.assertEqual(projected[1]["end"], 10.0)
+        self.assertTrue(diagnostics["changed"])
+        self.assertEqual(diagnostics["clamped_start_count"], 1)
+        self.assertEqual(diagnostics["clamped_end_count"], 1)
+        self.assertEqual(diagnostics["dropped_after_count"], 1)
 
     def test_native_stt_segments_summary_keeps_compact_stt2_counts(self):
         with mock.patch(

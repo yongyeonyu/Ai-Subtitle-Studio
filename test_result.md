@@ -1,5 +1,42 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## STT Cache Tail-Bound Fix And Real-Media Backfill Acceptance - 2026-06-28 KST
+
+- 실행 모드: NAS HeyDealer first-180s representative real-media collect-cache write/hit replay after benchmark-window projection repair.
+- 결과: strict acceptance passed for both write and hit; collect-cache production defaults remain `false/false` pending explicit owner review.
+- 저장 위치:
+  - Evidence root: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/`
+  - Preflight: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/preflight/reference_fixture_availability.md`
+  - Write benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_105017/benchmark_results.json`
+  - Hit benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_105119/benchmark_results.json`
+  - Write acceptance: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/acceptance_write/reference_benchmark_acceptance.md`
+  - Hit acceptance: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/acceptance_hit/reference_benchmark_acceptance.md`
+  - Readiness refresh: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/readiness_refresh/stt_cache_backfill_readiness.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-104613-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-104600-nle-benchmark-tail-bound-projection-scout.md`
+- 수정 요약:
+  - `tools/benchmark_subtitle_pipeline_variants.py` now projects final benchmark hypothesis rows into the requested benchmark window after cut-boundary alignment, matching the already clipped reference window.
+  - `tests/test_benchmark_mode_profiles.py` covers tail clamp plus outside-window drop diagnostics.
+  - No runtime STT/STT2 policy, word precision policy, cache default, subtitle engine timing, editor UI/UX, save/load, render/export, packaging, signing, upload, notarization, App Store Connect, or DMG behavior changed.
+- 실제 결과:
+  - Preflight ready `true`; reference SRT rows `615`, clipped rows `89`.
+  - Write/hit elapsed `46.073s -> 1.266s`.
+  - Raw/final/reference `58/56/89` on both runs.
+  - Quality/text/timing `93.766/94.267/0.5808s` on both runs.
+  - Final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, final short/long `0/0`, global max active `1`, global stable `true`.
+  - Benchmark projection diagnostics: input/output `56/56`, clamped tail-end count `1`, dropped before/after/invalid `0/0/0`.
+  - Hit replay STT1/STT2/word collect cache hit `true/true/true`, provider calls `false/false/false`.
+  - Readiness refresh reports `real_backfill_present_owner_review_required` for STT1, STT2/word, and combined collect-cache families, with `production_default_recommendation=hold_default_off`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/benchmark_subtitle_pipeline_variants.py tests/test_benchmark_mode_profiles.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k "benchmark_window or native_segments_summary_includes_strict_duration_bounds or stage_wall_clock_summary"` -> `3 passed, 33 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_reference_benchmark_acceptance.py tests/test_stt_cache_backfill_readiness.py` -> `10 passed`.
+  - HeyDealer write benchmark with STT1/STT2/word/macro cache paths -> run `20260628_105017`, pass.
+  - Same command with the same cache paths -> hit run `20260628_105119`, pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_105017/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/acceptance_write` -> `accepted=true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_105119/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/acceptance_hit` -> `accepted=true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/readiness_refresh --representative-media "/Volumes/photo/.../헤이딜러_최종.MP4" --representative-reference-srt "/Volumes/photo/.../헤이딜러_최종.srt"` -> pass.
+
 ## STT Cache Real-Media Backfill Attempt - 2026-06-28 KST
 
 - 실행 모드: NAS HeyDealer first-180s representative real-media collect-cache write/hit replay.

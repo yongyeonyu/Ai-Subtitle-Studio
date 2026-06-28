@@ -33,6 +33,50 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 STT Cache Tail-Bound Fix And Real-Media Backfill Acceptance
+
+### Scope
+
+- Repaired the representative HeyDealer first-180s strict acceptance failure from the prior cache backfill attempt.
+- Change is limited to benchmark/evaluation projection in `tools/benchmark_subtitle_pipeline_variants.py`: final hypothesis rows are projected into the requested benchmark window after cut-boundary alignment, matching the already clipped reference window.
+- Did not change runtime STT/STT2 policy, word precision policy, cache defaults, subtitle engine timing, editor UI/UX, save/load, render/export, packaging, signing, upload, notarization, App Store Connect, or DMG behavior.
+
+### Results
+
+- Evidence root: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/`
+- Preflight: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/preflight/reference_fixture_availability.md`; ready `true`, reference SRT rows `615`, clipped rows `89`.
+- Cache-write run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_105017/benchmark_results.json`
+- Cache-hit run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_105119/benchmark_results.json`
+- Strict acceptance: write and hit both `accepted=true`.
+- Write/hit elapsed: `46.073s -> 1.266s`.
+- Raw/final/reference: `58/56/89`; quality/text/timing `93.766/94.267/0.5808s`.
+- Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long counts `0/0`; global max active `1`.
+- Benchmark projection diagnostics: input/output `56/56`, clamped tail-end count `1`, dropped before/after/invalid `0/0/0`.
+- Hit replay proved STT1/STT2/word collect cache hits with provider calls `false`.
+- Readiness refresh: `output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/readiness_refresh/stt_cache_backfill_readiness.md`; all collect-cache families now report `real_backfill_present_owner_review_required`, while `production_default_recommendation=hold_default_off`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-104613-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-104600-nle-benchmark-tail-bound-projection-scout.md`
+- Dex classification: accept. The scout's edge-risk warning was checked by strict acceptance: no short segments, long segments, invalid durations, non-monotonic rows, overlap, or global multi-active result appeared after the clamp.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/benchmark_subtitle_pipeline_variants.py tests/test_benchmark_mode_profiles.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_benchmark_mode_profiles.py -k "benchmark_window or native_segments_summary_includes_strict_duration_bounds or stage_wall_clock_summary"` -> `3 passed, 33 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_reference_benchmark_acceptance.py tests/test_stt_cache_backfill_readiness.py` -> `10 passed`.
+- HeyDealer write benchmark with STT1/STT2/word/macro caches enabled -> run `20260628_105017`, pass.
+- Same benchmark command with the same cache paths -> hit run `20260628_105119`, pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_105017/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/acceptance_write` -> `accepted=true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_105119/benchmark_results.json --output-dir output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/acceptance_hit` -> `accepted=true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_cache_backfill_readiness.py --glob '.codex_work/benchmarks/subtitle_pipeline_variants/*/benchmark_results.json' --output-dir output/manual_verification/latest/stt_cache_tail_bound_fix_20260628_1048/readiness_refresh --representative-media "/Volumes/photo/.../헤이딜러_최종.MP4" --representative-reference-srt "/Volumes/photo/.../헤이딜러_최종.srt"` -> pass.
+
+### Next Recommended Action
+
+- Do not enable `stt_primary_collect_cache_enabled` or `stt_recheck_collect_cache_enabled` by default automatically.
+- Next safe action is owner review of the accepted real-media write/hit evidence and readiness report; default promotion remains explicit-owner-approval only.
+
 ## Current Handoff - 2026-06-28 STT Cache Real-Media Backfill Attempt
 
 ### Scope

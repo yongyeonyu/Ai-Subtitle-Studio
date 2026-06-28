@@ -1364,6 +1364,71 @@ def _apply_benchmark_cut_boundaries(rows: list[dict[str, Any]], settings: dict[s
     )
 
 
+def _project_segments_to_benchmark_window(
+    rows: list[dict[str, Any]],
+    *,
+    duration_sec: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    source_rows = list(rows or [])
+    window_end = max(0.0, float(duration_sec or 0.0))
+    projected: list[dict[str, Any]] = []
+    diagnostics = {
+        "schema": "ai_subtitle_studio.benchmark_window_projection.v1",
+        "window_start_sec": 0.0,
+        "window_end_sec": round(window_end, 6),
+        "input_count": len(source_rows),
+        "output_count": 0,
+        "clamped_start_count": 0,
+        "clamped_end_count": 0,
+        "dropped_before_count": 0,
+        "dropped_after_count": 0,
+        "dropped_invalid_count": 0,
+        "changed": False,
+    }
+    if window_end <= 0.0:
+        diagnostics["dropped_invalid_count"] = len(source_rows)
+        diagnostics["changed"] = bool(source_rows)
+        return [], diagnostics
+    for row in source_rows:
+        if not isinstance(row, dict):
+            diagnostics["dropped_invalid_count"] += 1
+            diagnostics["changed"] = True
+            continue
+        try:
+            start = float(row.get("start", 0.0) or 0.0)
+            end = float(row.get("end", start) or start)
+        except Exception:
+            diagnostics["dropped_invalid_count"] += 1
+            diagnostics["changed"] = True
+            continue
+        if end <= 0.0:
+            diagnostics["dropped_before_count"] += 1
+            diagnostics["changed"] = True
+            continue
+        if start >= window_end:
+            diagnostics["dropped_after_count"] += 1
+            diagnostics["changed"] = True
+            continue
+        new_start = max(0.0, start)
+        new_end = min(end, window_end)
+        if new_end <= new_start:
+            diagnostics["dropped_invalid_count"] += 1
+            diagnostics["changed"] = True
+            continue
+        item = dict(row)
+        if abs(new_start - start) > 1e-9:
+            diagnostics["clamped_start_count"] += 1
+            diagnostics["changed"] = True
+        if abs(new_end - end) > 1e-9:
+            diagnostics["clamped_end_count"] += 1
+            diagnostics["changed"] = True
+        item["start"] = round(new_start, 6)
+        item["end"] = round(new_end, 6)
+        projected.append(item)
+    diagnostics["output_count"] = len(projected)
+    return projected, diagnostics
+
+
 def _bind_processor_settings(processor: VideoProcessor, settings: dict[str, Any]) -> None:
     """Keep benchmark variants from being re-routed by app-wide runtime autotune."""
     frozen = dict(settings)
@@ -1792,8 +1857,13 @@ def _run_variant(
         if hasattr(processor, "_stt_stage_wall_clock_spans_snapshot"):
             processor_stage_wall_clock_spans = processor._stt_stage_wall_clock_spans_snapshot()
         processor.release_runtime_models()
+    benchmark_window_projection: dict[str, Any] = {}
     if final_rows:
         final_rows = _apply_benchmark_cut_boundaries(final_rows, settings)
+        final_rows, benchmark_window_projection = _project_segments_to_benchmark_window(
+            final_rows,
+            duration_sec=float(base_settings.get("_benchmark_span_sec", 180.0) or 180.0),
+        )
     elapsed = time.perf_counter() - started
     score = score_against_reference(final_rows, reference) if final_rows else {}
     readability = score_readability(final_rows, settings) if final_rows else {}
@@ -1871,6 +1941,8 @@ def _run_variant(
     stage_wall_clock_summary = _stage_wall_clock_summary(processor_stage_wall_clock_spans + stage_wall_clock_spans)
     if stage_wall_clock_summary.get("span_count"):
         row["stage_wall_clock_summary"] = stage_wall_clock_summary
+    if benchmark_window_projection:
+        row["benchmark_window_projection"] = benchmark_window_projection
     if settings.get("_benchmark_cut_boundaries_json"):
         row["cut_boundary_artifact"] = str(settings.get("_benchmark_cut_boundaries_json") or "")
         row["cut_boundary_rows"] = len(_load_benchmark_cut_boundaries(str(settings.get("_benchmark_cut_boundaries_json") or "")))
