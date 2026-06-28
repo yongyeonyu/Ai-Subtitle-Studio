@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.00 Source-App Release - 2026-06-28 KST
+
+- 실행 모드: source-app release checkpoint, version/schema bump, code-review fix, docs update, and release validation.
+- 결과: pass for version/schema assert, trace/App Store readiness tests, project/status UI subset, NLE parity subset, timeline/playhead suite, source-app quick QA, and App Store readiness blocked-state audit.
+- 저장 위치:
+  - Release note: `RELEASE_v04.01.00.md`
+  - Quick QA: `output/manual_verification/latest/qa_suite_quick_v040100_20260628/suite_result.md`
+  - App Store readiness audit: `output/manual_verification/latest/app_store_readiness_v040100_20260628/app_store_readiness_audit.md`
+  - Jammini release scout: `.agents/sentinel/handoffs/20260628-115644-release-readiness-scout.md`
+  - 한결 review: `.agents/sentinel/handoffs/20260628-120244-release-architecture-review-hangyeol.md`
+  - 서린 review: `.agents/sentinel/handoffs/20260628-120230-release-qa-review-seorin.md`
+  - 유진 review: `.agents/sentinel/handoffs/20260628-120241-release-workflow-review-yujin.md`
+- 실제 결과:
+  - App version updated to `04.01.00`.
+  - Project schema version updated to `04.01.00`.
+  - Trace manifest version test now follows `config.APP_VERSION` instead of a hard-coded release literal.
+  - Quick QA profile `quick` passed with `failed_count=0`; passed scenario `editor_compact_macau`.
+  - App Store readiness audit reads config app version `04.01.00` but remains `status=blocked`, `app_store_submission_ready=false`, blocker count `14`.
+  - No DMG build, App Store package build, upload, notarization, persisted NLE disk-format cutover, per-pixel NLE write path, UI/QML default change, or STT/default-cache promotion was performed.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tests/test_trace_logger.py tools/audit_app_store_readiness.py` -> pass.
+  - Direct version assertion for `APP_VERSION` and `PROJECT_SCHEMA_VERSION` -> `04.01.00` / `04.01.00`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_app_store_readiness_audit.py` -> `23 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_render_export_parity.py` -> `67 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py` -> `193 passed`.
+  - `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_v040100_20260628` -> `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`.
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`.
+
 ## Development Documentation Organization And Active Queue Hygiene - 2026-06-28 KST
 
 - 실행 모드: Taption-style docs organization adapted to AI Subtitle Studio, plus active queue cleanup.

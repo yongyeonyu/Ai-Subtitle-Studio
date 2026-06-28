@@ -21,7 +21,7 @@
 
 ## Current Snapshot
 
-- App checkpoint: `04.00.18` / `v04.00.18`
+- App checkpoint: `04.01.00` / `v04.01.00`
 - Active queue: `../ACTION_ITEMS.md`
 - Completed archive: `../COMPLETED_ACTION_ITEMS.md`
 - Handoff: `HANDOFF.md`

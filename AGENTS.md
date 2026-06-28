@@ -103,8 +103,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.00.18-source-app
-Phase: SOURCE_APP_CONTINUATION_V4_0_18
+Document-Version: 04.01.00-source-app
+Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-27
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, and new-chat continuation prompt.
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.00.18`
-- Latest release checkpoint: `v04.00.18`
+- App version in code: `04.01.00`
+- Latest release checkpoint: `v04.01.00`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -229,22 +229,23 @@ Completed item rule:
   - scenarios: `editor_compact_macau`, `video_menu_macau`, `save_export_macau`, `menu_stt_lora_macau`, `roughcut_reopen_macau`, `roughcut_interaction_macau`, `roughcut_candidate_macau`, `roughcut_release_audit_macau`, `x5_high_rolling_180s`
   - note: the default X5 path `test video/X5_시승기_후반.MP4` was restored as an ignored local fixture from the existing X5 video-only `.mov` plus the real X5 raw WAV; no `AI_SUBTITLE_STUDIO_QA_X5_MEDIA` override was used.
 - Latest source-app quick smoke for the current release line:
-  - `output/manual_verification/latest/qa_suite_quick_20260627_162641`
-  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick`
+  - `output/manual_verification/latest/qa_suite_quick_v040100_20260628`
+  - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
-  - `v04.00.18` - VAD/STT timing consensus, confirmed cut-boundary split/snap, source-fps pioneer scout enablement, and `NLE_Action.md` execution plan.
+  - `v04.01.00` - source-app NLE/Taption editing checkpoint, 04.01.00 version/schema bump, release docs, and code-review fixes.
 - Current NLE action source:
   - `NLE_Action.md`
-  - status: mutable NLE write ownership is planned, but the shipped runtime still preserves the read-only NLE baseline and legacy save/reopen compatibility.
-  - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2676 -> 2677`.
-- Latest focused guard set for `v04.00.18`:
-  - timing consensus: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_quality_models.py -k "vad_voice_start_priority or vad_stt_timing_consensus"` -> `9 passed, 8 deselected`
-  - STT/boundary timing: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_ensemble.py tests/test_subtitle_boundary_alignment.py tests/test_subtitle_quality_models.py -k "stt_anchor or drift or vad_voice_start_priority or vad_stt_timing_consensus or boundary"` -> `24 passed, 44 deselected`
-  - LLM timing lock: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_engine_settings.py -k "llm or stt_anchor or slot_order or text_only_lock"` -> `26 passed, 56 deselected`
-  - cut-boundary/project: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_project_context.py -k "cut_boundary or cut_boundaries or cut_frame_2677"` -> `6 passed, 93 deselected`
-  - timeline/source-fps/cache/NLE: focused subsets passed, including `tests/test_project_nle_snapshot.py tests/test_roughcut_v2_output_compat.py` -> `13 passed, 4 subtests passed`
-  - additional checks: touched Python `py_compile`, `dataset/custom_defaults.json` JSON validation, and `git diff --check -- .` passed before commit/push.
+  - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
+  - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
+- Latest focused guard set for `v04.01.00`:
+  - version/schema direct assert: `APP_VERSION=04.01.00`, `PROJECT_SCHEMA_VERSION=04.01.00`
+  - trace/App Store readiness tests: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_app_store_readiness_audit.py` -> `23 passed`
+  - project/status UI subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`
+  - NLE parity subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_render_export_parity.py` -> `67 passed, 4 subtests passed`
+  - timeline/playhead: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py` -> `193 passed`
+  - App Store readiness audit: `output/manual_verification/latest/app_store_readiness_v040100_20260628/app_store_readiness_audit.md` -> `status=blocked`, `app_store_submission_ready=false`
+  - source-app quick QA: `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`

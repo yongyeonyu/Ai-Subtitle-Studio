@@ -1,5 +1,10 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-120244-release-architecture-review-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-120241-release-workflow-review-yujin.md`
+- `.agents/sentinel/handoffs/20260628-120230-release-qa-review-seorin.md`
+- `.agents/sentinel/handoffs/20260628-115644-release-readiness-scout.md`
+- `.agents/sentinel/handoffs/20260628-205544-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-113530-taption-docs-parity-scout.md`
 - `.agents/sentinel/handoffs/20260628-203439-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-112236-neighbor-collision-validation-scout.md`

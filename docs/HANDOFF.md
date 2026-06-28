@@ -33,7 +33,72 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Documentation Organization And Active Queue Hygiene
+## Current Handoff - 2026-06-28 v04.01.00 Source-App Release
+
+### Scope
+
+- Bumped source-app version to `04.01.00`.
+- Bumped project schema version to `04.01.00`.
+- Fixed the trace manifest test to follow `config.APP_VERSION` instead of a hard-coded release literal.
+- Added `RELEASE_v04.01.00.md`.
+- Synced release-facing docs and active handoff files for the new checkpoint.
+- Collected Jammini plus 한결/서린/유진 release-review handoffs and applied Dex classification.
+- No DMG build, App Store package build, upload, notarization, persisted NLE disk-format cutover, per-pixel NLE writes, UI/QML default change, or STT/default-cache promotion was performed.
+
+### Modified Files
+
+- `core/runtime/config.py`
+- `core/project/project_format.py`
+- `tests/test_trace_logger.py`
+- `RELEASE_v04.01.00.md`
+- `README.md`
+- `AGENTS.md`
+- `ACTION_ITEMS.md`
+- `COMPLETED_ACTION_ITEMS.md`
+- `NLE_Action.md`
+- `docs/README.md`
+- `docs/PROJECT_STATE.md`
+- `docs/APP_STORE_SUBMISSION_READINESS.md`
+- `docs/HANDOFF.md`
+- `test_result.md`
+- `.agents/sentinel/handoff.md`
+- `.agents/sentinel/handoffs/20260628-205544-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260628-115644-release-readiness-scout.md`
+- `.agents/sentinel/handoffs/20260628-120244-release-architecture-review-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-120230-release-qa-review-seorin.md`
+- `.agents/sentinel/handoffs/20260628-120241-release-workflow-review-yujin.md`
+
+### Reviews
+
+- Jammini scout: `.agents/sentinel/handoffs/20260628-115644-release-readiness-scout.md`
+- 한결 architecture review: `.agents/sentinel/handoffs/20260628-120244-release-architecture-review-hangyeol.md`
+- 서린 QA review: `.agents/sentinel/handoffs/20260628-120230-release-qa-review-seorin.md`
+- 유진 workflow review: `.agents/sentinel/handoffs/20260628-120241-release-workflow-review-yujin.md`
+- Dex classification: accepted version/schema/test/docs checklist, App Store/DMG overclaim warnings, and release validation shortlist. Corrected reviewer wording where it blurred prior NAS evidence with this session's direct release proof.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tests/test_trace_logger.py tools/audit_app_store_readiness.py` -> pass.
+- Direct version assertion for `APP_VERSION` and `PROJECT_SCHEMA_VERSION` -> `04.01.00` / `04.01.00`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_app_store_readiness_audit.py` -> `23 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py tests/test_project_nle_dual_write.py tests/test_project_nle_operations.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_render_export_parity.py` -> `67 passed, 4 subtests passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py` -> `193 passed`.
+- `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_v040100_20260628` -> `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `14`.
+- `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`.
+- `git diff --check -- .` -> pass.
+
+### Known Notes
+
+- `v04.01.00` is a source-app release checkpoint, not Mac App Store submission proof.
+- App Store readiness remains blocked by missing signed `.app`, signed `.pkg`, sandbox smoke, App Store Connect validation, signing identities, and owner-provided metadata.
+- Persisted NLE disk fields, per-pixel NLE writes, UI/QML default surface changes, native migration, and STT/default-cache promotion remain gated.
+
+### Next Recommended Action
+
+- Start from `ACTION_ITEMS.md`: either explicit owner review for STT collect-cache default promotion, or the Mac App Store submission readiness lane if the owner provides signing/metadata inputs.
+
+## Previous Handoff - 2026-06-28 Documentation Organization And Active Queue Hygiene
 
 ### Scope
 

@@ -10,6 +10,7 @@ import core.runtime.trace_logger as trace_logger_module
 from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY
 from core.project.project_context import build_editor_state
 from core.project.project_io import clear_project_file_cache, read_project_file, write_project_file
+from core.runtime import config
 from core.runtime.temp_workspace import (
     REQUIRED_SUBDIRECTORIES,
     TEMP_WORKSPACE_DIRNAME,
@@ -241,7 +242,7 @@ class TraceLoggerTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(manifest["app_name"], "AI Subtitle Studio")
-        self.assertEqual(manifest["app_version"], "04.00.18")
+        self.assertEqual(manifest["app_version"], config.APP_VERSION)
         self.assertEqual(manifest["media_fingerprint"]["basename"], "clip.mp4")
         self.assertEqual((manifest["media_fingerprint"]["fps_num"], manifest["media_fingerprint"]["fps_den"]), (60000, 1001))
         self.assertTrue(manifest["mode_settings_snapshot_hash"])

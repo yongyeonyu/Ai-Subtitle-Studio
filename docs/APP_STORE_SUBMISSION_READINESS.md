@@ -5,7 +5,7 @@ This document tracks the non-code and release-proof material needed before AI Su
 ## Current Status
 
 - Status: blocked until owner-approved packaging/signing/validation is run.
-- Source app version: `04.00.18`.
+- Source app version: `04.01.00`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
 - Minimum macOS: `14.0`.
@@ -65,7 +65,7 @@ This document tracks the non-code and release-proof material needed before AI Su
 - Support URL: pending owner URL.
 - App review notes: pending sandbox entitlement explanation, model/network behavior notes, and test-account or fixture notes if needed.
 - Age rating answers: pending owner confirmation.
-- Release notes: pending owner-approved version copy.
+- Release notes: source release note exists at `RELEASE_v04.01.00.md`; App Store release-note copy still needs owner approval before submission.
 
 ## Official References
 

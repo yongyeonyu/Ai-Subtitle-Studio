@@ -19,6 +19,18 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.00 Source-App Release
+
+Source request: owner asked to run code review/fixes, clean the worktree, commit/push main, proceed with release `04.01.00`, and update development docs.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.00"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.00`.
+3. `tests/test_trace_logger.py` was fixed to assert trace manifest app version against `config.APP_VERSION` instead of a release-specific literal.
+4. `RELEASE_v04.01.00.md` was added as the source-app release checkpoint note.
+5. `README.md`, `AGENTS.md`, `ACTION_ITEMS.md`, `NLE_Action.md`, `docs/README.md`, `docs/PROJECT_STATE.md`, and `docs/APP_STORE_SUBMISSION_READINESS.md` were synced to the new checkpoint.
+6. Jammini plus 한결/서린/유진 release reviews were collected through physical handoff files and classified by Dex.
+7. App Store readiness remains blocked and was not promoted to submission-ready; DMG, packaging, notarization, upload, persisted NLE disk fields, per-pixel NLE writes, UI/QML defaults, and STT/default-cache promotion were not performed.
+
 ## Development Documentation Organization And Active Queue Hygiene
 
 Source request: owner asked to delete completed action items from `ACTION_ITEMS.md` and organize development docs by referencing Taption docs/AGENTS rules.
