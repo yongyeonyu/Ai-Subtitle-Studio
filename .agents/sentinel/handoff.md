@@ -1,5 +1,9 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-225431-nle-direct-srt-roughcut-parity-workflow-yujin.md`
+- `.agents/sentinel/handoffs/20260628-225414-nle-direct-srt-roughcut-parity-qa-gates-seorin.md`
+- `.agents/sentinel/handoffs/20260628-235400-nle-direct-srt-roughcut-parity-architecture-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-235346-nle-direct-srt-roughcut-parity-scout-jammini.md`
 - `.agents/sentinel/handoffs/20260628-223948-nle-persisted-snapshot-read-back-parity-workflow-yujin.md`
 - `.agents/sentinel/handoffs/20260628-223921-nle-persisted-snapshot-read-back-parity-qa-gates-seorin.md`
 - `.agents/sentinel/handoffs/20260628-233906-nle-persisted-snapshot-read-back-parity-architecture-hangyeol.md`

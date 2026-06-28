@@ -33,7 +33,67 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Snapshot Readback Parity
+## Current Handoff - 2026-06-29 NLE Direct SRT / Roughcut Readback Parity
+
+### Scope
+
+- Dex completed the next owner-approved persisted NLE structure slice: direct SRT and roughcut sidecar read-back parity expansion.
+- Persisted `nle_snapshot` remains non-canonical compatibility metadata. Legacy editor rows, exact direct SRT rows, and roughcut sidecar/export surfaces remain the load/render owners.
+- Direct SRT open now records a runtime `_nle_snapshot_readback_parity` report with `surface=direct_srt_open` against the exact imported SRT rows when an approved persisted snapshot exists. This detects drift without overwriting SRT timing/text or changing `srt_timing_text_wins`.
+- The persistence cutover audit now corrupts persisted roughcut-sidecar markers and proves drift is detected while roughcut sidecar and render/export parity remain stable.
+- Top-level `nle`, persisted `_nle_project_state`, canonical load ownership from `nle_snapshot`, per-pixel drag writes, UI layout/label/color changes, subtitle quality policy changes, and STT/default-cache policy changes remain out of this slice.
+
+### Modified Files
+
+- `core/project/nle_snapshot.py`
+- `ui/editor/editor_project_open_native.py`
+- `tools/audit_nle_persistence_cutover.py`
+- `tests/test_project_segment_reload.py`
+- `tests/test_project_nle_snapshot.py`
+- `tests/test_nle_persistence_cutover_audit.py`
+- `.agents/sentinel/handoff.md`
+- `.agents/sentinel/handoffs/20260628-235346-nle-direct-srt-roughcut-parity-scout-jammini.md`
+- `.agents/sentinel/handoffs/20260628-235400-nle-direct-srt-roughcut-parity-architecture-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-225414-nle-direct-srt-roughcut-parity-qa-gates-seorin.md`
+- `.agents/sentinel/handoffs/20260628-225431-nle-direct-srt-roughcut-parity-workflow-yujin.md`
+- `docs/planning_queue/ACTION_ITEMS.md`
+- `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`
+- `docs/nle_engine/NLE_Action.md`
+- `docs/ARCHITECTURE.md`
+- `docs/FEATURE_REGISTRY.md`
+- `docs/HANDOFF.md`
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_snapshot.py ui/editor/editor_project_open_native.py tools/audit_nle_persistence_cutover.py tests/test_project_segment_reload.py tests/test_project_nle_snapshot.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "editor_row_readback_parity or read_only_projection_parity or roughcut"` -> `4 passed, 12 deselected, 4 subtests passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "direct_srt"` -> `4 passed, 86 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `5 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py` -> `6 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_render_export_parity.py` -> `2 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_direct_srt_roughcut_readback_parity_20260629_0003` -> wrote `nle_persistence_cutover_audit.md`; `prep_ready=true`, approved read-back stable `true`, corrupted roughcut marker drift detected `true`, render/export stable `true`, roughcut sidecar stable `true`, runtime report persisted `false`, operation roundtrip all passed, and full cutover `false`.
+
+### Jammini / Agent Review
+
+- Route status and handoff probe were verified before dispatch. The diagnostic probe handoff was removed from this commit scope.
+- Jammini scout: `.agents/sentinel/handoffs/20260628-235346-nle-direct-srt-roughcut-parity-scout-jammini.md`.
+- `한결` architecture review: `.agents/sentinel/handoffs/20260628-235400-nle-direct-srt-roughcut-parity-architecture-hangyeol.md`.
+- `서린` QE gate review: `.agents/sentinel/handoffs/20260628-225414-nle-direct-srt-roughcut-parity-qa-gates-seorin.md`.
+- `유진` workflow review: `.agents/sentinel/handoffs/20260628-225431-nle-direct-srt-roughcut-parity-workflow-yujin.md`.
+- Accepted findings: keep direct SRT rows canonical, report drift runtime-only, avoid UI warnings/popups, prove roughcut sidecar/readback drift without blocking sidecar restore or render/export.
+
+### Result
+
+- Direct SRT timing/text remains the winning surface even when a linked project carries an approved but stale persisted `nle_snapshot`.
+- Roughcut sidecar marker drift is now caught as compatibility evidence while the existing sidecar/render-export paths stay stable.
+- Completed slice recorded in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`; active queue now points to the latest evidence path.
+
+### Next Recommended Action
+
+- If continuing NLE, choose the next compatibility proof before any canonical `nle_snapshot` load-owner work: broader save/reopen/export parity, UI-facing NLE control surface, or an owner-approved persisted top-level `nle` design packet.
+- If continuing App Store, install/configure Apple Distribution and 3rd Party Mac Developer Installer identities, then rerun `.app` signing, `.pkg` build, package signature, App Store Connect validation, and sandbox workflow smoke.
+
+## Previous Handoff - 2026-06-28 NLE Snapshot Readback Parity
 
 ### Scope
 

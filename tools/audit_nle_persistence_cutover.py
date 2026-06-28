@@ -415,6 +415,93 @@ def _corrupted_snapshot_readback_check(work_dir: Path) -> dict[str, Any]:
     }
 
 
+def _surface_by_name(report: Any, target_surface: str) -> dict[str, Any]:
+    surfaces = getattr(report, "surface_reports", ()) or ()
+    for surface in surfaces:
+        payload = surface.to_dict()
+        if payload.get("target_surface") == target_surface:
+            return payload
+    return {}
+
+
+def _roughcut_sidecar_readback_check(work_dir: Path) -> dict[str, Any]:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    project_path = work_dir / "roughcut-sidecar-approved.aissproj"
+    project = _render_export_project(work_dir)
+    project["nle_persistence"] = {
+        "persist_snapshot": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    }
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+    clear_project_file_cache(str(project_path))
+
+    approved_loaded = read_project_file(str(project_path))
+    approved_parity = (
+        approved_loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY)
+        if isinstance(approved_loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY), dict)
+        else {}
+    )
+    approved_render_report = assert_project_nle_render_export_parity(
+        approved_loaded,
+        project_path=str(project_path),
+    )
+    approved_roughcut = _surface_by_name(approved_render_report, "roughcut_sidecar")
+
+    corrupted_storage = deepcopy(storage)
+    persisted_snapshot = (
+        corrupted_storage.get("nle_snapshot")
+        if isinstance(corrupted_storage.get("nle_snapshot"), dict)
+        else {}
+    )
+    persisted_sequences = (
+        persisted_snapshot.get("sequences")
+        if isinstance(persisted_snapshot.get("sequences"), list)
+        else []
+    )
+    persisted_sequence = persisted_sequences[0] if persisted_sequences and isinstance(persisted_sequences[0], dict) else {}
+    persisted_markers = persisted_sequence.get("markers") if isinstance(persisted_sequence, dict) else []
+    persisted_marker_count_before_corruption = len(persisted_markers or [])
+    if isinstance(persisted_sequence, dict):
+        persisted_sequence["markers"] = []
+    project_path.write_text(json.dumps(corrupted_storage, ensure_ascii=False), encoding="utf-8")
+    clear_project_file_cache(str(project_path))
+
+    corrupted_loaded = read_project_file(str(project_path))
+    corrupted_parity = (
+        corrupted_loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY)
+        if isinstance(corrupted_loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY), dict)
+        else {}
+    )
+    corrupted_render_report = assert_project_nle_render_export_parity(
+        corrupted_loaded,
+        project_path=str(project_path),
+    )
+    corrupted_roughcut = _surface_by_name(corrupted_render_report, "roughcut_sidecar")
+    write_project_file(str(project_path), corrupted_loaded)
+    storage_after = read_project_storage_payload(str(project_path))
+
+    return {
+        "project_path": str(project_path),
+        "approved_snapshot_persisted": isinstance(storage.get("nle_snapshot"), dict),
+        "approved_readback_checked": bool(approved_parity.get("checked")),
+        "approved_readback_stable": bool(approved_parity.get("stable")),
+        "approved_roughcut_sidecar_stable": bool(approved_roughcut.get("stable")),
+        "persisted_marker_count_before_corruption": persisted_marker_count_before_corruption,
+        "corrupted_marker_drift_detected": bool(corrupted_parity.get("checked"))
+        and not bool(corrupted_parity.get("stable")),
+        "mismatch_count": int(corrupted_parity.get("mismatch_count") or 0),
+        "render_export_stable": corrupted_render_report.diff_summary == "ok",
+        "roughcut_sidecar_stable": bool(corrupted_roughcut.get("stable")),
+        "sidecar_stitched_boundary_count": int(corrupted_roughcut.get("stitched_boundary_count") or 0),
+        "roughcut_marker_count": int(corrupted_roughcut.get("marker_count") or 0),
+        "runtime_report_persisted": NLE_SNAPSHOT_READBACK_PARITY_KEY in storage_after,
+        "runtime_state_persisted": NLE_PROJECT_STATE_RUNTIME_KEY in storage_after,
+        "top_level_nle_persisted": "nle" in storage_after,
+        "quarantine_persisted": NLE_PERSISTENCE_QUARANTINE_KEY in storage_after,
+    }
+
+
 def _marker_signature(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
     signature: list[dict[str, Any]] = []
     for row in rows:
@@ -621,6 +708,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     future_payload = _future_payload_quarantine_check()
     approved_snapshot = _approved_snapshot_persistence_check(out_dir / "approved_snapshot_fixture")
     corrupted_snapshot = _corrupted_snapshot_readback_check(out_dir / "corrupted_snapshot_fixture")
+    roughcut_sidecar = _roughcut_sidecar_readback_check(out_dir / "roughcut_sidecar_readback_fixture")
     operation_roundtrip_matrix = _operation_roundtrip_matrix(out_dir / "operation_roundtrip_matrix")
     render_export_parity = _render_export_parity_check(out_dir / "render_export_parity")
     operation_roundtrip_all_passed = all(
@@ -640,6 +728,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "future_payload_quarantine": future_payload,
         "approved_snapshot_persistence": approved_snapshot,
         "corrupted_snapshot_readback": corrupted_snapshot,
+        "roughcut_sidecar_readback": roughcut_sidecar,
         "operation_roundtrip_matrix": operation_roundtrip_matrix,
         "render_export_parity": render_export_parity,
     }
@@ -652,6 +741,14 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and corrupted_snapshot["drift_detected"]
         and corrupted_snapshot["legacy_rows_stable"]
         and not corrupted_snapshot["runtime_report_persisted"]
+        and roughcut_sidecar["approved_readback_stable"]
+        and roughcut_sidecar["corrupted_marker_drift_detected"]
+        and roughcut_sidecar["render_export_stable"]
+        and roughcut_sidecar["roughcut_sidecar_stable"]
+        and not roughcut_sidecar["runtime_report_persisted"]
+        and not roughcut_sidecar["runtime_state_persisted"]
+        and not roughcut_sidecar["top_level_nle_persisted"]
+        and not roughcut_sidecar["quarantine_persisted"]
         and operation_roundtrip_all_passed
         and render_export_parity["stable"]
         and render_export_parity["storage_clean"]
@@ -691,6 +788,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     future = checks.get("future_payload_quarantine") if isinstance(checks.get("future_payload_quarantine"), dict) else {}
     approved = checks.get("approved_snapshot_persistence") if isinstance(checks.get("approved_snapshot_persistence"), dict) else {}
     corrupted = checks.get("corrupted_snapshot_readback") if isinstance(checks.get("corrupted_snapshot_readback"), dict) else {}
+    roughcut = checks.get("roughcut_sidecar_readback") if isinstance(checks.get("roughcut_sidecar_readback"), dict) else {}
     operations = checks.get("operation_roundtrip_matrix") if isinstance(checks.get("operation_roundtrip_matrix"), list) else []
     render_export = checks.get("render_export_parity") if isinstance(checks.get("render_export_parity"), dict) else {}
     render_surfaces = (
@@ -730,6 +828,16 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Mismatch count: `{corrupted.get('mismatch_count')}`",
         f"- Legacy rows stable: `{bool(corrupted.get('legacy_rows_stable'))}`",
         f"- Runtime report persisted: `{bool(corrupted.get('runtime_report_persisted'))}`",
+        "",
+        "## Roughcut Sidecar Readback",
+        "",
+        f"- Approved read-back stable: `{bool(roughcut.get('approved_readback_stable'))}`",
+        f"- Corrupted marker drift detected: `{bool(roughcut.get('corrupted_marker_drift_detected'))}`",
+        f"- Mismatch count: `{roughcut.get('mismatch_count')}`",
+        f"- Render/export stable after corrupted snapshot read: `{bool(roughcut.get('render_export_stable'))}`",
+        f"- Roughcut sidecar stable after corrupted snapshot read: `{bool(roughcut.get('roughcut_sidecar_stable'))}`",
+        f"- Sidecar stitched/markers: `{roughcut.get('sidecar_stitched_boundary_count')}/{roughcut.get('roughcut_marker_count')}`",
+        f"- Runtime report persisted: `{bool(roughcut.get('runtime_report_persisted'))}`",
         "",
         "## Render / Export Parity",
         "",

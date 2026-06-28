@@ -8,6 +8,7 @@ from typing import Any
 from core.cut_boundary import normalize_cut_boundaries, project_cut_boundaries
 from core.frame_time import normalize_fps
 from core.project.project_context import (
+    build_editor_state,
     project_clip_boundaries,
     project_media_files,
     project_segments_to_editor,
@@ -289,6 +290,38 @@ def build_nle_snapshot_readback_parity_report(
         "persisted_render_plan_count": len(persisted_signature.get("render_plans", [])),
         "fresh_render_plan_count": len(fresh_signature.get("render_plans", [])),
     }
+
+
+def _project_copy_with_editor_rows(
+    project: dict[str, Any],
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    source = deepcopy(project if isinstance(project, dict) else {})
+    media_files = project_media_files(source)
+    fps = normalize_fps(project_primary_fps(source))
+    source["editor_state"] = build_editor_state(
+        mode=str(source.get("mode") or "single"),
+        media_files=media_files,
+        segments=[dict(row) for row in list(rows or []) if isinstance(row, dict)],
+        primary_fps=fps,
+        preserve_segment_identity=True,
+    )
+    return source
+
+
+def build_nle_snapshot_readback_parity_report_for_editor_rows(
+    project: dict[str, Any] | None,
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    project_path: str = "",
+    surface: str = "",
+) -> dict[str, Any]:
+    source = project if isinstance(project, dict) else {}
+    surfaced = _project_copy_with_editor_rows(source, rows)
+    report = build_nle_snapshot_readback_parity_report(surfaced, project_path=project_path)
+    report["surface"] = str(surface or "editor_rows")
+    report["surface_row_count"] = len([row for row in list(rows or []) if isinstance(row, dict)])
+    return report
 
 
 def attach_nle_snapshot_readback_parity(
@@ -759,6 +792,7 @@ __all__ = [
     "attach_nle_snapshot_readback_parity",
     "build_project_nle_snapshot",
     "build_nle_snapshot_readback_parity_report",
+    "build_nle_snapshot_readback_parity_report_for_editor_rows",
     "build_concat_render_plan_from_snapshot",
     "edl_segments_from_render_plan_snapshot",
     "markers_from_roughcut_sidecar_payload",

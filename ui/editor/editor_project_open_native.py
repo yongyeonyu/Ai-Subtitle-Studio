@@ -1020,10 +1020,15 @@ def open_project_segments_in_editor(
                     assert_nle_editor_rows_consistent,
                     sync_project_nle_state_from_editor_rows,
                 )
+                from core.project.nle_snapshot import (
+                    NLE_SNAPSHOT_READBACK_PARITY_KEY,
+                    build_nle_snapshot_readback_parity_report_for_editor_rows,
+                )
 
+                direct_srt_rows = [dict(row) for row in list(segments or []) if isinstance(row, dict)]
                 nle_state = sync_project_nle_state_from_editor_rows(
                     project,
-                    [dict(row) for row in list(segments or []) if isinstance(row, dict)],
+                    direct_srt_rows,
                     project_path=filepath,
                     sync_source="direct_srt_open",
                 )
@@ -1033,10 +1038,20 @@ def open_project_segments_in_editor(
                     "direct_srt_source_basename": os.path.basename(str(source_srt_path or "")),
                 }
                 assert_nle_editor_rows_consistent(
-                    [dict(row) for row in list(segments or []) if isinstance(row, dict)],
+                    direct_srt_rows,
                     nle_state.editor_rows(),
                     primary_fps=primary_fps,
                 )
+                parity_report = build_nle_snapshot_readback_parity_report_for_editor_rows(
+                    project,
+                    direct_srt_rows,
+                    project_path=filepath,
+                    surface="direct_srt_open",
+                )
+                if parity_report.get("checked"):
+                    project[NLE_SNAPSHOT_READBACK_PARITY_KEY] = parity_report
+                else:
+                    project.pop(NLE_SNAPSHOT_READBACK_PARITY_KEY, None)
             except Exception as sync_exc:
                 get_logger().log(f"⚠️ direct SRT NLE runtime sync skipped: {sync_exc}")
         for obj in (owner, editor, timeline, canvas, global_canvas):

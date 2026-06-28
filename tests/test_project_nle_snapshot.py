@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from core.project.nle_snapshot import (
+    build_nle_snapshot_readback_parity_report_for_editor_rows,
     build_project_nle_snapshot,
     markers_from_roughcut_sidecar_payload,
     markers_from_stitched_cut_boundaries,
@@ -170,6 +171,68 @@ class ProjectNleSnapshotTests(unittest.TestCase):
         self.assertEqual(len(snapshot.render_plans), 1)
         self.assertEqual(snapshot.render_plans[0].render_mode, "sync_safe")
         self.assertEqual(snapshot.render_plans[0].output_duration, 6.0)
+
+    def test_editor_row_readback_parity_reports_surface_without_mutating_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_path = root / "clip.mp4"
+            project_path = root / "linked-srt.aissproj"
+            media_path.write_bytes(b"media")
+            project = {
+                "project_name": "editor_row_readback_surface",
+                "mode": "single",
+                "video": {"duration_sec": 4.0, "primary_fps": 30.0},
+                "timeline": {
+                    "total_duration": 4.0,
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [{"clips": [{"source_path": str(media_path), "fps": 30.0}]}],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[str(media_path)],
+                    segments=[
+                        {
+                            "id": "project-old",
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "stored project row",
+                            "speaker": "00",
+                        }
+                    ],
+                    primary_fps=30.0,
+                    preserve_segment_identity=True,
+                ),
+            }
+            project["nle_snapshot"] = build_project_nle_snapshot(project, project_path=str(project_path)).to_dict()
+            original_editor_state = copy.deepcopy(project["editor_state"])
+            direct_srt_rows = [
+                {
+                    "id": "srt-new",
+                    "start": 1.2,
+                    "end": 2.4,
+                    "start_frame": 36,
+                    "end_frame": 72,
+                    "timeline_start_frame": 36,
+                    "timeline_end_frame": 72,
+                    "text": "direct SRT row",
+                    "speaker": "01",
+                }
+            ]
+
+            report = build_nle_snapshot_readback_parity_report_for_editor_rows(
+                project,
+                direct_srt_rows,
+                project_path=str(project_path),
+                surface="direct_srt_open",
+            )
+
+        self.assertEqual(report["surface"], "direct_srt_open")
+        self.assertEqual(report["surface_row_count"], 1)
+        self.assertTrue(report["checked"])
+        self.assertFalse(report["stable"])
+        self.assertGreater(report["mismatch_count"], 0)
+        self.assertTrue(any("captions" in item for item in report["mismatches"]))
+        self.assertEqual(project["editor_state"], original_editor_state)
 
     def test_legacy_project_without_timeline_still_projects_media_and_subtitles(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -23,13 +23,22 @@ from ui.editor.editor_multiclip_ops import EditorMulticlipOpsMixin
 from ui.editor.editor_widget import EditorWidget
 from ui.editor.subtitle_text_edit import SubtitleBlockData, SubtitleTextEdit
 from ui.editor.undo_manager import UndoManager
+from core.project.nle_persistence_guard import NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
 from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, NLEProjectState
+from core.project.nle_snapshot import NLE_SNAPSHOT_READBACK_PARITY_KEY
+from core.project.project_assets import externalize_project_text_assets
+from core.project.project_context import build_editor_state
+from core.project.project_io import (
+    clear_project_file_cache,
+    read_project_file,
+    read_project_storage_payload,
+    write_project_file,
+)
 from core.project.project_manager import get_boundary_times
+from core.project.project_phase1b import restore_project_stt_preview_segments
 from ui.editor import editor_project_open_native as project_open_native_module
 from ui.project.project_panel import ProjectUIMixin
 from ui.style import COLORS
-from core.project.project_assets import externalize_project_text_assets
-from core.project.project_phase1b import restore_project_stt_preview_segments
 
 
 class _Timer:
@@ -853,6 +862,94 @@ class ProjectSegmentReloadTests(unittest.TestCase):
         self.assertEqual(state.metadata["last_editor_sync_source"], "direct_srt_open")
         self.assertEqual(state.metadata["direct_srt_precedence_contract"], "srt_timing_text_wins")
         self.assertEqual(state.metadata["direct_srt_source_basename"], "final.srt")
+
+    def test_project_open_helper_records_direct_srt_readback_drift_without_overwriting_srt_rows(self):
+        editor = _ProjectOpenEditor()
+        window = _ProjectOpenWindow(editor)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_path = root / "linked-srt.aissproj"
+            media_path = root / "sample.mp4"
+            srt_path = root / "sample.assets" / "subtitles" / "final.srt"
+            media_path.write_bytes(b"video")
+            srt_path.parent.mkdir(parents=True)
+            srt_path.write_text("1\n00:00:01,200 --> 00:00:02,400\n최신 SRT 텍스트\n", encoding="utf-8")
+            project = {
+                "project_name": "linked-srt-readback",
+                "mode": "single",
+                "video": {"duration_sec": 4.0, "primary_fps": 30.0},
+                "timeline": {
+                    "total_duration": 4.0,
+                    "timebase": {"primary_fps": 30.0},
+                    "tracks": [{"clips": [{"source_path": str(media_path), "fps": 30.0}]}],
+                },
+                "editor_state": build_editor_state(
+                    mode="single",
+                    media_files=[str(media_path)],
+                    segments=[
+                        {
+                            "id": "project-old",
+                            "start": 0.0,
+                            "end": 1.0,
+                            "text": "프로젝트 구버전 텍스트",
+                            "speaker": "09",
+                        }
+                    ],
+                    primary_fps=30.0,
+                    preserve_segment_identity=True,
+                ),
+                "nle_persistence": {
+                    "persist_snapshot": True,
+                    "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                },
+            }
+            direct_srt_rows = [
+                {
+                    "id": "srt-new",
+                    "start": 1.2,
+                    "end": 2.4,
+                    "start_frame": 36,
+                    "end_frame": 72,
+                    "timeline_start_frame": 36,
+                    "timeline_end_frame": 72,
+                    "text": "최신 SRT 텍스트",
+                    "speaker": "00",
+                }
+            ]
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage_before = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            with patch.object(project_open_native_module.QTimer, "singleShot", side_effect=lambda _delay, cb: cb()):
+                opened = window._open_project_segments_in_editor(
+                    str(project_path),
+                    loaded,
+                    [str(media_path)],
+                    direct_srt_rows,
+                    source_srt_path=str(srt_path),
+                    direct_srt_edit_mode=True,
+                )
+            state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            nle_rows = state.editor_rows() if isinstance(state, NLEProjectState) else []
+            parity = loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+
+        self.assertTrue(opened)
+        self.assertIn("nle_snapshot", storage_before)
+        self.assertIsInstance(state, NLEProjectState)
+        self.assertEqual([row["text"] for row in editor._cached_segs], ["최신 SRT 텍스트"])
+        self.assertEqual([row["text"] for row in nle_rows], ["최신 SRT 텍스트"])
+        self.assertEqual((nle_rows[0]["start_frame"], nle_rows[0]["end_frame"]), (36, 72))
+        self.assertEqual(state.metadata["direct_srt_precedence_contract"], "srt_timing_text_wins")
+        self.assertEqual(parity["surface"], "direct_srt_open")
+        self.assertTrue(parity["checked"])
+        self.assertFalse(parity["stable"])
+        self.assertGreater(parity["mismatch_count"], 0)
+        self.assertTrue(any("text" in item or "sequence_start" in item for item in parity["mismatches"]))
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
 
     def test_open_project_file_passes_resolved_external_srt_path_to_editor(self):
         window = _ProjectOpenWindow(_ProjectOpenEditor())

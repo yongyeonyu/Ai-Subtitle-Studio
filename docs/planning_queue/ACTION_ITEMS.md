@@ -156,7 +156,7 @@ Current baseline:
 - Approved `nle_snapshot` persistence metadata can be written as compatibility metadata for explicitly marked projects.
 - Top-level `nle` project documents, persisted `_nle_project_state`, and making `nle_snapshot` the canonical load owner remain gated.
 - Legacy save/reopen compatibility remains mandatory.
-- Latest approved snapshot read-back parity audit: `output/manual_verification/latest/nle_snapshot_readback_parity_20260628_2345/nle_persistence_cutover_audit.md`; `prep_ready=true`, approved snapshot persistence `ready=true`, read-back parity stable with mismatch count `0`, intentionally corrupted persisted snapshot drift detected with legacy rows stable and runtime report not persisted, operation roundtrip all passed, render/export parity passed, and full cutover remains `persistence_cutover_ready=false`.
+- Latest direct SRT and roughcut read-back parity proof: `output/manual_verification/latest/nle_direct_srt_roughcut_readback_parity_20260629_0003/nle_persistence_cutover_audit.md` plus focused direct SRT tests; `prep_ready=true`, approved snapshot persistence `ready=true`, direct SRT open records runtime surface drift without overwriting SRT timing/text, roughcut sidecar marker drift is detected while render/export parity remains stable, runtime reports do not persist, operation roundtrip all passed, and full cutover remains `persistence_cutover_ready=false`.
 
 Detailed plan:
 

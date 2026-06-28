@@ -43,6 +43,22 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert corrupted["runtime_report_persisted"] is False
     assert corrupted["runtime_state_persisted"] is False
     assert corrupted["quarantine_persisted"] is False
+    roughcut = report["checks"]["roughcut_sidecar_readback"]
+    assert roughcut["approved_snapshot_persisted"] is True
+    assert roughcut["approved_readback_checked"] is True
+    assert roughcut["approved_readback_stable"] is True
+    assert roughcut["approved_roughcut_sidecar_stable"] is True
+    assert roughcut["persisted_marker_count_before_corruption"] == 2
+    assert roughcut["corrupted_marker_drift_detected"] is True
+    assert roughcut["mismatch_count"] > 0
+    assert roughcut["render_export_stable"] is True
+    assert roughcut["roughcut_sidecar_stable"] is True
+    assert roughcut["sidecar_stitched_boundary_count"] == 1
+    assert roughcut["roughcut_marker_count"] == 1
+    assert roughcut["runtime_report_persisted"] is False
+    assert roughcut["runtime_state_persisted"] is False
+    assert roughcut["top_level_nle_persisted"] is False
+    assert roughcut["quarantine_persisted"] is False
 
 
 def test_nle_persistence_cutover_audit_includes_render_export_parity_gate():
@@ -145,6 +161,9 @@ def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
         assert "- Read-back parity stable: `True`" in markdown
         assert "## Corrupted Snapshot Readback" in markdown
         assert "- Drift detected: `True`" in markdown
+        assert "## Roughcut Sidecar Readback" in markdown
+        assert "- Corrupted marker drift detected: `True`" in markdown
+        assert "- Render/export stable after corrupted snapshot read: `True`" in markdown
         assert "| exported_assets | True | 2 | 0 | 0 | 2 | 2 | 1 |" in markdown
         assert "## Operation Roundtrip Matrix" in markdown
         assert "| caption_text_edit | True | True | True | True | True | 0 | 1 |" in markdown
