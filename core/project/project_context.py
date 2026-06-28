@@ -433,6 +433,20 @@ def _trim_segments_to_project_duration(
     return out
 
 
+def trim_editor_rows_to_project_duration(
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    project: dict[str, Any],
+    *,
+    primary_fps: float | None = None,
+) -> list[dict[str, Any]]:
+    fps = normalize_fps(primary_fps or project_primary_fps(project) or 30.0)
+    return _trim_segments_to_project_duration(
+        [dict(row) for row in list(rows or []) if isinstance(row, dict)],
+        project,
+        primary_fps=fps,
+    )
+
+
 def _attach_clip_context_from_boundaries(segments: list[dict[str, Any]], boundaries: list[dict[str, Any]]) -> None:
     if not segments or not boundaries:
         return

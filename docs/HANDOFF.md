@@ -33,6 +33,48 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Dual-Write Duration Bound Trim
+
+### Scope
+
+- Added duration-bound enforcement to row-producing NLE dual-write release-commit paths before runtime NLE state sync and raw `editor_state` rebuild.
+- Updated `core/project/project_context.py`, `core/project/nle_dual_write.py`, `tests/test_project_nle_dual_write.py`, `tools/audit_nle_dual_write_duration_bound.py`, `tests/test_nle_dual_write_duration_bound_audit.py`, NLE/status docs, completed action history, and Sentinel handoff index.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_dual_write_duration_bound_20260628/nle_dual_write_duration_bound.md`
+- `ready=true`; owner coverage `11/11`.
+- Dynamic checks passed: `caption_move_tail_clamp` trims `1` row and `candidate_confirm_late_drop` drops `1` row.
+- The tail clamp/drop checks cover legacy editor rows, runtime NLE rows, and raw vector `editor_state` storage.
+- NAS HeyDealer acceptance: `output/manual_verification/latest/nle_dual_write_duration_bound_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_164020/benchmark_results.json`: accepted `true`, elapsed `45.946s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_duration_bound_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Route status/probe passed; probe file was removed from the worktree.
+- Scout: `.agents/sentinel/handoffs/20260628-073009-nle-dual-write-duration-trim-prep.md`
+- Dex classification: accepted as the next bounded mutable-edit slice after adding focused raw-storage/NLE-state tests, audit coverage, and NAS HeyDealer proof. Persisted NLE fields, per-pixel writes, UI/QML, STT/default-cache, and App Store scopes remain blocked.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/project_context.py core/project/nle_dual_write.py tools/audit_nle_dual_write_duration_bound.py tests/test_project_nle_dual_write.py tests/test_nle_dual_write_duration_bound_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_dual_write_duration_bound_audit.py -k "duration_bound or caption_move_dual_write or candidate_confirm"` -> `10 passed, 26 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_operation_journal_audit.py tests/test_nle_runtime_owner_map_audit.py` -> `5 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py` -> `34 passed`.
+- `./venv/bin/python tools/audit_nle_dual_write_duration_bound.py --output-dir output/manual_verification/latest/nle_dual_write_duration_bound_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_dual_write_duration_bound_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_164020/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_164020/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_dual_write_duration_bound_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_162124/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_164020/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_duration_bound_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`.
+- Treat future mutation-source adoption as fresh owner-map/audit work before implementation.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Inline Edit Entry Contract
 
 ### Scope

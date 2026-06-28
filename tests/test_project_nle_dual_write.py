@@ -96,6 +96,17 @@ def _project_with_three_captions():
     }
 
 
+def _raw_vector_segments(project):
+    return list(
+        (
+            ((project.get("editor_state", {}) or {}).get("rendering", {}) or {})
+            .get("subtitle_canvas", {})
+            .get("segments", [])
+        )
+        or []
+    )
+
+
 def _project_with_roughcut_outputs():
     media_path = "/tmp/roughcut_source.mov"
     first_segment = {
@@ -229,6 +240,76 @@ class NLEDualWritePilotTests(unittest.TestCase):
         ])
         self.assertEqual(project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_pilot_family"], "caption_move")
         self.assertFalse(result.operation.metadata["taption_reorder"])
+
+    def test_caption_move_dual_write_clamps_tail_before_raw_storage_and_nle_sync(self):
+        project = _project_with_three_captions()
+        result = apply_caption_move_dual_write_pilot(
+            project,
+            caption_id="subtitle_vector_0003",
+            new_start=5.5,
+            new_end=6.2,
+            commit_boundary="release",
+            commit_source="center",
+        )
+
+        self.assert_final_projection_is_release_stable(result)
+        self.assertTrue(result.operation.metadata["duration_bound_trim_applied"])
+        self.assertEqual(result.operation.metadata["duration_bound_trimmed_row_count"], 1)
+        self.assertEqual(result.operation.metadata["duration_bound_dropped_row_count"], 0)
+        self.assertEqual(
+            project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_duration_bound_trimmed_row_count"],
+            1,
+        )
+
+        legacy_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        nle_rows = project_segments_from_nle_state(project)
+        target_legacy = next(row for row in legacy_rows if row.get("id") == "subtitle_vector_0003")
+        target_nle = next(row for row in nle_rows if row.get("id") == "subtitle_vector_0003")
+        target_raw = next(row for row in _raw_vector_segments(project) if row.get("id") == "subtitle_vector_0003")
+
+        self.assertAlmostEqual(target_legacy["end"], 6.0)
+        self.assertEqual(target_legacy["end_frame"], 180)
+        self.assertAlmostEqual(target_nle["end"], 6.0)
+        self.assertEqual(target_nle["end_frame"], 180)
+        self.assertEqual(target_raw["time"]["end_frame"], 180)
+        self.assertTrue(all(float(row.get("end", 0.0) or 0.0) <= 6.0 for row in result.projected_rows))
+
+    def test_candidate_confirm_dual_write_drops_rows_beyond_project_duration_bound(self):
+        project = _project_with_three_captions()
+        confirmed_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        confirmed_rows.append({
+            "id": "subtitle_vector_late",
+            "start": 6.25,
+            "end": 7.0,
+            "text": "late candidate",
+            "speaker": "00",
+        })
+
+        result = apply_candidate_confirm_dual_write_pilot(
+            project,
+            confirmed_rows=confirmed_rows,
+            candidate={"start": 6.25, "end": 7.0, "text": "late candidate"},
+            candidate_source="STT2",
+            commit_boundary="release",
+            commit_source="candidate_lane",
+        )
+
+        self.assert_final_projection_is_release_stable(result)
+        self.assertTrue(result.operation.metadata["duration_bound_trim_applied"])
+        self.assertEqual(result.operation.metadata["duration_bound_trimmed_row_count"], 0)
+        self.assertEqual(result.operation.metadata["duration_bound_dropped_row_count"], 1)
+        self.assertEqual(result.operation.metadata["duration_bound_input_count"], 4)
+        self.assertEqual(result.operation.metadata["duration_bound_output_count"], 3)
+        self.assertEqual(
+            project[NLE_PROJECT_STATE_RUNTIME_KEY].metadata["dual_write_duration_bound_dropped_row_count"],
+            1,
+        )
+        self.assertNotIn(
+            "subtitle_vector_late",
+            {row.get("id") for row in project_segments_to_editor(project, include_analysis_candidates=False)},
+        )
+        self.assertNotIn("subtitle_vector_late", {row.get("id") for row in project_segments_from_nle_state(project)})
+        self.assertNotIn("subtitle_vector_late", {row.get("id") for row in _raw_vector_segments(project)})
 
     def test_dual_write_records_runtime_operation_journal_without_persisting_it(self):
         project = _project_with_gap()

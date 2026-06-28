@@ -26,6 +26,7 @@ from core.project.project_context import (
     project_cut_boundary_provisional_segments,
     project_media_files,
     project_segments_to_editor,
+    trim_editor_rows_to_project_duration,
 )
 from core.project.project_format import project_primary_fps
 
@@ -327,6 +328,93 @@ def _sorted_editor_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _duration_bound_row_identity(row: dict[str, Any], index: int) -> str:
+    kind = "gap" if bool(row.get("is_gap")) else "caption"
+    explicit = str(row.get("id") or row.get("gap_id") or "").strip()
+    return f"{kind}:{explicit or index}"
+
+
+def _duration_bound_end_signature(row: dict[str, Any]) -> tuple[Any, ...]:
+    frame_range = row.get("frame_range", {}) if isinstance(row.get("frame_range"), dict) else {}
+    start = round(_row_start(row), 6)
+    end = round(_row_end(row, _row_start(row)), 6)
+    return (
+        start,
+        end,
+        row.get("end_frame"),
+        row.get("timeline_end_frame"),
+        frame_range.get("end"),
+    )
+
+
+def _duration_bound_trim_stats(
+    before_rows: list[dict[str, Any]],
+    after_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    before_by_id = {
+        _duration_bound_row_identity(row, index): dict(row)
+        for index, row in enumerate(before_rows)
+        if isinstance(row, dict)
+    }
+    after_by_id = {
+        _duration_bound_row_identity(row, index): dict(row)
+        for index, row in enumerate(after_rows)
+        if isinstance(row, dict)
+    }
+    dropped_count = sum(1 for row_id in before_by_id if row_id not in after_by_id)
+    trimmed_count = sum(
+        1
+        for row_id, before in before_by_id.items()
+        if row_id in after_by_id
+        and _duration_bound_end_signature(before) != _duration_bound_end_signature(after_by_id[row_id])
+    )
+    return {
+        "changed": bool(dropped_count or trimmed_count),
+        "input_count": len(before_by_id),
+        "output_count": len(after_by_id),
+        "trimmed_row_count": trimmed_count,
+        "dropped_row_count": dropped_count,
+    }
+
+
+def _enforce_dual_write_project_duration_bound(
+    project: dict[str, Any],
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    before_rows = _sorted_editor_rows([dict(row) for row in list(rows or []) if isinstance(row, dict)])
+    after_rows = trim_editor_rows_to_project_duration(
+        before_rows,
+        project,
+        primary_fps=project_primary_fps(project),
+    )
+    after_rows = _sorted_editor_rows(after_rows)
+    return after_rows, _duration_bound_trim_stats(before_rows, after_rows)
+
+
+def _duration_bound_operation_metadata(stats: dict[str, Any]) -> dict[str, Any]:
+    if not bool(stats.get("changed")):
+        return {}
+    return {
+        "duration_bound_trim_applied": True,
+        "duration_bound_input_count": int(stats.get("input_count", 0) or 0),
+        "duration_bound_output_count": int(stats.get("output_count", 0) or 0),
+        "duration_bound_trimmed_row_count": int(stats.get("trimmed_row_count", 0) or 0),
+        "duration_bound_dropped_row_count": int(stats.get("dropped_row_count", 0) or 0),
+    }
+
+
+def _duration_bound_state_metadata(stats: dict[str, Any]) -> dict[str, Any]:
+    if not bool(stats.get("changed")):
+        return {}
+    return {
+        "dual_write_duration_bound_trim_applied": True,
+        "dual_write_duration_bound_input_count": int(stats.get("input_count", 0) or 0),
+        "dual_write_duration_bound_output_count": int(stats.get("output_count", 0) or 0),
+        "dual_write_duration_bound_trimmed_row_count": int(stats.get("trimmed_row_count", 0) or 0),
+        "dual_write_duration_bound_dropped_row_count": int(stats.get("dropped_row_count", 0) or 0),
+    }
+
+
 def _interval_overlap(left_start: float, left_end: float, right_start: float, right_end: float) -> bool:
     return min(left_end, right_end) > max(left_start, right_start)
 
@@ -470,6 +558,7 @@ def apply_gap_generate_dual_write_pilot(
     after_rows.extend(generated_rows)
     after_rows.extend(dict(row) for row in before_rows[target_index + 1:])
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -513,6 +602,7 @@ def apply_gap_generate_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="gap_generate",
@@ -531,6 +621,7 @@ def apply_gap_generate_dual_write_pilot(
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_projected_count": len(after_rows),
         "dual_write_generated_caption_id": caption_id,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -609,6 +700,7 @@ def apply_caption_merge_dual_write_pilot(
         else:
             after_rows.append(dict(row))
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -642,6 +734,7 @@ def apply_caption_merge_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_merge",
@@ -661,6 +754,7 @@ def apply_caption_merge_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_kept_caption_id": keep_id,
         "dual_write_removed_caption_id": remove_id,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -731,6 +825,9 @@ def apply_caption_split_dual_write_pilot(
         else:
             after_rows.append(dict(row))
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
+    if not after_rows:
+        raise ValueError("nle_caption_split_duration_bound_rows_empty")
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -765,6 +862,7 @@ def apply_caption_split_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_split",
@@ -784,6 +882,7 @@ def apply_caption_split_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_split_caption_id": target_id,
         "dual_write_new_caption_id": right_id,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -892,6 +991,9 @@ def apply_candidate_confirm_dual_write_pilot(
     after_rows = _canonicalize_confirmed_caption_identities(before_rows, after_rows)
     if not after_rows:
         raise ValueError("nle_candidate_confirm_rows_required")
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
+    if not after_rows:
+        raise ValueError("nle_candidate_confirm_duration_bound_rows_empty")
     commit_boundary = str(commit_boundary or "").strip()
     commit_source = str(commit_source or "").strip()
 
@@ -937,6 +1039,7 @@ def apply_candidate_confirm_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="candidate_confirm",
@@ -956,6 +1059,7 @@ def apply_candidate_confirm_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_candidate_id": candidate_id,
         "dual_write_candidate_source": source,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -995,6 +1099,7 @@ def apply_caption_delete_dual_write_pilot(
     after_rows = [dict(row) for row in before_rows]
     after_rows[target_index] = _caption_row_to_gap(after_rows[target_index], caption_id=target_id, gap_id=gap_id)
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -1024,6 +1129,7 @@ def apply_caption_delete_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_delete",
@@ -1042,6 +1148,7 @@ def apply_caption_delete_dual_write_pilot(
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_projected_count": len(after_rows),
         "dual_write_replacement_gap_id": gap_id,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -1118,6 +1225,7 @@ def apply_caption_resize_dual_write_pilot(
 
     after_rows, trimmed_count, deleted_count = _resolve_rows_around_updated_final_ranges(after_rows, updated_indices)
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -1135,6 +1243,7 @@ def apply_caption_resize_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     undo = build_nle_undo_snapshot(
         operation_id=f"dual_write_caption_resize:{target_id}",
         editor_rows=before_rows,
@@ -1171,6 +1280,7 @@ def apply_caption_resize_dual_write_pilot(
         "dual_write_projected_count": len(after_rows),
         "dual_write_trimmed_neighbor_count": trimmed_count,
         "dual_write_deleted_neighbor_count": deleted_count,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -1243,6 +1353,7 @@ def apply_caption_move_dual_write_pilot(
         after_rows[moving_index] = _retime_row(after_rows[moving_index], target_start, target_end)
         metadata["taption_reorder"] = False
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -1263,6 +1374,7 @@ def apply_caption_move_dual_write_pilot(
         },
         metadata={"pilot": "dual_write_caption_move"},
     )
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_move",
@@ -1281,6 +1393,7 @@ def apply_caption_move_dual_write_pilot(
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_projected_count": len(after_rows),
         "dual_write_taption_reorder": bool(reorder_neighbor_id),
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -1460,6 +1573,9 @@ def apply_caption_range_replace_dual_write_pilot(
     after_rows = _canonicalize_confirmed_caption_identities(before_rows, after_rows)
     after_rows = _sorted_editor_rows(after_rows)
     after_rows = _ensure_unique_range_replace_row_identities(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
+    if not after_rows:
+        raise ValueError("nle_caption_range_replace_duration_bound_rows_empty")
 
     after_ids = {
         _editor_row_identity(row, index)
@@ -1506,6 +1622,7 @@ def apply_caption_range_replace_dual_write_pilot(
         "deleted_row_count": len(deleted_ids),
         "changed_row_count": changed_count,
     }
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_range_replace",
@@ -1526,6 +1643,7 @@ def apply_caption_range_replace_dual_write_pilot(
         "dual_write_range_replace_target_start": range_start,
         "dual_write_range_replace_target_end": range_end,
         "dual_write_range_replace_target_count": len(target_ids),
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -1579,6 +1697,7 @@ def apply_caption_move_commit_dual_write_pilot(
     after_rows[target_after_index]["id"] = target_id
     after_rows = _canonicalize_confirmed_caption_identities(before_rows, after_rows)
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     after_ids = {
         _editor_row_identity(row, index)
@@ -1632,6 +1751,7 @@ def apply_caption_move_commit_dual_write_pilot(
         "changed_row_count": changed_count,
         "silence_gap_deleted_count": silence_gap_deleted_count,
     }
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_move",
@@ -1653,6 +1773,7 @@ def apply_caption_move_commit_dual_write_pilot(
         "dual_write_caption_move_commit_mode": commit_mode,
         "dual_write_deleted_row_count": len(deleted_ids),
         "dual_write_silence_gap_deleted_count": silence_gap_deleted_count,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -1716,6 +1837,7 @@ def apply_caption_text_edit_dual_write_pilot(
     if speaker_list_requested:
         after_rows[target_index]["speaker_list"] = speaker_list
     after_rows = _sorted_editor_rows(after_rows)
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -1752,6 +1874,7 @@ def apply_caption_text_edit_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="caption_text_edit",
@@ -1770,6 +1893,7 @@ def apply_caption_text_edit_dual_write_pilot(
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_projected_count": len(after_rows),
         "dual_write_caption_text_edit_target": target_id,
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
@@ -1818,6 +1942,7 @@ def apply_gap_delete_dual_write_pilot(
         for index, row in enumerate(before_rows)
         if index != target_index
     ]
+    after_rows, duration_bound_stats = _enforce_dual_write_project_duration_bound(project, after_rows)
 
     before_projection = build_project_nle_projection_parity_report(project, project_path=project_path)
     shadow_after = _shadow_project_with_rows(project, after_rows)
@@ -1840,6 +1965,7 @@ def apply_gap_delete_dual_write_pilot(
         metadata["commit_boundary"] = commit_boundary
     if commit_source:
         metadata["commit_source"] = commit_source
+    metadata.update(_duration_bound_operation_metadata(duration_bound_stats))
     operation = build_nle_editor_operation(
         operation_id=undo.operation_id,
         kind="gap_delete",
@@ -1857,6 +1983,7 @@ def apply_gap_delete_dual_write_pilot(
         "dual_write_pilot_family": "gap_delete",
         "dual_write_last_operation_id": operation.operation_id,
         "dual_write_projected_count": len(after_rows),
+        **_duration_bound_state_metadata(duration_bound_stats),
     }
     record_nle_operation_journal_entry(state, operation, projected_count=len(after_rows))
     projected_rows = project_segments_from_nle_state(project, project_path=project_path)
