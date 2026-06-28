@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Live NAS HeyDealer STT Regression Refresh - 2026-06-28 KST
+
+- 실행 모드: owner-required HeyDealer first-180s NAS fixture preflight plus High-mode real-media regression after NAS was reported on again.
+- 결과: pass for preflight, strict reference acceptance, final subtitle stability, global canvas stability, and worker-timeout comparison. No runtime STT/STT2/word precision policy, collect-cache default, subtitle quality gate, UI/UX, NLE persistence, App Store packaging/signing/upload, DMG behavior, or detector threshold changed.
+- 저장 위치:
+  - Preflight: `output/manual_verification/latest/heydealer_nas_preflight_live_20260628/reference_fixture_availability.md`
+  - Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json`
+  - Acceptance: `output/manual_verification/latest/stt_nas_live_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nas_live_20260628/stt_worker_timeout_audit.md`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-141544-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-151600-stt-nas-on-regression-gate.md`
+- 실제 NAS fixture 결과:
+  - Preflight ready `true`; media exists `true`; reference SRT exists `true`; clipped reference rows `89`.
+  - Acceptance `true`; elapsed `45.631s`; raw/final/reference `58/56/89`.
+  - Quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - STT1/STT2/word selected `21/37/7`.
+  - Stage spans: STT1 `18.255019s`, STT2 `14.239592s`, word precision `12.559778s`, subtitle postprocess `0.495304s`.
+  - Timeout comparison against baseline `20260628_113906`: `timeout_detected=false`, timeout run count `0/2`, timeout elapsed `0s`.
+- 해석:
+  - NAS availability and the current High-mode real-media path are healthy in this run.
+  - This is regression evidence only. `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false` remain production defaults until explicit owner review.
+- 검증:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/heydealer_nas_preflight_live_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> wrote `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/stt_nas_live_heydealer_20260628/acceptance` -> accepted `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nas_live_20260628` -> timeout detected `false`.
+
 ## NLE Cut-Boundary 2766 Detector Evidence Robustness Audit - 2026-06-28 KST
 
 - 실행 모드: source-app fixed cut-boundary frame `2766` detector-evidence read-only robustness audit.

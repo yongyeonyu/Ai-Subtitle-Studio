@@ -33,6 +33,45 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 Live NAS HeyDealer STT Regression Refresh
+
+### Scope
+
+- Refreshed the owner-required HeyDealer first-180s NAS fixture after the owner reported NAS was on again.
+- Ran current NAS preflight, one High-mode real-media benchmark, strict reference acceptance, and STT worker-timeout comparison.
+- Updated `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `test_result.md`, and this handoff.
+- No runtime STT/STT2/word precision policy, collect-cache default, subtitle quality gate, UI/UX, NLE persistence, App Store packaging/signing/upload, DMG, or detector threshold changed.
+
+### Results
+
+- Preflight: `output/manual_verification/latest/heydealer_nas_preflight_live_20260628/reference_fixture_availability.md`
+- Benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json`
+- Acceptance: `output/manual_verification/latest/stt_nas_live_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nas_live_20260628/stt_worker_timeout_audit.md`
+- Accepted `true`; elapsed `45.631s`; raw/final/reference `58/56/89`.
+- Quality/text/timing `93.766/94.267/0.5808s`.
+- Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+- Stage spans: STT1 `18.255019s`, STT2 `14.239592s`, word precision `12.559778s`, subtitle postprocess `0.495304s`.
+- Timeout audit reports `timeout_detected=false` when comparing baseline `20260628_113906` against live run `20260628_141640`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-141544-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-151600-stt-nas-on-regression-gate.md`
+- Dex classification: accept the gate checklist. Keep collect-cache default promotion deferred until explicit owner review.
+
+### Verification
+
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/heydealer_nas_preflight_live_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> wrote `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/stt_nas_live_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_141640/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nas_live_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Continue active item 1 through explicit owner review of collect-cache default promotion or the next behavior-preserving STT worker lifecycle diagnostic.
+- Do not promote `stt_primary_collect_cache_enabled` or `stt_recheck_collect_cache_enabled` without explicit owner approval.
+
 ## Current Handoff - 2026-06-28 NLE Cut-Boundary 2766 Detector Evidence Robustness
 
 ### Scope
