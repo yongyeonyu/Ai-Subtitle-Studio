@@ -194,6 +194,17 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_full_media_pipeline.py 
 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts
 ```
 
+If a benchmark is slow, compare the slow artifact with the nearest accepted baseline before changing STT policy:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py \
+  .codex_work/benchmarks/subtitle_pipeline_variants/<baseline_run>/benchmark_results.json \
+  .codex_work/benchmarks/subtitle_pipeline_variants/<slow_run>/benchmark_results.json \
+  --output-dir output/manual_verification/latest/stt_worker_timeout_compare_YYYYMMDD
+```
+
+The timeout audit is read-only. It can justify a worker lifecycle diagnostic or retry plan, but it must not approve model downgrade, STT2/word precision skipping, quality-gate relaxation, collect-cache default promotion, UI changes, or App Store work.
+
 If the long HeyDealer/X5 reference fixture is unavailable, the cached X5 60s rows can be materialized for short-loop reference-scored smoke only. Do not use this as broad trim acceptance.
 
 ```bash

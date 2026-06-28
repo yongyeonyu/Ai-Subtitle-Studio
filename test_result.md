@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## STT Worker Timeout Audit - 2026-06-28 KST
+
+- 실행 모드: NAS HeyDealer first-180s benchmark artifacts read-only STT worker timeout audit.
+- 결과: pass; the current slow accepted run is timeout-dominated, while the nearest accepted NAS baseline has no worker-timeout evidence.
+- 저장 위치:
+  - Timeout compare audit: `output/manual_verification/latest/stt_worker_timeout_compare_20260628/stt_worker_timeout_audit.md`
+  - Timeout compare JSON: `output/manual_verification/latest/stt_worker_timeout_compare_20260628/stt_worker_timeout_audit.json`
+  - Baseline benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json`
+  - Slow benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-124750-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-125000-stt-worker-timeout-scout.md`
+- 수정 요약:
+  - Added `tools/audit_stt_worker_timeout.py` to compare benchmark artifacts and detect WhisperKit worker timeout/fallback spans plus timeout-like word-precision collect failures.
+  - Added `tests/test_stt_worker_timeout_audit.py`.
+  - Updated `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `docs/HANDOFF.md`.
+  - No runtime STT policy, model choice, STT2/word precision coverage, collect-cache defaults, quality gates, UI/UX, App Store packaging/signing/upload, DMG, or NLE persistence behavior changed.
+- 실제 감사 결과:
+  - Timeout detected `true`; artifact/run count `2/2`; timeout run count `1`; timeout total elapsed `330.132245s`.
+  - Production change allowed `false`; default cache promotion allowed `false`.
+  - Baseline `20260628_113906`: elapsed `45.491s`, timeout elapsed `0s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Slow run `20260628_123336`: elapsed `374.308s`, timeout elapsed `330.132245s`, timeout ratio `0.88198`, timeout labels `STT1=1`, `Fast-STT2=1`, word-precision timeout-like count `1`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, quality/text/timing `93.955/94.867/0.5536s`.
+  - Blocked from this audit alone: model downgrade, STT2 skipping, word precision skipping, quality-gate relaxation, collect-cache default promotion, UI changes, and App Store work.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_stt_worker_timeout.py tests/test_stt_worker_timeout_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_worker_timeout_audit.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_20260628` -> pass, `timeout_detected=true`.
+
 ## NLE Fixed Cut-Boundary Fixture Gate - 2026-06-28 KST
 
 - 실행 모드: source-app fixed cut-boundary frame `2766`/`2677` fixture gate plus NAS HeyDealer first-180s regression.

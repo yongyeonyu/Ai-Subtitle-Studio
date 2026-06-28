@@ -33,6 +33,49 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 STT Worker Timeout Audit
+
+### Scope
+
+- Continued `ACTION_ITEMS.md` item `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim` by adding read-only STT worker timeout artifact audit tooling.
+- Added `tools/audit_stt_worker_timeout.py`.
+- Added `tests/test_stt_worker_timeout_audit.py`.
+- Updated `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No runtime STT policy, model choice, STT2/word precision coverage, collect-cache defaults, quality gates, UI/UX, App Store packaging/signing/upload, DMG, or NLE persistence behavior changed.
+
+### Results
+
+- Timeout comparison audit: `output/manual_verification/latest/stt_worker_timeout_compare_20260628/stt_worker_timeout_audit.md`
+- Compared benchmark artifacts:
+  - baseline: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json`
+  - slow run: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json`
+- Timeout detected: `true`.
+- Timeout run count: `1/2`.
+- Baseline elapsed / timeout elapsed: `45.491s / 0s`.
+- Slow run elapsed / timeout elapsed: `374.308s / 330.132245s`.
+- Slow run timeout ratio: `0.88198`.
+- Timeout labels: `STT1=1`, `Fast-STT2=1`; word-precision timeout-like collect count `1`.
+- Slow run final invalid/non-monotonic/overlap stayed `0/0/0`, global max active stayed `1`, and quality/text/timing stayed `93.955/94.867/0.5536s`.
+- Production change allowed: `false`.
+- Default cache promotion allowed: `false`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-124750-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-125000-stt-worker-timeout-scout.md`
+- Dex classification: accept the scout's diagnostic-only direction. This slice implements read-only artifact audit first; deeper worker process isolation or trace bundle instrumentation remains a separate next action.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_stt_worker_timeout.py tests/test_stt_worker_timeout_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_worker_timeout_audit.py` -> `3 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_113906/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_20260628` -> pass, `timeout_detected=true`.
+
+### Next Recommended Action
+
+- If generation latency remains the next priority, inspect WhisperKit persistent worker lifecycle/process isolation before changing STT routing.
+- Do not use this audit to downgrade models, skip STT2, skip word precision, relax quality gates, promote collect-cache defaults, change UI, or perform App Store work.
+
 ## Current Handoff - 2026-06-28 NLE Fixed Cut-Boundary Fixture Gate
 
 ### Scope
