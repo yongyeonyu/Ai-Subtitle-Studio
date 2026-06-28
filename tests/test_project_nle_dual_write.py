@@ -662,6 +662,30 @@ class NLEDualWritePilotTests(unittest.TestCase):
             ("subtitle_vector_0003", "third", 60, 90),
         ])
 
+    def test_caption_move_commit_dual_write_rejects_final_overlap_without_mutating_project(self):
+        project = _project_with_three_captions()
+        before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        committed_rows = [
+            {"line": 0, "start": 0.0, "end": 1.25, "text": "first", "speaker": "00"},
+            {"line": 1, "start": 1.0, "end": 2.0, "text": "second", "speaker": "01"},
+            {"line": 2, "start": 2.0, "end": 3.0, "text": "third", "speaker": "02"},
+        ]
+
+        with self.assertRaisesRegex(NLEOperationValidationError, "operation_projection_drift|operation_final_overlap"):
+            apply_caption_move_commit_dual_write_pilot(
+                project,
+                caption_id="subtitle_vector_0002",
+                committed_rows=committed_rows,
+                committed_caption_line=1,
+                commit_boundary="release",
+                commit_source="center",
+                commit_mode="center_invalid_overlap",
+            )
+
+        after_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        self.assertRowsAlmostEqual(after_rows, before_rows)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, project)
+
     def test_caption_range_replace_dual_write_adopts_partial_insert_transaction(self):
         project = _project_with_three_captions()
         committed_rows = [
@@ -950,6 +974,25 @@ class NLEDualWritePilotTests(unittest.TestCase):
                 linked_caption_id="subtitle_vector_0002",
                 linked_new_start=1.4,
                 linked_new_end=2.0,
+            )
+
+        after_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+        self.assertRowsAlmostEqual(after_rows, before_rows)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, project)
+
+    def test_caption_resize_dual_write_rejects_split_required_neighbor_collision_without_mutating_project(self):
+        project = _project_with_three_captions()
+        before_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+
+        with self.assertRaisesRegex(ValueError, "nle_caption_resize_split_required"):
+            apply_caption_resize_dual_write_pilot(
+                project,
+                caption_id="subtitle_vector_0002",
+                new_start=0.25,
+                new_end=0.75,
+                edge="square_left",
+                commit_boundary="release",
+                commit_source="neighbor_collision_split_required",
             )
 
         after_rows = project_segments_to_editor(project, include_analysis_candidates=False)

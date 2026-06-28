@@ -33,7 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Voice-Silence Magnet Parity
+## Current Handoff - 2026-06-28 NLE Neighbor Collision Guard
+
+### Scope
+
+- Continued the owner goal to import Taption-style subtitle segment editing contracts into the AI Subtitle Studio source-app NLE path.
+- Added release/commit-boundary validation coverage for neighbor collisions: direct caption move overlap, center commit-row overlap, split-required resize collision, and partial resize neighbor trim-to-boundary.
+- Added `tools/audit_nle_neighbor_collision.py` plus audit tests so the contract can be reproduced without changing runtime UI.
+- No UI layout/labels/colors/menus/popups, subtitle generation policy, STT/STT2/default-cache policy, persisted `.aissproj` NLE fields, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_neighbor_collision_guard_20260628/nle_neighbor_collision_guard.md`; ready `true`, checks `6/6`.
+- NAS HeyDealer preflight: `output/manual_verification/latest/nle_neighbor_collision_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media/SRT exist `true/true`, clipped reference rows `89`.
+- NAS HeyDealer current-head regression: `output/manual_verification/latest/nle_neighbor_collision_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_202739/benchmark_results.json`: accepted `true`, elapsed `94.953s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_neighbor_collision_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-202149-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-112236-neighbor-collision-validation-scout.md`
+- Dex classification: accepted the neighbor-collision direction, but narrowed implementation away from nonexistent `validate_segments`, UI redesign, persisted NLE fields, per-pixel writes, STT/default promotion, and App Store packaging.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_neighbor_collision.py tests/test_nle_neighbor_collision_audit.py tests/test_project_nle_dual_write.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_neighbor_collision_audit.py tests/test_project_nle_dual_write.py -k "neighbor_collision or overlap or center_overwrite_trim or split_required"` -> `9 passed, 33 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_neighbor_collision.py --output-dir output/manual_verification/latest/nle_neighbor_collision_guard_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_dual_write.py tests/test_nle_neighbor_collision_audit.py` -> `42 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_operations.py tests/test_project_nle_runtime_cutover.py -k "overlap or operation_journal or final_overlay or global_canvas or save_export"` -> `11 passed, 5 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --output-dir output/manual_verification/latest/nle_neighbor_collision_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_202739/benchmark_results.json`.
+- `./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_202739/benchmark_results.json --output-dir output/manual_verification/latest/nle_neighbor_collision_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_202739/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_neighbor_collision_nas_20260628` -> timeout detected `false`.
+
+### Known Notes
+
+- The NAS run is regression evidence only. It does not approve STT collect-cache promotion, model downgrade, STT2/word precision skipping, or quality-gate relaxation.
+- Persisted NLE disk fields, UI redesign, automatic relink UI/dialog behavior, per-pixel writes, QML/GPU default timeline surfaces, detector-threshold changes, App Store packaging/submission work, and STT/default-cache policy changes remain blocked until explicit owner approval and compatibility proof exist.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`, or return to the active STT2/word precision latency owner-review gate if the next owner request is generation-speed focused.
+
+## Previous Handoff - 2026-06-28 NLE Voice-Silence Magnet Parity
 
 ### Scope
 
