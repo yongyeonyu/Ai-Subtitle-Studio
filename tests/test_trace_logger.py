@@ -16,6 +16,7 @@ from core.runtime.temp_workspace import (
     cleanup_temp_workspace,
     ensure_temp_workspace,
     prune_temp_workspace,
+    prune_trace_package_directories,
     prune_trace_run_directories,
     temp_workspace_root,
     workspace_usage,
@@ -149,6 +150,50 @@ class TraceLoggerTests(unittest.TestCase):
 
         self.assertEqual(result["removed_count"], 3)
         self.assertEqual(remaining, ["run-3", "run-4"])
+
+    def test_collect_trace_package_prunes_old_packages_and_keeps_current_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = ensure_temp_workspace(tmp)
+            packages_dir = paths["Diagnostics/Packages"]
+            for index in range(5):
+                package_dir = packages_dir / f"AISSTrace-old-{index}"
+                package_dir.mkdir(parents=True)
+                (package_dir / "package_manifest.json").write_text("{}\n", encoding="utf-8")
+                os.utime(package_dir, (100 + index, 100 + index))
+            logger = TraceLogger(root=tmp, run_id="package-source")
+            self.assertTrue(logger.close())
+
+            manifest = collect_trace_package(
+                root=tmp,
+                run_id=logger.run_id,
+                package_name="AISSTrace-new",
+                max_packages=2,
+            )
+            remaining = sorted(path.name for path in packages_dir.iterdir() if path.is_dir())
+            saved_manifest = json.loads(
+                (packages_dir / "AISSTrace-new" / "package_manifest.json").read_text(encoding="utf-8")
+            )
+
+        self.assertLessEqual(len(remaining), 2)
+        self.assertIn("AISSTrace-new", remaining)
+        self.assertNotIn("AISSTrace-old-0", remaining)
+        self.assertGreater(int(manifest["package_retention"]["removed_count"]), 0)
+        self.assertEqual(saved_manifest["package_retention"]["after_package_count"], len(remaining))
+
+    def test_prune_trace_package_directories_keeps_newest_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = ensure_temp_workspace(tmp)
+            packages_dir = paths["Diagnostics/Packages"]
+            for index in range(5):
+                package_dir = packages_dir / f"AISSTrace-{index}"
+                package_dir.mkdir(parents=True)
+                os.utime(package_dir, (100 + index, 100 + index))
+
+            result = prune_trace_package_directories(tmp, max_packages=2)
+            remaining = sorted(path.name for path in packages_dir.iterdir() if path.is_dir())
+
+        self.assertEqual(result["removed_count"], 3)
+        self.assertEqual(remaining, ["AISSTrace-3", "AISSTrace-4"])
 
     def test_media_fingerprint_uses_bounded_identity_without_file_hashing(self):
         with tempfile.TemporaryDirectory() as tmp:

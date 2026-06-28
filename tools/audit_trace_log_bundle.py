@@ -13,7 +13,13 @@ import sys
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.runtime.temp_workspace import REQUIRED_SUBDIRECTORIES, ensure_temp_workspace, workspace_usage
+from core.runtime.temp_workspace import (
+    REQUIRED_SUBDIRECTORIES,
+    TRACE_PACKAGE_RETENTION_LIMIT,
+    ensure_temp_workspace,
+    package_workspace_dir,
+    workspace_usage,
+)
 import core.runtime.trace_logger as trace_logger_module
 from core.runtime.trace_logger import TRACE_MANIFEST_SCHEMA, TRACE_RUN_RETENTION_LIMIT, TRACE_SCHEMA, TraceLogger
 from core.cut_boundary import split_segments_by_cut_boundaries
@@ -86,11 +92,17 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
         media_path.write_bytes(b"bounded media identity fixture")
         paths = ensure_temp_workspace(workspace_root)
         runs_dir = paths["Diagnostics/Trace/runs"]
+        packages_dir = package_workspace_dir(workspace_root)
         for index in range(TRACE_RUN_RETENTION_LIMIT + 4):
             run_dir = runs_dir / f"old-run-{index:02d}"
             run_dir.mkdir(parents=True)
             (run_dir / "events.jsonl").write_text("{}\n", encoding="utf-8")
             run_dir.touch()
+        for index in range(TRACE_PACKAGE_RETENTION_LIMIT + 3):
+            package_dir = packages_dir / f"AISSTrace-old-{index:02d}"
+            package_dir.mkdir(parents=True)
+            (package_dir / "package_manifest.json").write_text("{}\n", encoding="utf-8")
+            package_dir.touch()
         logger = TraceLogger(
             root=workspace_root,
             run_id="trace-audit",
@@ -147,6 +159,7 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             root=workspace_root,
             run_id=logger.run_id,
             package_name="AISSTrace-audit",
+            max_packages=TRACE_PACKAGE_RETENTION_LIMIT,
         )
         logger.close(timeout_sec=2.0)
 
@@ -157,6 +170,7 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
         package_file_state = _package_files(package_dir)
         package_run_events = _read_jsonl(package_dir / "runs" / logger.run_id / "events.jsonl")
         retained_run_dirs = [path for path in runs_dir.iterdir() if path.is_dir()]
+        retained_package_dirs = [path for path in packages_dir.iterdir() if path.is_dir()]
 
         required_dirs_created = all(paths[relative].exists() for relative in REQUIRED_SUBDIRECTORIES)
         event_missing_fields = sorted({
@@ -194,6 +208,17 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             and (runs_dir / logger.run_id).exists()
             and not (runs_dir / "old-run-00").exists()
         )
+        package_retention = (
+            package_manifest.get("package_retention")
+            if isinstance(package_manifest.get("package_retention"), dict)
+            else {}
+        )
+        package_retention_ok = (
+            len(retained_package_dirs) <= TRACE_PACKAGE_RETENTION_LIMIT
+            and package_dir.exists()
+            and not (packages_dir / "AISSTrace-old-00").exists()
+            and int(package_retention.get("removed_count") or 0) > 0
+        )
         usage = workspace_usage(workspace_root)
         passed = (
             manifest.get("schema") == TRACE_MANIFEST_SCHEMA
@@ -208,6 +233,7 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             and bounded_media_fingerprint
             and package_complete
             and retention_ok
+            and package_retention_ok
             and not bool(trace_status.get("disabled"))
         )
         return {
@@ -233,6 +259,10 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             "retention_limit": TRACE_RUN_RETENTION_LIMIT,
             "retained_run_count": len(retained_run_dirs),
             "retention_removed_count": int(logger.retention_report.get("removed_count") or 0),
+            "package_retention_ok": package_retention_ok,
+            "package_retention_limit": TRACE_PACKAGE_RETENTION_LIMIT,
+            "retained_package_count": len(retained_package_dirs),
+            "package_retention_removed_count": int(package_retention.get("removed_count") or 0),
             "trace_disabled": bool(trace_status.get("disabled")),
             "trace_drop_counts": dict(trace_status.get("drop_counts") or {}),
             "workspace_file_count": int(usage.get("file_count") or 0),
@@ -264,6 +294,12 @@ def write_trace_log_bundle_audit(output_dir: Path, payload: dict[str, Any]) -> N
         f"- Retention ok: `{bool(payload.get('retention_ok'))}`",
         f"- Retained run count: `{payload.get('retained_run_count')}/{payload.get('retention_limit')}`",
         f"- Retention removed count: `{payload.get('retention_removed_count')}`",
+        f"- Package retention ok: `{bool(payload.get('package_retention_ok'))}`",
+        (
+            f"- Retained package count: `{payload.get('retained_package_count')}/"
+            f"{payload.get('package_retention_limit')}`"
+        ),
+        f"- Package retention removed count: `{payload.get('package_retention_removed_count')}`",
         f"- Trace disabled: `{bool(payload.get('trace_disabled'))}`",
         f"- Trace drop counts: `{payload.get('trace_drop_counts')}`",
         "",

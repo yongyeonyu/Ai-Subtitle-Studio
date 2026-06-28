@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from core.native_json import dumps_json_bytes
-from core.runtime.temp_workspace import ensure_temp_workspace, package_workspace_dir, trace_workspace_dir, workspace_usage
+from core.runtime.temp_workspace import (
+    TRACE_PACKAGE_RETENTION_LIMIT,
+    ensure_temp_workspace,
+    package_workspace_dir,
+    prune_trace_package_directories,
+    trace_workspace_dir,
+    workspace_usage,
+)
 
 
 def _stable_jsonl_bytes(src: Path) -> bytes:
@@ -49,6 +56,7 @@ def collect_trace_package(
     root: str | Path | None = None,
     run_id: str = "",
     package_name: str = "",
+    max_packages: int = TRACE_PACKAGE_RETENTION_LIMIT,
 ) -> dict[str, Any]:
     ensure_temp_workspace(root)
     trace_root = trace_workspace_dir(root)
@@ -83,10 +91,26 @@ def collect_trace_package(
         "run_id": run_id,
         "copied": copied,
         "usage": workspace_usage(root),
+        "package_retention": {},
     }
     (package_dir / "package_manifest.json").write_bytes(
         dumps_json_bytes(manifest, indent=2, sort_keys=True, append_newline=True)
     )
+    try:
+        package_dir.touch()
+    except OSError:
+        pass
+    try:
+        package_keep_count = max(1, int(max_packages))
+    except (TypeError, ValueError):
+        package_keep_count = TRACE_PACKAGE_RETENTION_LIMIT
+    retention = prune_trace_package_directories(root, max_packages=package_keep_count)
+    manifest["package_retention"] = retention
+    manifest["usage"] = workspace_usage(root)
+    if package_dir.exists():
+        (package_dir / "package_manifest.json").write_bytes(
+            dumps_json_bytes(manifest, indent=2, sort_keys=True, append_newline=True)
+        )
     return manifest
 
 
@@ -95,11 +119,18 @@ def main() -> int:
     parser.add_argument("--root", default="", help="Temporary workspace root override.")
     parser.add_argument("--run-id", default="", help="Optional trace run id to package.")
     parser.add_argument("--package-name", default="", help="Optional package directory name.")
+    parser.add_argument(
+        "--max-packages",
+        type=int,
+        default=TRACE_PACKAGE_RETENTION_LIMIT,
+        help="Maximum trace package directories to retain after collection.",
+    )
     args = parser.parse_args()
     manifest = collect_trace_package(
         root=args.root or None,
         run_id=args.run_id,
         package_name=args.package_name,
+        max_packages=args.max_packages,
     )
     print(dumps_json_bytes(manifest, indent=2, sort_keys=True).decode("utf-8"))
     return 0

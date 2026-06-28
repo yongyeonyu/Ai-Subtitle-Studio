@@ -30,6 +30,9 @@ def test_trace_log_bundle_audit_proves_nle_action_trace_contract():
     assert report["retention_ok"] is True
     assert report["retained_run_count"] <= report["retention_limit"]
     assert report["retention_removed_count"] > 0
+    assert report["package_retention_ok"] is True
+    assert report["retained_package_count"] <= report["package_retention_limit"]
+    assert report["package_retention_removed_count"] > 0
     assert report["trace_disabled"] is False
     assert report["trace_drop_counts"] == {}
     assert REQUIRED_MANIFEST_FIELDS
@@ -48,5 +51,6 @@ def test_trace_log_bundle_audit_writes_json_and_markdown_reports():
     assert "Trace Log Bundle Audit" in markdown
     assert "Frame precision ok: `True`" in markdown
     assert "Retention ok: `True`" in markdown
+    assert "Package retention ok: `True`" in markdown
     assert "| package_manifest | True |" in markdown
     assert '"passed": true' in saved_json

@@ -33,7 +33,44 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 Direct SRT Runtime NLE Precedence Contract
+## Current Handoff - 2026-06-28 Trace Package Retention Contract
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure by closing the Trace Log Bundle package-retention gap from `NLE_Action.md`.
+- Added `core/runtime/temp_workspace.py::prune_trace_package_directories(...)` with a bounded default of `10` package directories.
+- Updated `tools/collect_trace_package.py` so collecting an `AISSTrace-*` package prunes old package directories, keeps the current package, and records `package_retention` in `package_manifest.json`.
+- Strengthened `tools/audit_trace_log_bundle.py`, `tests/test_trace_logger.py`, and `tests/test_trace_log_bundle_audit.py` so trace run retention and package retention are both proven by the same diagnostic artifact.
+- No UI layout/labels/colors/menus/popups, subtitle generation, STT/STT2/default-cache policy, `.aissproj` persisted NLE fields, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/trace_package_retention_contract_20260628/trace_log_bundle_audit.md`
+- Passed `true`; required dirs `true`; manifest/event missing fields `none`; exact-frame precision `true`; confirmed cut trace `true`; bounded media fingerprint `true`; package complete `true`.
+- Trace run retention: `20/20`, removed count `5`.
+- Trace package retention: `10/10`, removed count `4`.
+- Trace disabled `false`, drop counts `{}`.
+- NAS HeyDealer generation validation was not run because this slice only touches trace/temp-workspace disk-management behavior and does not affect STT/VAD/subtitle generation/final rows.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-091806-trace-bundle-retention-scout.md`
+- Dex classification: accepted the retention direction and extended it narrowly from run retention evidence to package-directory retention, leaving UI/STT/NLE mutation/App Store behavior unchanged.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/runtime/temp_workspace.py tools/collect_trace_package.py tools/audit_trace_log_bundle.py tests/test_trace_log_bundle_audit.py tests/test_trace_logger.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py -k "trace_package or package_retention or trace_log_bundle or prune_trace_package or temp_workspace"` -> `9 passed, 11 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_trace_logger.py tests/test_trace_log_bundle_audit.py tests/test_startup_diagnostics.py tests/test_app_command_bridge.py -k "trace or diagnostic or open_media or open_project or package"` -> `27 passed, 74 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_trace_log_bundle.py --output-dir output/manual_verification/latest/trace_package_retention_contract_20260628` -> passed `true`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`.
+- For any generation-affecting or performance/default-cache step, use the available NAS HeyDealer first-180s MP4/SRT preflight plus strict acceptance and timeout audit again.
+- Treat persisted NLE disk fields, UI flow changes, project-storage relink schemas, per-pixel writes, QML/GPU default surfaces, detector-threshold changes, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes as blocked until explicit owner approval and compatibility proof exist.
+
+## Previous Handoff - 2026-06-28 Direct SRT Runtime NLE Precedence Contract
 
 ### Scope
 

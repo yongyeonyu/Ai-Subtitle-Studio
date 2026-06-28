@@ -98,6 +98,7 @@ Source section: `NLE_Action.md` Trace Log Bundle.
 1. Trace Log Bundle contract audit tooling was added. `tools/audit_trace_log_bundle.py` creates a bounded temporary trace run, verifies required temp directories, manifest/latest/events JSONL, exact-frame `fps_num`/`fps_den`, bounded media fingerprinting, trace package collection, and non-disabled trace status, then writes JSON/Markdown evidence.
 2. Trace run-directory retention was added under `core/runtime/temp_workspace.py` and invoked by `core/runtime/trace_logger.py` before creating a new trace run. The current policy keeps at most 20 trace run directories after a new run starts.
 3. Evidence: `output/manual_verification/latest/trace_log_bundle_retention_audit_20260628/trace_log_bundle_audit.md`; result `passed=true`, required dirs `true`, frame precision `true`, bounded media fingerprint `true`, package complete `true`, retention ok `true`, retained run count `20/20`, retention removed count `5`, trace disabled `false`, drop counts `{}`.
+4. Trace package-directory retention was added under `core/runtime/temp_workspace.py` and invoked by `tools/collect_trace_package.py` after package collection. The current policy keeps at most 10 `Diagnostics/Packages/AISSTrace-*` directories, preserves the current package, records the retention report in `package_manifest.json`, and keeps trace/package cleanup bounded without changing runtime UI/STT/NLE behavior. Evidence: `output/manual_verification/latest/trace_package_retention_contract_20260628/trace_log_bundle_audit.md`; result `passed=true`, package retention ok `true`, retained package count `10/10`, package retention removed count `4`, trace run retention still `20/20`, package complete `true`, and trace disabled `false`.
 
 ## NLE_Action Completed Workstream Baseline
 
@@ -106,7 +107,7 @@ Source section: previous `NLE_Action.md` current-status completed list.
 1. Domain contract and `NLESnapshot` baseline work completed.
 2. Roughcut exact-join markers, render/export parity, and save/reopen compatibility guards completed.
 3. Source-fps scout frame preservation completed.
-4. Temporary trace workspace and Trace Log Bundle contract audit plus run retention completed.
+4. Temporary trace workspace and Trace Log Bundle contract audit plus run/package retention completed.
 5. Preview/skimming cache ownership completed.
 6. The in-memory `NLEProjectState` editor/save owner pilot completed.
 7. Main timeline canvas read/projection cutover completed.

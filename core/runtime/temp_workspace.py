@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 TEMP_WORKSPACE_DIRNAME = "AISubtitleStudioTemporaryWorkspace"
+TRACE_PACKAGE_RETENTION_LIMIT = 10
 REQUIRED_SUBDIRECTORIES = (
     "Diagnostics/Trace",
     "Diagnostics/Trace/runs",
@@ -207,4 +208,49 @@ def prune_trace_run_directories(
         "after_run_count": after_count,
         "removed_count": len(removed),
         "removed_runs": removed,
+    }
+
+
+def prune_trace_package_directories(
+    root: str | Path | None = None,
+    *,
+    max_packages: int = TRACE_PACKAGE_RETENTION_LIMIT,
+) -> dict[str, Any]:
+    packages_dir = package_workspace_dir(root)
+    try:
+        keep_count = max(0, int(max_packages))
+    except (TypeError, ValueError):
+        keep_count = TRACE_PACKAGE_RETENTION_LIMIT
+    package_dirs: list[tuple[float, str, Path]] = []
+    if packages_dir.exists():
+        for candidate in packages_dir.iterdir():
+            try:
+                if not candidate.is_dir():
+                    continue
+                stat = candidate.stat()
+            except OSError:
+                continue
+            package_dirs.append((float(stat.st_mtime or 0.0), candidate.name, candidate))
+    before_count = len(package_dirs)
+    removed: list[str] = []
+    for _, _, path in sorted(package_dirs, key=lambda item: (item[0], item[1]))[: max(0, before_count - keep_count)]:
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
+        if not path.exists():
+            removed.append(path.name)
+    after_count = 0
+    try:
+        after_count = sum(1 for candidate in packages_dir.iterdir() if candidate.is_dir())
+    except OSError:
+        after_count = 0
+    return {
+        "root": str(temp_workspace_root(root)),
+        "packages_dir": str(packages_dir),
+        "max_packages": keep_count,
+        "before_package_count": before_count,
+        "after_package_count": after_count,
+        "removed_count": len(removed),
+        "removed_packages": removed,
     }
