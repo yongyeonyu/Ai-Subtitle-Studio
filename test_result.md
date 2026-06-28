@@ -1,5 +1,18 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## Completed Action Item Archive Separation - 2026-06-28 KST
+
+- 실행 모드: documentation-only action-item archive separation.
+- 결과: pass; completed action-item history is kept in `COMPLETED_ACTION_ITEMS.md`.
+- 수정 요약:
+  - `NLE_Action.md` no longer carries the completed-workstream list in its current status.
+  - `COMPLETED_ACTION_ITEMS.md` now includes `NLE_Action Completed Workstream Baseline`.
+  - `ACTION_ITEMS.md` was reviewed and already contained only active items, open gates, rollback rules, and archive pointers, so no content move was required there.
+  - No runtime behavior, UI/UX, subtitle generation, STT/STT2, word precision, save/load, render/export, packaging, signing, upload, notarization, App Store Connect state, or DMG behavior changed.
+- 검증:
+  - `rg -n "(?i)(^## |^### |status:|완료|completed|complete|done|archiv|moved out|removed from ACTION_ITEMS|no longer active|closed)" ACTION_ITEMS.md NLE_Action.md COMPLETED_ACTION_ITEMS.md` -> reviewed.
+  - `git diff --check -- ACTION_ITEMS.md COMPLETED_ACTION_ITEMS.md NLE_Action.md docs/HANDOFF.md test_result.md` -> pass.
+
 ## Mac App Store Submission Contents Audit - 2026-06-28 KST
 
 - 실행 모드: non-destructive App Store submission contents readiness audit; no packaging, signing, notarization, upload, tag, release, or DMG command was run.

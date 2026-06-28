@@ -3,7 +3,7 @@
 <!--
 Document-Version: 04.00.18-nle-action
 Phase: NLE_MUTABLE_OWNER_AND_CUT_ACCURACY
-Last-Updated: 2026-06-27
+Last-Updated: 2026-06-28
 Owner: Dex / Codex
 Purpose: Executable source of truth for the next NLE write-path, cut-boundary, preview, and trace-log slices.
 -->
@@ -19,8 +19,8 @@ This file is the execution source of truth for four connected workstreams:
 
 Current NLE status:
 
-- Done: domain contract, `NLESnapshot`, roughcut exact-join markers, render/export parity, save/reopen compatibility guards, source-fps scout frame preservation, temp trace workspace, Trace Log Bundle contract audit and run retention, preview/skimming cache ownership, the in-memory `NLEProjectState` editor/save owner pilot, the main timeline canvas read/projection cutover, known safe commit-boundary mutable sync sources, provisional cut-boundary `marker_edit`, and the persistence cutover audit matrix for all 11 current NLE dual-write operation families.
-- Not done yet: persisted NLE project fields are not approved, and per-pixel drag writes to NLE state remain explicitly out of scope. Additional runtime mutation sources require a fresh owner-map and focused audit before adoption.
+- Completed workstream history is archived in `COMPLETED_ACTION_ITEMS.md#nle-action-completed-workstream-baseline` and the related completed NLE sections in that file; this plan keeps only open status and future gates.
+- Open status: persisted NLE project fields are not approved, and per-pixel drag writes to NLE state remain explicitly out of scope. Additional runtime mutation sources require a fresh owner-map and focused audit before adoption.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 

@@ -73,6 +73,21 @@ Source section: `NLE_Action.md` Trace Log Bundle.
 2. Trace run-directory retention was added under `core/runtime/temp_workspace.py` and invoked by `core/runtime/trace_logger.py` before creating a new trace run. The current policy keeps at most 20 trace run directories after a new run starts.
 3. Evidence: `output/manual_verification/latest/trace_log_bundle_retention_audit_20260628/trace_log_bundle_audit.md`; result `passed=true`, required dirs `true`, frame precision `true`, bounded media fingerprint `true`, package complete `true`, retention ok `true`, retained run count `20/20`, retention removed count `5`, trace disabled `false`, drop counts `{}`.
 
+## NLE_Action Completed Workstream Baseline
+
+Source section: previous `NLE_Action.md` current-status completed list.
+
+1. Domain contract and `NLESnapshot` baseline work completed.
+2. Roughcut exact-join markers, render/export parity, and save/reopen compatibility guards completed.
+3. Source-fps scout frame preservation completed.
+4. Temporary trace workspace and Trace Log Bundle contract audit plus run retention completed.
+5. Preview/skimming cache ownership completed.
+6. The in-memory `NLEProjectState` editor/save owner pilot completed.
+7. Main timeline canvas read/projection cutover completed.
+8. Known safe commit-boundary mutable sync sources completed.
+9. Provisional cut-boundary `marker_edit` completed.
+10. Persistence cutover audit matrix for all 11 current NLE dual-write operation families completed.
+
 ## Source-App NLE Runtime Adoption And Migration Status
 
 Source sections: previous `ACTION_ITEMS.md` migration status and completed slices from `NLE Timeline Canvas State Ownership: Commit-Boundary Mutable Sync`.

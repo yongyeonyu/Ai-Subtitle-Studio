@@ -33,7 +33,31 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 App Store Submission Contents Audit
+## Current Handoff - 2026-06-28 Completed Action Item Archive Separation
+
+### Scope
+
+- Honored the owner request to keep completed action items in a separate file.
+- Confirmed `ACTION_ITEMS.md` already contains only active items, open gates, rollback rules, and archive pointers.
+- Removed the completed-workstream list from `NLE_Action.md` and moved that baseline into `COMPLETED_ACTION_ITEMS.md`.
+- No runtime behavior, UI/UX, subtitle generation, STT/STT2, word precision, save/load, render/export, packaging, signing, upload, notarization, App Store Connect state, or DMG behavior changed.
+
+### Verification
+
+- `rg -n "(?i)(^## |^### |status:|완료|completed|complete|done|archiv|moved out|removed from ACTION_ITEMS|no longer active|closed)" ACTION_ITEMS.md NLE_Action.md COMPLETED_ACTION_ITEMS.md` -> reviewed.
+- `git diff --check -- ACTION_ITEMS.md COMPLETED_ACTION_ITEMS.md NLE_Action.md docs/HANDOFF.md test_result.md` -> pass.
+
+### Results
+
+- `COMPLETED_ACTION_ITEMS.md#nle-action-completed-workstream-baseline` now owns the previous `NLE_Action.md` completed baseline.
+- `NLE_Action.md` now keeps only open NLE status plus the completed archive pointer.
+- `ACTION_ITEMS.md` required no content move; completed summaries were already separated there.
+
+### Next Recommended Action
+
+- Continue from `ACTION_ITEMS.md` active queue. STT cache default promotion still waits for NAS HeyDealer real-media write/hit backfill, and App Store packaging/signing/upload remains owner-gated.
+
+## Previous Handoff - 2026-06-28 App Store Submission Contents Audit
 
 ### Scope
 
