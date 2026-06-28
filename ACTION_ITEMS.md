@@ -150,6 +150,7 @@ Rollback:
 - Keep the current Python/PyQt6 source app as the working product line.
 - Source-app NLE runtime adoption archive: `COMPLETED_ACTION_ITEMS.md#source-app-nle-runtime-adoption-and-migration-status`; the current commit-boundary mutable timeline sync item is complete for known safe existing-family release/commit sources.
 - Persisted NLE project fields remain gated. The latest safe persistence/save/render/export cleanup strengthened the cutover audit with provisional `marker_edit` save/reopen coverage and render/export parity gates at `output/manual_verification/latest/nle_marker_edit_persistence_gate_20260628/nle_persistence_cutover_audit.md`; any actual persisted NLE disk-format change still requires a fresh compatibility gate and explicit owner approval.
+- Latest NLE runtime owner-map audit: `output/manual_verification/latest/nle_runtime_owner_map_audit_20260628/nle_runtime_owner_map_audit.md`; current release/commit mutation owners are covered `23/23` across `11` NLE operation families, runtime change applied `false`, and the next gate before adopting any new mutation source remains fresh owner-map plus Taption release-commit/no-per-pixel-write/final-overlap/global-canvas/save-reopen proof.
 - Revisit migration only if the owner explicitly reopens it with a new scope and acceptance gate.
 
 ## Parked Candidates

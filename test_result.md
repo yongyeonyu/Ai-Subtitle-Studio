@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Runtime Owner Map Audit - 2026-06-28 KST
+
+- 실행 모드: source-app NLE runtime mutation owner-map audit; no runtime behavior change.
+- 결과: pass; current release/commit NLE mutation owners are covered `23/23`.
+- 저장 위치:
+  - Report: `output/manual_verification/latest/nle_runtime_owner_map_audit_20260628/nle_runtime_owner_map_audit.md`
+  - JSON: `output/manual_verification/latest/nle_runtime_owner_map_audit_20260628/nle_runtime_owner_map_audit.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-105700-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-105800-nle-next-safe-slice-scout.md`
+- 수정 요약:
+  - Added `tools/audit_nle_runtime_owner_map.py`.
+  - Added `tests/test_nle_runtime_owner_map_audit.py`.
+  - The audit checks 23 release/commit owners across 11 NLE operation families and reports blocked candidates for persisted NLE project fields, per-pixel NLE writes, and QML/GPU timeline default surfaces.
+  - No runtime editor behavior, STT/STT2, subtitle timing, UI/UX, save-file format, persisted NLE disk fields, packaging, signing, upload, notarization, App Store Connect, or DMG behavior changed.
+- 실제 감사 결과:
+  - `runtime_owner_map_ready=true`.
+  - `runtime_change_applied=false`.
+  - `covered_owner_count=23`, `missing_owner_count=0`.
+  - Operation families: `candidate_confirm`, `caption_delete`, `caption_merge`, `caption_move`, `caption_range_replace`, `caption_resize`, `caption_split`, `caption_text_edit`, `gap_delete`, `gap_generate`, `marker_edit`.
+  - Next adoption gate requires fresh owner-map plus Taption release-commit/no-per-pixel-write/final-overlap/global-canvas/save-reopen proof.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_runtime_owner_map.py tests/test_nle_runtime_owner_map_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_owner_map_audit.py` -> `3 passed`.
+  - `./venv/bin/python tools/audit_nle_runtime_owner_map.py --output-dir output/manual_verification/latest/nle_runtime_owner_map_audit_20260628` -> pass.
+
 ## STT Cache Tail-Bound Fix And Real-Media Backfill Acceptance - 2026-06-28 KST
 
 - 실행 모드: NAS HeyDealer first-180s representative real-media collect-cache write/hit replay after benchmark-window projection repair.

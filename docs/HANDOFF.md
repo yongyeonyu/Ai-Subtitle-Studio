@@ -33,6 +33,42 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Runtime Owner Map Audit
+
+### Scope
+
+- Continued the owner goal to push AI Subtitle Studio toward a source-app NLE editor structure while preserving Taption editing contracts.
+- Added a non-destructive NLE runtime owner-map audit: `tools/audit_nle_runtime_owner_map.py`.
+- Added focused tests: `tests/test_nle_runtime_owner_map_audit.py`.
+- No runtime editor behavior, STT/STT2, subtitle timing, UI/UX labels/layout/colors/shortcuts/menus/popups, save file format, persisted NLE disk fields, per-pixel drag writes, packaging, signing, upload, notarization, App Store Connect, or DMG behavior changed.
+
+### Results
+
+- Evidence: `output/manual_verification/latest/nle_runtime_owner_map_audit_20260628/nle_runtime_owner_map_audit.md`
+- Runtime owner map ready: `true`.
+- Runtime change applied: `false`.
+- Covered owners: `23/23`.
+- Operation families covered: `candidate_confirm`, `caption_delete`, `caption_merge`, `caption_move`, `caption_range_replace`, `caption_resize`, `caption_split`, `caption_text_edit`, `gap_delete`, `gap_generate`, `marker_edit`.
+- Blocked candidates remain explicit: persisted NLE project fields, per-pixel NLE writes, and QML/GPU timeline default surface changes.
+- Next adoption gate for any new mutation source: fresh owner-map, Taption release-commit contract, no per-pixel NLE write, final invalid/non-monotonic/overlap `0`, global max-active `<=1`, and save/reopen identity preservation.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-105700-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-105800-nle-next-safe-slice-scout.md`
+- Dex classification: partially accept as next-candidate guidance. Jammini recommended an adapter/cache consistency audit; Dex completed the stronger prerequisite owner-map audit first and left adapter/cache consistency as a possible future non-destructive slice, not as completed work.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_runtime_owner_map.py tests/test_nle_runtime_owner_map_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_runtime_owner_map_audit.py` -> `3 passed`.
+- `./venv/bin/python tools/audit_nle_runtime_owner_map.py --output-dir output/manual_verification/latest/nle_runtime_owner_map_audit_20260628` -> pass.
+
+### Next Recommended Action
+
+- Keep persisted NLE disk fields and per-pixel drag writes blocked until explicit owner approval and compatibility proof exist.
+- A safe follow-up candidate is a read-only NLE adapter/cache consistency audit, but it should first identify concrete cache/runtime owners in current code instead of assuming an adapter leak.
+
 ## Current Handoff - 2026-06-28 STT Cache Tail-Bound Fix And Real-Media Backfill Acceptance
 
 ### Scope

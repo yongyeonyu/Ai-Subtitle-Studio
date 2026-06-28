@@ -21,6 +21,7 @@ Current NLE status:
 
 - Completed workstream history is archived in `COMPLETED_ACTION_ITEMS.md#nle-action-completed-workstream-baseline` and the related completed NLE sections in that file; this plan keeps only open status and future gates.
 - Open status: persisted NLE project fields are not approved, and per-pixel drag writes to NLE state remain explicitly out of scope. Additional runtime mutation sources require a fresh owner-map and focused audit before adoption.
+- Latest owner-map audit: `output/manual_verification/latest/nle_runtime_owner_map_audit_20260628/nle_runtime_owner_map_audit.md`; current release/commit NLE runtime mutation owners are covered `23/23`, runtime behavior changed `false`, and blocked candidates remain persisted NLE disk fields, per-pixel NLE writes, and QML/GPU timeline default surface changes.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
