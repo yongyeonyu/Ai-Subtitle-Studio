@@ -284,6 +284,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_whe
 
 Acceptance requires audit `ready=true`, viewport-only contract `true`, model/NLE writes allowed `false/false`, forbidden wheel-method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after wheel interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows.
 
+## NLE playhead jump isolation validation
+
+Timeline/global-canvas playhead jump changes must prove they update only scrub/playhead/preview state in the immediate path. They must not validate or rewrite primary subtitle rows, append runtime NLE operation journals, save projects, run STT/LLM/backend model checks, or change UI layout/labels/menus.
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_playhead_jump_isolation.py tests/test_timeline_playhead_jump_isolation.py tests/test_nle_playhead_jump_isolation_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_jump_isolation.py tests/test_nle_playhead_jump_isolation_audit.py
+./venv/bin/python tools/audit_nle_playhead_jump_isolation.py --output-dir output/manual_verification/latest/nle_playhead_jump_isolation_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, playhead-jump view-only contract `true`, model validation/project save/NLE writes allowed `false/false/false`, forbidden method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after playhead-jump interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.

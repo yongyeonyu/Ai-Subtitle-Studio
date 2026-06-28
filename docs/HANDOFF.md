@@ -33,6 +33,40 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Playhead Jump Isolation Guard
+
+### Scope
+
+- Added focused tests and static audit for global minimap click, timeline global seek, and editor scrub as immediate view/playhead-only paths.
+- Updated `tests/test_timeline_playhead_jump_isolation.py`, `tools/audit_nle_playhead_jump_isolation.py`, `tests/test_nle_playhead_jump_isolation_audit.py`, NLE/status docs, and completed action history.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, subtitle generation, final rows, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_playhead_jump_isolation_20260628/nle_playhead_jump_isolation.md`
+- `ready=true`; playhead-jump view-only contract `true`.
+- Model validation allowed `false`; project save allowed `false`; NLE write allowed `false`.
+- Method contracts cover `GlobalCanvas.mousePressEvent`, `TimelineWidget._on_global_seek`, and `EditorTimelineVideoMixin._on_scrub`; forbidden calls/assignments are `0`.
+- Focused tests prove global minimap click and timeline global seek preserve canvas/global subtitle rows and do not append runtime NLE operation journals or save projects.
+- Focused editor scrub test proves the immediate path updates timeline playhead plus lightweight preview seek without subtitle validation/rescan, dirty marking, timing mutation, or dual-write calls.
+- NAS HeyDealer generation validation was not run because this view/playhead-only slice does not touch STT/VAD/subtitle generation/final rows.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-165700-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: accepted with narrower scope as test/audit hardening only. The scout's absolute `0.5ms` timing gate was not adopted because it is environment-dependent; the landed guard uses state/call-path isolation instead.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_playhead_jump_isolation.py tests/test_timeline_playhead_jump_isolation.py tests/test_nle_playhead_jump_isolation_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_jump_isolation.py tests/test_nle_playhead_jump_isolation_audit.py` -> `5 passed`.
+- `./venv/bin/python tools/audit_nle_playhead_jump_isolation.py --output-dir output/manual_verification/latest/nle_playhead_jump_isolation_20260628` -> ready `true`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md`, using owner-map/audit proof before adopting any new mutation source.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Viewport Zoom Decoupling Guard
 
 ### Scope

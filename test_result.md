@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Playhead Jump Isolation Guard - 2026-06-28 KST
+
+- 실행 모드: source-app NLE global minimap click / global seek / editor scrub immediate-path contract guard.
+- 결과: pass for preserving canvas/global subtitle rows, avoiding runtime NLE operation journal appends, avoiding project saves, and keeping the immediate scrub path out of subtitle validation/rescan, dirty marking, timing mutation, and dual-write calls. No UI/UX layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, subtitle generation, final rows, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_playhead_jump_isolation_20260628/nle_playhead_jump_isolation.md`
+  - Audit JSON: `output/manual_verification/latest/nle_playhead_jump_isolation_20260628/nle_playhead_jump_isolation.json`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-165700-next-nle-taption-runtime-contract-scout.md`
+- 실제 결과:
+  - Audit `ready=true`.
+  - Playhead-jump view-only contract `true`.
+  - Model validation/project save/NLE writes allowed `false/false/false`.
+  - Method contracts: `GlobalCanvas.mousePressEvent`, `TimelineWidget._on_global_seek`, `EditorTimelineVideoMixin._on_scrub`.
+  - Forbidden calls/assignments `0`.
+  - Focused tests prove global minimap click and timeline global seek preserve subtitle rows, and editor scrub updates playhead plus lightweight preview seek without immediate validation/save/NLE write calls.
+- NAS 상태:
+  - Not run. This is a view/playhead-only timeline contract and does not touch STT/VAD/subtitle generation/final rows.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_playhead_jump_isolation.py tests/test_timeline_playhead_jump_isolation.py tests/test_nle_playhead_jump_isolation_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_jump_isolation.py tests/test_nle_playhead_jump_isolation_audit.py` -> `5 passed`.
+  - `./venv/bin/python tools/audit_nle_playhead_jump_isolation.py --output-dir output/manual_verification/latest/nle_playhead_jump_isolation_20260628` -> ready `true`.
+
 ## NLE Viewport Zoom Decoupling Guard - 2026-06-28 KST
 
 - 실행 모드: source-app NLE viewport-only wheel zoom/global scroll contract guard.

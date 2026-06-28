@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-165700-next-nle-taption-runtime-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-164700-next-nle-taption-runtime-contract-scout.md`
 - `.agents/sentinel/handoffs/20260628-163300-nle-preview-skimming-cache-miss-prep.md`
 - `.agents/sentinel/handoffs/20260628-161800-next-nle-taption-ux-scout.md`
