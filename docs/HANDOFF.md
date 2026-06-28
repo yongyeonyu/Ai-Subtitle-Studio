@@ -33,6 +33,39 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Time Window View Decoupling Guard
+
+### Scope
+
+- Added focused tests and static audit for fit-to-view, scheduled fit, explicit time-window display, and saved-preference edit-window display as viewport-only paths.
+- Updated `tests/test_timeline_time_window_decoupling.py`, `tools/audit_nle_time_window_view_decoupling.py`, `tests/test_nle_time_window_view_decoupling_audit.py`, NLE/status docs, and completed action history.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, subtitle generation, final rows, persisted NLE disk-format, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_time_window_view_decoupling_20260628/nle_time_window_view_decoupling.md`
+- `ready=true`; view-window-only contract `true`.
+- Model validation allowed `false`; project save allowed `false`; NLE write allowed `false`.
+- Method contracts cover `TimelineWidget.fit_to_view`, `TimelineWidget.schedule_fit_to_view`, `TimelineTimeWindowMixin.show_time_window_seconds`, `TimelineTimeWindowMixin._apply_edit_window_seconds`, and `TimelineTimeWindowMixin.show_ten_second_edit_window`; forbidden calls/assignments are `0`.
+- Focused tests prove fit-to-view and explicit/saved time-window controls preserve canvas/global subtitle rows and do not append runtime NLE operation journals or save projects.
+- NAS HeyDealer generation validation was not run because this view-window-only slice does not touch STT/VAD/subtitle generation/final rows.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-070859-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: deferred the scout's double-click full-repaint suppression candidate because repaint suppression overlaps prior dirty-rect/repaint lessons. Landed a narrower time-window/fit-to-view decoupling guard instead.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_time_window_view_decoupling.py tests/test_timeline_time_window_decoupling.py tests/test_nle_time_window_view_decoupling_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_time_window_decoupling.py tests/test_nle_time_window_view_decoupling_audit.py` -> `4 passed`.
+- `./venv/bin/python tools/audit_nle_time_window_view_decoupling.py --output-dir output/manual_verification/latest/nle_time_window_view_decoupling_20260628` -> ready `true`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md`, using owner-map/audit proof before adopting any new mutation source.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, App Store packaging/submission work, and STT/default-cache policy changes blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Playhead Jump Isolation Guard
 
 ### Scope

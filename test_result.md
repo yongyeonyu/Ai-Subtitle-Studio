@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Time Window View Decoupling Guard - 2026-06-28 KST
+
+- 실행 모드: source-app NLE fit-to-view / time-window viewport-only contract guard.
+- 결과: pass for preserving canvas/global subtitle rows, avoiding runtime NLE operation journal appends, avoiding project saves, and keeping fit/time-window paths out of subtitle validation/rescan and timing mutation calls. No UI/UX layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, subtitle generation, final rows, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_time_window_view_decoupling_20260628/nle_time_window_view_decoupling.md`
+  - Audit JSON: `output/manual_verification/latest/nle_time_window_view_decoupling_20260628/nle_time_window_view_decoupling.json`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-070859-next-nle-taption-runtime-contract-scout.md`
+- 실제 결과:
+  - Audit `ready=true`.
+  - View-window-only contract `true`.
+  - Model validation/project save/NLE writes allowed `false/false/false`.
+  - Method contracts: `TimelineWidget.fit_to_view`, `TimelineWidget.schedule_fit_to_view`, `TimelineTimeWindowMixin.show_time_window_seconds`, `TimelineTimeWindowMixin._apply_edit_window_seconds`, `TimelineTimeWindowMixin.show_ten_second_edit_window`.
+  - Forbidden calls/assignments `0`.
+  - Focused tests prove fit-to-view and explicit/saved time-window controls preserve subtitle rows and avoid project save/NLE journal calls.
+- NAS 상태:
+  - Not run. This is a view-window-only timeline contract and does not touch STT/VAD/subtitle generation/final rows.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_time_window_view_decoupling.py tests/test_timeline_time_window_decoupling.py tests/test_nle_time_window_view_decoupling_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_time_window_decoupling.py tests/test_nle_time_window_view_decoupling_audit.py` -> `4 passed`.
+  - `./venv/bin/python tools/audit_nle_time_window_view_decoupling.py --output-dir output/manual_verification/latest/nle_time_window_view_decoupling_20260628` -> ready `true`.
+
 ## NLE Playhead Jump Isolation Guard - 2026-06-28 KST
 
 - 실행 모드: source-app NLE global minimap click / global seek / editor scrub immediate-path contract guard.

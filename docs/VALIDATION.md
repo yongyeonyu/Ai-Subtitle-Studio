@@ -296,6 +296,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_pla
 
 Acceptance requires audit `ready=true`, playhead-jump view-only contract `true`, model validation/project save/NLE writes allowed `false/false/false`, forbidden method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after playhead-jump interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows.
 
+## NLE time-window view decoupling validation
+
+Timeline fit-to-view and time-window controls must prove they update only viewport scale, scroll, global viewport, and overlay sync state. They must not validate or rewrite primary subtitle rows, append runtime NLE operation journals, save projects, run STT/LLM/backend model checks, or change UI layout/labels/menus.
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_time_window_view_decoupling.py tests/test_timeline_time_window_decoupling.py tests/test_nle_time_window_view_decoupling_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_time_window_decoupling.py tests/test_nle_time_window_view_decoupling_audit.py
+./venv/bin/python tools/audit_nle_time_window_view_decoupling.py --output-dir output/manual_verification/latest/nle_time_window_view_decoupling_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, view-window-only contract `true`, model validation/project save/NLE writes allowed `false/false/false`, forbidden method calls/assignments `0`, and focused tests proving canvas/global subtitle rows are unchanged after fit/time-window interactions. NAS HeyDealer generation validation is not required unless the slice touches STT/VAD/subtitle generation or final subtitle rows.
+
 ## Project IO trace validation
 
 Project save/load trace changes should prove best-effort trace events without raw path leakage, runtime NLE state hydration on read, and clean legacy storage on write.

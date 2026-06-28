@@ -70,6 +70,8 @@ Timeline wheel zoom and global-canvas wheel scroll are viewport-only interaction
 
 Global minimap click, `TimelineWidget._on_global_seek`, and `EditorTimelineVideoMixin._on_scrub` are immediate playhead-jump paths. They may emit scrub/playhead updates, center the viewport, and use lightweight preview seek, but they must not validate or rewrite primary subtitle rows, append NLE operation journals, save projects, run STT/LLM/backend model checks, or change UI layout.
 
+Timeline fit-to-view and time-window controls are viewport-window interactions. `TimelineWidget.fit_to_view`, `TimelineWidget.schedule_fit_to_view`, and `TimelineTimeWindowMixin` time-window helpers may update pixels-per-second, canvas width, scrollbar position, global viewport, playhead overlay sync, and view-lock flags, but they must not validate or rewrite primary subtitle rows, append NLE operation journals, save projects, or trigger editor mutation commit paths.
+
 ## Data/project layer
 
 프로젝트 저장/복원 경계는 주로 `core/project/`에 있습니다.
