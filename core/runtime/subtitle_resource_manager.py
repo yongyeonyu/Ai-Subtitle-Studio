@@ -2,7 +2,99 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.performance import hardware_profile, runtime_scheduler_reserve_cores
 from core.runtime.setting_utils import setting_bool
+
+LIVE_NLE_PROJECTION_BUDGET_SCHEMA = "ai_subtitle_studio.live_nle_projection_budget.v1"
+_FOREGROUND_ACTION_LABELS = {"save", "export", "close", "exit", "shutdown", "cleanup"}
+
+
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _deduped_labels(values: Any) -> list[str]:
+    labels: list[str] = []
+    for item in list(values or []):
+        label = str(item or "").strip().lower()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def live_nle_projection_scheduler_budget(
+    settings: dict[str, Any] | None = None,
+    *,
+    active_labels: list[str] | tuple[str, ...] | None = None,
+    runtime_resource: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the read-only live NLE projection budget.
+
+    Live STT/VAD/NLE track visibility is a UI/status projection layer. It must
+    not request worker threads from the subtitle conversion path; it should use
+    existing row snapshots, coalesce status updates, and drop stale preview
+    frames when the runtime is busy.
+    """
+    data = dict(settings or {})
+    resource = dict(runtime_resource or {})
+    labels = _deduped_labels(active_labels or resource.get("active_labels") or [])
+    exit_active = "exit" in labels
+    pressure_stage = str(
+        resource.get("pressure_stage")
+        or resource.get("memory_pressure_stage")
+        or "normal"
+    ).strip().lower()
+    try:
+        profile = dict(hardware_profile() or {})
+    except Exception:
+        profile = {}
+    logical = max(1, _int_value(profile.get("logical_cores"), 1))
+    configured_reserve = max(
+        0,
+        _int_value(
+            runtime_scheduler_reserve_cores(
+                data,
+                task="subtitle_prepass",
+                exiting=exit_active or pressure_stage == "exit",
+            ),
+            0,
+        ),
+    )
+    required_reserve = 0 if exit_active or pressure_stage == "exit" else (1 if logical > 1 else 0)
+    interactive_reserve = max(configured_reserve, required_reserve)
+    available_worker_budget = max(1, logical - interactive_reserve)
+    foreground_labels = [label for label in labels if label in _FOREGROUND_ACTION_LABELS]
+    pressure_throttled = pressure_stage in {"warning", "critical", "exit"}
+    projection_allowed = pressure_stage not in {"critical", "exit"} and "exit" not in labels
+    coalesce_interval_ms = 900 if (foreground_labels or pressure_throttled) else 450
+    return {
+        "schema": LIVE_NLE_PROJECTION_BUDGET_SCHEMA,
+        "projection_allowed": bool(projection_allowed),
+        "projection_mode": "coalesced_snapshot",
+        "dedicated_worker_count": 0,
+        "max_projection_workers": 0,
+        "uses_existing_row_snapshots": True,
+        "shares_subtitle_worker_pool": False,
+        "coalesces_updates": True,
+        "drops_stale_preview_frames": True,
+        "coalesce_interval_ms": int(coalesce_interval_ms),
+        "interactive_reserve_cores": int(interactive_reserve),
+        "required_interactive_reserve_cores": int(required_reserve),
+        "available_worker_budget": int(available_worker_budget),
+        "pressure_stage": pressure_stage or "normal",
+        "active_labels": labels,
+        "foreground_action_labels": foreground_labels,
+        "foreground_action_active": bool(foreground_labels),
+        "vad_audio_prep_worker_cap": min(2, available_worker_budget),
+        "stt1_policy": "current_high_quality_native_path",
+        "stt2_policy": "selective_quality_preserving_budget",
+        "word_precision_policy": "selective_quality_preserving_budget",
+        "accelerator_terms": ["ANE", "GPU", "CPU"],
+        "quality_policy": "final_authority_unchanged",
+    }
 
 
 def apple_m_accelerator_flag_report(settings: dict[str, Any] | None) -> dict[str, bool]:
@@ -148,12 +240,26 @@ def active_runtime_labels_from_window(window: Any, *, exit_mode: bool = False) -
                 labels.append("editor")
             if editor is not None and bool(getattr(editor, "_stt_mode_enabled", False)):
                 labels.append("stt")
+            if editor is not None and bool(getattr(editor, "_stt_vad_running", False)):
+                labels.append("vad")
             if editor is not None and subtitle_llm_runtime_active(editor):
                 labels.append("subtitle_llm")
             if editor is not None and subtitle_optimize_runtime_active(editor):
                 labels.append("subtitle_optimize")
             if editor is not None and roughcut_llm_runtime_active(editor):
                 labels.append("roughcut_llm")
+            if editor is not None and (
+                bool(getattr(editor, "_deferred_project_save_pending", False))
+                or bool(getattr(editor, "_deferred_project_save_running", False))
+            ):
+                labels.append("save")
+            if editor is not None and (
+                bool(getattr(editor, "_auto_export_video_running", False))
+                or bool(getattr(editor, "_subtitle_overlay_export_running", False))
+            ):
+                labels.append("export")
+            if editor is not None and bool(getattr(editor, "_editor_widget_closing", False)):
+                labels.append("close")
         except Exception:
             pass
     if exit_mode:
@@ -166,9 +272,11 @@ def active_runtime_labels_from_window(window: Any, *, exit_mode: bool = False) -
 
 
 __all__ = [
+    "LIVE_NLE_PROJECTION_BUDGET_SCHEMA",
     "active_runtime_labels_from_window",
     "apple_m_accelerator_flag_report",
     "cut_boundary_runtime_active",
+    "live_nle_projection_scheduler_budget",
     "mixed_accelerator_parallelism_floor",
     "normalize_accelerator_name",
     "roughcut_llm_runtime_active",

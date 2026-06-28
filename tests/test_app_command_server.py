@@ -12,6 +12,7 @@ from core.automation.app_command_protocol import (
     encode_command_result,
 )
 from core.automation.app_command_server import LocalAppCommandServer
+from core.runtime.subtitle_resource_manager import LIVE_NLE_PROJECTION_BUDGET_SCHEMA
 from core.runtime.stage_metrics import reset_stage_metrics, snapshot_stage_metrics
 
 
@@ -174,7 +175,23 @@ class LocalAppCommandServerTests(unittest.TestCase):
                         "subtitle_preview": 0,
                         "final": 3,
                     },
-                    "runtime_resource": {"pressure_stage": "normal", "rss_gb": 0.42},
+                    "runtime_resource": {
+                        "pressure_stage": "normal",
+                        "rss_gb": 0.42,
+                        "live_nle_projection_budget": {
+                            "schema": LIVE_NLE_PROJECTION_BUDGET_SCHEMA,
+                            "projection_allowed": True,
+                            "dedicated_worker_count": 0,
+                            "max_projection_workers": 0,
+                            "shares_subtitle_worker_pool": False,
+                            "coalesce_interval_ms": 450,
+                            "interactive_reserve_cores": 1,
+                            "quality_policy": "final_authority_unchanged",
+                            "active_labels": ["pipeline", "stt", "raw label should stay short"],
+                            "foreground_action_labels": [],
+                            "debug_blob": "x" * 2000,
+                        },
+                    },
                     "recent_logs": huge_logs,
                     "recent_stage_logs": huge_logs,
                 },
@@ -195,6 +212,13 @@ class LocalAppCommandServerTests(unittest.TestCase):
         )
         self.assertNotIn("nle_runtime_tracks", result["data"])
         self.assertNotIn("raw should be dropped", str(result["data"]))
+        budget = result["data"]["runtime_resource"]["live_nle_projection_budget"]
+        self.assertEqual(budget["schema"], LIVE_NLE_PROJECTION_BUDGET_SCHEMA)
+        self.assertEqual(budget["dedicated_worker_count"], 0)
+        self.assertFalse(budget["shares_subtitle_worker_pool"])
+        self.assertEqual(budget["interactive_reserve_cores"], 1)
+        self.assertEqual(budget["quality_policy"], "final_authority_unchanged")
+        self.assertNotIn("debug_blob", budget)
         self.assertLess(len(encode_command_result(result)), 8192)
         self.assertLess(len(result["data"]["recent_logs"]), len(huge_logs))
 

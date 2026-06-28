@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.04-source-app
+Document-Version: 04.01.05-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.04`
-- Latest release checkpoint: `v04.01.04`
+- App version in code: `04.01.05`
+- Latest release checkpoint: `v04.01.05`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -234,19 +234,17 @@ Completed item rule:
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
-  - `v04.01.04` - source-app G3 compact live status feed, UDP compact count preservation, 04.01.04 version/schema bump, and release docs.
+  - `v04.01.05` - source-app G3 live NLE projection scheduler-budget telemetry, runtime resource status preservation, 04.01.05 version/schema bump, and release docs.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.04`:
-  - version/schema direct assert: `APP_VERSION=04.01.04`, `PROJECT_SCHEMA_VERSION=04.01.04`
-  - compact status/feed subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py` -> `106 passed`
-  - App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`
-  - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`
-  - Jammini probe: `.agents/sentinel/handoffs/20260629-012024-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
-  - Jammini compact-feed review: `.agents/sentinel/handoffs/20260628-232716-g3-compact-status-feed-review-jammini.md` -> `DEX_REVIEW_READY`
-  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused compact-status `v04.01.04` checkpoint.
+- Latest focused guard set for `v04.01.05`:
+  - scheduler-budget telemetry subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_resource_manager.py tests/test_runtime_multi_process.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> `135 passed`
+  - expanded G3 guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py tests/test_runtime_multi_process.py tests/test_subtitle_resource_manager.py tests/test_action_item_runtime_services.py tests/test_runtime_stage_metrics.py tests/test_project_nle_render_export_parity.py tests/test_subtitle_global_canvas_facade.py` -> `171 passed`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-013822-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
+  - Jammini scheduler-budget review: `.agents/sentinel/handoffs/20260628-234452-nle-g3-scheduler-budget-telemetry-review-jammini.md` -> `DEX_REVIEW_READY`
+  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused scheduler-budget `v04.01.05` checkpoint.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`
@@ -259,7 +257,9 @@ Completed item rule:
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
-- Current active item: `STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim`.
+- Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
+- Latest completed action-item slice: `v04.01.05 G3 Live NLE Projection Scheduler Budget Telemetry`.
+- Current G1 latency evidence snapshot:
   - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
   - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
   - strict acceptance gate follow-up: `output/manual_verification/latest/generated_video_strict_acceptance_gate_20260628/reference_benchmark_acceptance.md`
@@ -465,15 +465,16 @@ Use `docs/planning_queue/ACTION_ITEMS.md` as the executable queue. The current n
 
 1. Continue only after reading the G3 current baseline and `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040103-g3-runtime-nle-lane-owner-map--final-authority-guard`.
 2. Also read `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040104-g3-compact-live-status-feed`.
-3. The completed first two G3 slices establish read-only runtime track metadata, final-authority guards, and compact status/ping count exposure. They do not add visible UI strips, scheduler changes, persisted disk-format cutover, STT2 skipping, or cache default promotion.
-4. Next safe slice is scheduler budget enforcement or visual/runtime proof, with app command responsiveness and no raw status payload leakage as hard gates.
-5. Preserve final authority: VAD/STT runtime rows must not enter final overlay, global canvas final rows, save/export rows, or persisted compatibility rows.
-6. If widening into visible timeline/global-canvas UI, require a fresh owner-approved UI scope, screenshots or automation snapshots, and proof that app commands, cancel/quit, save, and close do not starve behind preview updates.
-7. G0 App Store remains externally blocked on Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata. G1 cache/default promotion remains owner-review gated.
-13. Do not retry prepared recheck clip metadata reuse for cache-hit runs without new evidence; the 2026-06-28 candidate was rejected because prepare time stayed around `0.50s` and metadata/directory retention added complexity.
-14. Use `tools/summarize_stage_variance.py` when comparing existing generated/cache benchmark artifacts; it is analysis-only and must not be used to approve default cache enablement or production speed claims.
-15. Identify any further behavior-preserving candidate only from redundant waiting, duplicate cache work, avoidable scheduling serialization, or already-proven cleanup churn in STT1, selective STT2 rescue, word timestamp precision, VAD/STT consensus, or subtitle postprocess. The latest synthetic cache-hit run shows elapsed `1.312s`, STT1/STT2/word collect all `0.0s`, macro provider group `0`, final overlap `0`, generated SRT overlap `0`, and accepted scored quality.
-16. The latest STT1 diagnostics show STT1 setup is negligible and collect dominates; the opt-in cache proves exact repeat replay only. Do not skip STT1, downgrade the primary model, shrink windows, or loosen final subtitle stability to gain speed.
+3. Also read `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040105-g3-live-nle-projection-scheduler-budget-telemetry`.
+4. The completed first three G3 slices establish read-only runtime track metadata, final-authority guards, compact status/ping count exposure, and zero-worker live projection budget telemetry. They do not add visible UI strips, actual worker fan-out changes, persisted disk-format cutover, STT2 skipping, or cache default promotion.
+5. Next safe slice is visual/runtime proof, with app command responsiveness, no raw status payload leakage, no conversion-time regression, and no final-authority change as hard gates.
+6. Preserve final authority: VAD/STT runtime rows must not enter final overlay, global canvas final rows, save/export rows, or persisted compatibility rows.
+7. If widening into visible timeline/global-canvas UI, require a fresh owner-approved UI scope, screenshots or automation snapshots, and proof that app commands, cancel/quit, save, and close do not starve behind preview updates.
+8. G0 App Store remains externally blocked on Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata. G1 cache/default promotion remains owner-review gated.
+9. Do not retry prepared recheck clip metadata reuse for cache-hit runs without new evidence; the 2026-06-28 candidate was rejected because prepare time stayed around `0.50s` and metadata/directory retention added complexity.
+10. Use `tools/summarize_stage_variance.py` when comparing existing generated/cache benchmark artifacts; it is analysis-only and must not be used to approve default cache enablement or production speed claims.
+11. Identify any further behavior-preserving candidate only from redundant waiting, duplicate cache work, avoidable scheduling serialization, or already-proven cleanup churn in STT1, selective STT2 rescue, word timestamp precision, VAD/STT consensus, or subtitle postprocess. The latest synthetic cache-hit run shows elapsed `1.312s`, STT1/STT2/word collect all `0.0s`, macro provider group `0`, final overlap `0`, generated SRT overlap `0`, and accepted scored quality.
+12. The latest STT1 diagnostics show STT1 setup is negligible and collect dominates; the opt-in cache proves exact repeat replay only. Do not skip STT1, downgrade the primary model, shrink windows, or loosen final subtitle stability to gain speed.
 
 QA gate for that item:
 

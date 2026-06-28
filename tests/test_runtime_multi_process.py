@@ -16,7 +16,10 @@ from core.runtime.multi_process import (
     runtime_llm_worker_plan,
     runtime_parallel_worker_plan,
 )
-from core.runtime.subtitle_resource_manager import active_runtime_labels_from_window
+from core.runtime.subtitle_resource_manager import (
+    LIVE_NLE_PROJECTION_BUDGET_SCHEMA,
+    active_runtime_labels_from_window,
+)
 from core.performance import runtime_scheduler_reserve_cores
 
 
@@ -803,6 +806,13 @@ class RuntimeMultiProcessTests(unittest.TestCase):
         self.assertIn("pipeline", data["active_labels"])
         self.assertIn("editor", data["active_labels"])
         self.assertIn("stt", data["active_labels"])
+        budget = data["live_nle_projection_budget"]
+        self.assertEqual(budget["schema"], LIVE_NLE_PROJECTION_BUDGET_SCHEMA)
+        self.assertEqual(budget["dedicated_worker_count"], 0)
+        self.assertFalse(budget["shares_subtitle_worker_pool"])
+        self.assertTrue(budget["uses_existing_row_snapshots"])
+        self.assertIn("pipeline", budget["active_labels"])
+        self.assertIn("stt", budget["active_labels"])
         self.assertNotIn("RUNTIME", coordinator.status_html(data))
         self.assertNotIn("ACCEL CPU + GPU + NPU", coordinator.status_html(data))
         self.assertIn("CPU 72%", coordinator.status_html(data))
@@ -869,6 +879,12 @@ class RuntimeMultiProcessTests(unittest.TestCase):
                 _roughcut_draft_status="queued",
                 _roughcut_draft_pending=True,
                 _roughcut_draft_thread=None,
+                _stt_vad_running=True,
+                _deferred_project_save_pending=True,
+                _deferred_project_save_running=False,
+                _auto_export_video_running=True,
+                _subtitle_overlay_export_running=False,
+                _editor_widget_closing=True,
             ),
         )
 
@@ -876,9 +892,13 @@ class RuntimeMultiProcessTests(unittest.TestCase):
 
         self.assertIn("cut_boundary", labels)
         self.assertIn("stt", labels)
+        self.assertIn("vad", labels)
         self.assertIn("subtitle_llm", labels)
         self.assertIn("subtitle_optimize", labels)
         self.assertIn("roughcut_llm", labels)
+        self.assertIn("save", labels)
+        self.assertIn("export", labels)
+        self.assertIn("close", labels)
 
     def test_subtitle_resource_manager_active_labels_dedupes_and_keeps_exit(self):
         window = SimpleNamespace(

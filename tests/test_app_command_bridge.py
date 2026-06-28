@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.runtime.logger import get_logger
+from core.runtime.subtitle_resource_manager import LIVE_NLE_PROJECTION_BUDGET_SCHEMA
 from core.runtime.stage_metrics import record_stage_done, reset_stage_metrics
 import ui.main.app_command_bridge as app_bridge
 from ui.main.app_command_bridge import dispatch_app_command, execute_app_command
@@ -1168,7 +1169,20 @@ class AppCommandBridgeTests(unittest.TestCase):
     def test_status_command_reports_current_runtime_snapshot(self):
         owner = _DummyOwner()
         owner._current_project_path = "/tmp/project.json"
-        owner._runtime_resource_snapshot = {"rss_gb": 1.25, "pressure_stage": "normal", "timestamp": 1234.5}
+        owner._runtime_resource_snapshot = {
+            "rss_gb": 1.25,
+            "pressure_stage": "normal",
+            "timestamp": 1234.5,
+            "live_nle_projection_budget": {
+                "schema": LIVE_NLE_PROJECTION_BUDGET_SCHEMA,
+                "projection_allowed": True,
+                "dedicated_worker_count": 0,
+                "max_projection_workers": 0,
+                "interactive_reserve_cores": 1,
+                "shares_subtitle_worker_pool": False,
+                "active_labels": ["pipeline", "stt"],
+            },
+        }
         owner._editor_widget._last_live_processing_stage = "⏳ [STT+자막 LLM] 인식 결과 교정/분리 중"
         owner._editor_widget._roughcut_draft_status = "queued"
         owner._editor_widget._roughcut_draft_pending = True
@@ -1192,6 +1206,11 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["data"]["roughcut_runtime"]["video_host_attached"])
         self.assertEqual(result["data"]["runtime_timestamp"], 1234.5)
         self.assertEqual(result["data"]["runtime_resource"]["rss_gb"], 1.25)
+        budget = result["data"]["runtime_resource"]["live_nle_projection_budget"]
+        self.assertEqual(budget["schema"], LIVE_NLE_PROJECTION_BUDGET_SCHEMA)
+        self.assertEqual(budget["dedicated_worker_count"], 0)
+        self.assertFalse(budget["shares_subtitle_worker_pool"])
+        self.assertEqual(budget["interactive_reserve_cores"], 1)
         self.assertIn("stage_metrics", result["data"])
         self.assertIn("stage_metrics", result["data"]["runtime_resource"])
         self.assertIn("status log line", result["data"]["recent_logs"])
@@ -1355,7 +1374,16 @@ class AppCommandBridgeTests(unittest.TestCase):
 
     def test_dispatch_status_busy_fallback_uses_cached_runtime_resource_only(self):
         owner = _DummyOwner()
-        owner._runtime_resource_snapshot = {"active_labels": ["pipeline"], "pressure_stage": "warning"}
+        owner._runtime_resource_snapshot = {
+            "active_labels": ["pipeline"],
+            "pressure_stage": "warning",
+            "live_nle_projection_budget": {
+                "schema": LIVE_NLE_PROJECTION_BUDGET_SCHEMA,
+                "projection_allowed": True,
+                "dedicated_worker_count": 0,
+                "coalesce_interval_ms": 900,
+            },
+        }
         app_thread = object()
         current_thread = object()
         fake_app = SimpleNamespace(thread=lambda: app_thread)
@@ -1370,6 +1398,10 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["data"]["status_snapshot_fallback"])
         self.assertEqual(result["data"]["runtime_resource"]["pressure_stage"], "warning")
+        self.assertEqual(
+            result["data"]["runtime_resource"]["live_nle_projection_budget"]["coalesce_interval_ms"],
+            900,
+        )
 
     def test_dispatch_status_command_caches_busy_fallback_snapshot(self):
         owner = _DummyOwner()

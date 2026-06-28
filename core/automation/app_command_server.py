@@ -30,6 +30,40 @@ def _trim_text_items(values: Any, *, limit: int = 8, max_chars: int = 220) -> li
 
 def _compact_runtime_resource(value: Any) -> dict[str, Any]:
     data = dict(value or {}) if isinstance(value, dict) else {}
+    budget = (
+        dict(data.get("live_nle_projection_budget") or {})
+        if isinstance(data.get("live_nle_projection_budget"), dict)
+        else {}
+    )
+    compact_budget: dict[str, Any] = {}
+    for key in (
+        "schema",
+        "projection_allowed",
+        "projection_mode",
+        "dedicated_worker_count",
+        "max_projection_workers",
+        "uses_existing_row_snapshots",
+        "shares_subtitle_worker_pool",
+        "coalesces_updates",
+        "drops_stale_preview_frames",
+        "coalesce_interval_ms",
+        "interactive_reserve_cores",
+        "required_interactive_reserve_cores",
+        "available_worker_budget",
+        "pressure_stage",
+        "foreground_action_active",
+        "quality_policy",
+    ):
+        if key in budget:
+            compact_budget[key] = budget.get(key)
+    if isinstance(budget.get("active_labels"), list):
+        compact_budget["active_labels"] = _trim_text_items(budget.get("active_labels"), limit=8, max_chars=80)
+    if isinstance(budget.get("foreground_action_labels"), list):
+        compact_budget["foreground_action_labels"] = _trim_text_items(
+            budget.get("foreground_action_labels"),
+            limit=6,
+            max_chars=80,
+        )
     return {
         "timestamp": data.get("timestamp"),
         "profile": data.get("profile"),
@@ -39,6 +73,7 @@ def _compact_runtime_resource(value: Any) -> dict[str, Any]:
         "free_memory_ratio": data.get("free_memory_ratio"),
         "active_label_count": data.get("active_label_count"),
         "active_labels": _trim_text_items(data.get("active_labels"), limit=6, max_chars=80),
+        "live_nle_projection_budget": compact_budget,
     }
 
 

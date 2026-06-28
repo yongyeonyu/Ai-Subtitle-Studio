@@ -113,6 +113,8 @@ UI는 이 결과를 소비하고 편집해야 하며, 알고리즘 정책 자체
 
 현재 `Source-App Internal NLE Timeline Architecture Plan`은 사용자에게 보이는 UI/UX 변경이 아니라, 기존 project/editor/roughcut/export 상태를 NLE domain으로 설명하고 검증하기 위한 내부 계약입니다. `core/project/nle_snapshot.py`는 read-only adapter이고, `core/project/nle_project_state.py`는 legacy project load/save 사이에만 붙는 runtime-only mutable owner pilot입니다. 2026-06-28 owner approval 이후 `nle_snapshot`과 top-level `nle` shadow metadata는 명시적 승인 플래그가 있는 프로젝트에서 compatibility metadata로 저장될 수 있지만, 기존 `.aissproj` editor rows, direct SRT open, roughcut sidecar, rendered roughcut reopen 경로가 계속 canonical 호환 표면입니다. 로드 시 승인된 persisted snapshot은 freshly rebuilt snapshot과 `_nle_snapshot_readback_parity`로 비교되는 shadow evidence일 뿐이며, drift가 있어도 legacy/direct SRT rows에서 runtime NLE state를 다시 빌드하고 report는 저장하지 않습니다. Direct SRT open은 exact imported SRT rows로 surface-specific readback parity를 남길 수 있고, roughcut sidecar drift는 render/export parity와 별개로 진단됩니다.
 
+G3 live STT/VAD track visibility stays runtime/session-only. `core/runtime/subtitle_resource_manager.py` owns the live NLE projection scheduler-budget telemetry, and `RuntimeResourceCoordinator` attaches that compact report to runtime-resource snapshots. The report proves zero dedicated projection workers, no subtitle worker-pool sharing, coalesced updates, stale preview-frame dropping, foreground save/export/close awareness, and critical/exit projection disablement without changing visible UI, final caption authority, project persistence, or actual worker fan-out.
+
 ### Current owner map
 
 | Area | Current owner | Existing source of truth | NLE snapshot rule |

@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.05 G3 Live NLE Projection Scheduler Budget Telemetry - 2026-06-29 KST
+
+- 실행 모드: source-app G3 live NLE projection scheduler-budget telemetry, runtime resource status preservation, and version/schema bump.
+- 결과: pass for zero-worker live projection telemetry, active VAD/save/export/close labels, status/busy fallback/UDP telemetry preservation, and expanded final-authority/resource guard coverage.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.05.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-013822-watchdog-handoff-probe.md`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-234452-nle-g3-scheduler-budget-telemetry-review-jammini.md`
+- 실제 결과:
+  - App version updated to `04.01.05`.
+  - Project schema version updated to `04.01.05`.
+  - `RuntimeResourceCoordinator` now reports `live_nle_projection_budget`.
+  - Live projection telemetry keeps `dedicated_worker_count=0`, `max_projection_workers=0`, `shares_subtitle_worker_pool=false`, coalesced updates, stale preview-frame drops, and interactive reserve cores.
+  - `status`, `ping`, `guided-subtitle-status`, busy fallback, and UDP compact status preserve the compact scheduler-budget telemetry without raw runtime row payloads.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/subtitle_resource_manager.py core/runtime/multi_process.py core/automation/app_command_server.py tests/test_subtitle_resource_manager.py tests/test_runtime_multi_process.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_resource_manager.py tests/test_runtime_multi_process.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> `135 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py tests/test_runtime_multi_process.py tests/test_subtitle_resource_manager.py tests/test_action_item_runtime_services.py tests/test_runtime_stage_metrics.py tests/test_project_nle_render_export_parity.py tests/test_subtitle_global_canvas_facade.py` -> `171 passed`.
+  - Direct version assertion -> `APP_VERSION=04.01.05`, `PROJECT_SCHEMA_VERSION=04.01.05`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+
 ## v04.01.04 G3 Compact Live Status Feed - 2026-06-29 KST
 
 - 실행 모드: source-app G3 compact live status/feed wiring, UDP compact count preservation, and version/schema bump.

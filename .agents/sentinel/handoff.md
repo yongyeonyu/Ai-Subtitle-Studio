@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-234452-nle-g3-scheduler-budget-telemetry-review-jammini.md`
+- `.agents/sentinel/handoffs/20260629-013822-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-232716-g3-compact-status-feed-review-jammini.md`
 - `.agents/sentinel/handoffs/20260629-012024-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-230544-nle-g3-runtime-lane-owner-map-scout-jammini.md`

@@ -33,7 +33,45 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.04 / G3 Compact Live Status Feed
+## Current Handoff - 2026-06-29 v04.01.05 / G3 Live NLE Projection Scheduler Budget Telemetry
+
+### Scope
+
+- Completed the scheduler-budget telemetry slice for `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`.
+- Bumped source-app version and project schema from `04.01.04` to `04.01.05`.
+- Added `docs/release_notes/RELEASE_v04.01.05.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.05`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.05`.
+- `core/runtime/subtitle_resource_manager.py` now exposes `live_nle_projection_scheduler_budget(...)`.
+- `RuntimeResourceCoordinator.poll()` attaches `live_nle_projection_budget` to runtime resource snapshots.
+- Live projection telemetry reports zero dedicated workers, no subtitle worker-pool sharing, existing row snapshots, update coalescing, stale preview-frame drops, interactive reserve cores, foreground save/export/close labels, and critical/exit projection disablement.
+- `status`, `ping`, `guided-subtitle-status`, busy fallback, and UDP status compaction preserve the compact telemetry without raw STT/VAD/subtitle-preview rows.
+- No UI layout/label/color/menu/shortcut change, actual worker fan-out change, STT2 skip, model downgrade, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/runtime/subtitle_resource_manager.py core/runtime/multi_process.py core/automation/app_command_server.py tests/test_subtitle_resource_manager.py tests/test_runtime_multi_process.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> pass.
+- Focused runtime/app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_resource_manager.py tests/test_runtime_multi_process.py tests/test_app_command_bridge.py tests/test_app_command_server.py` -> `135 passed`.
+- Expanded G3 guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_project_nle_runtime_cutover.py tests/test_runtime_multi_process.py tests/test_subtitle_resource_manager.py tests/test_action_item_runtime_services.py tests/test_runtime_stage_metrics.py tests/test_project_nle_render_export_parity.py tests/test_subtitle_global_canvas_facade.py` -> `171 passed`.
+- Direct version assertion -> `APP_VERSION=04.01.05`, `PROJECT_SCHEMA_VERSION=04.01.05`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-013822-watchdog-handoff-probe.md`.
+- Jammini scheduler-budget review: `.agents/sentinel/handoffs/20260628-234452-nle-g3-scheduler-budget-telemetry-review-jammini.md`.
+- Three sub-agent reviews were collected for runtime architecture, QE/final-authority guards, and editor workflow constraints.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3, next bounded slice is visual/runtime proof showing progressively observable VAD/STT1/STT2 tracks during real generation without raw payload leakage, final-authority changes, or conversion-time regression.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+## Previous Handoff - 2026-06-29 v04.01.04 / G3 Compact Live Status Feed
 
 ### Scope
 

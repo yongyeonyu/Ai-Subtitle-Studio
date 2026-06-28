@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.04-source-app
+Document-Version: 04.01.05-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,20 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.05 G3 Live NLE Projection Scheduler Budget Telemetry
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.05"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.05`.
+3. `core/runtime/subtitle_resource_manager.py` now exposes `live_nle_projection_scheduler_budget(...)`, a read-only telemetry report for G3 live NLE projection.
+4. The budget reports dedicated projection workers `0`, max projection workers `0`, subtitle worker-pool sharing `false`, existing row snapshots `true`, update coalescing `true`, and stale preview-frame dropping `true`.
+5. Active runtime labels now include VAD plus foreground save/export/close signals from cheap booleans, without reading raw preview rows.
+6. `RuntimeResourceCoordinator.poll()` attaches `live_nle_projection_budget` to the runtime resource snapshot; `status`, `ping`, `guided-subtitle-status`, busy fallback, and UDP compaction preserve compact budget telemetry.
+7. Critical/exit pressure disables projection telemetry, while warning or foreground save/export/close state increases coalescing to avoid command/UI starvation.
+8. No visible UI layout/label/color/menu/shortcut change, actual worker fan-out change, STT2 skip, model downgrade, cache default promotion, persisted NLE disk-format cutover, App Store package/upload/submission, or final authority change was performed.
+9. Focused verification passed: compile check, runtime/app-command focused set `135 passed`, and expanded G3 guard set `171 passed`.
 
 ## v04.01.04 G3 Compact Live Status Feed
 

@@ -30,6 +30,7 @@ from core.runtime.setting_utils import setting_bool as _setting_bool
 from core.runtime.subtitle_resource_manager import (
     active_runtime_labels_from_window,
     apple_m_accelerator_flag_report,
+    live_nle_projection_scheduler_budget,
     mixed_accelerator_parallelism_floor as _mixed_accelerator_parallelism_floor,
     normalize_accelerator_name as _normalize_accelerator_name,
 )
@@ -763,6 +764,11 @@ class RuntimeResourceCoordinator:
         process_cpu = self._sample_process_cpu_percent()
         active = self._active_runtime_labels(window)
         stage = self._pressure_stage(resource, rss_bytes)
+        live_nle_budget = live_nle_projection_scheduler_budget(
+            self.settings,
+            active_labels=active,
+            runtime_resource={"pressure_stage": stage},
+        )
         previous_native_allocation = {}
         try:
             previous_native_allocation = dict(self._latest.get("native_resource_allocation") or {})
@@ -802,6 +808,7 @@ class RuntimeResourceCoordinator:
             "pressure_stage": stage,
             "active_labels": active,
             "active_label_count": len(active),
+            "live_nle_projection_budget": live_nle_budget,
             "resource": resource,
         }
         if isinstance(native_allocation, dict) and native_allocation:

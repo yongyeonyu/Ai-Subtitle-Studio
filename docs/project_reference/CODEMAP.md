@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.04-codemap
+Document-Version: 04.01.05-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -102,6 +102,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `core/native_swift_media_info.py`, `core/native_swift_pipeline_status.py`: native bridge entry points for media probe/status hot paths.
 - `core/runtime/memory_manager.py`: runtime RSS snapshots plus streaming disk-cache accounting/pruning.
 - `core/runtime/memory_trim_summary.py`: per-stage trim rollup helper for repeated subtitle-generation memory diagnostics.
+- `core/runtime/subtitle_resource_manager.py`: runtime active-label helpers, accelerator flags, and live NLE projection scheduler-budget telemetry.
 
 ## Hot Verification Map
 
