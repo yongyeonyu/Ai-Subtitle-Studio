@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.02-source-app
+Document-Version: 04.01.03-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.02`
-- Latest release checkpoint: `v04.01.02`
+- App version in code: `04.01.03`
+- Latest release checkpoint: `v04.01.03`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -234,17 +234,19 @@ Completed item rule:
   - command: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040100_20260628`
   - result: pass, `failed_count=0`
 - Latest release checkpoint scope:
-  - `v04.01.02` - source-app NLE close/deferred-save boundary fix, vector-canvas time normalization, close retry-loop guard, 04.01.02 version/schema bump, and release docs.
+  - `v04.01.03` - source-app G3 runtime NLE lane owner-map, final authority guard, 04.01.03 version/schema bump, and release docs.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths, but persisted NLE project fields remain gated and legacy save/reopen compatibility stays mandatory.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.02`:
-  - version/schema direct assert: `APP_VERSION=04.01.02`, `PROJECT_SCHEMA_VERSION=04.01.02`
-  - close/deferred-save focused subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py -q` -> `68 passed`
-  - project-5 raw vector timing probe: raw `subtitle_canvas.vector.v2` rows now reach `nle_save_export_final_overlap` instead of `nle_save_export_invalid_duration`; the true 2-frame final overlaps remain blocked by the save/export guard.
-  - Jammini probe: `.agents/sentinel/handoffs/20260629-004654-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
-  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused close-boundary `v04.01.02` checkpoint.
+- Latest focused guard set for `v04.01.03`:
+  - version/schema direct assert: `APP_VERSION=04.01.03`, `PROJECT_SCHEMA_VERSION=04.01.03`
+  - runtime lane contract subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `17 passed`
+  - surrounding facade subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_subtitle_stt_segments_facade.py tests/test_subtitle_global_canvas_facade.py tests/test_project_nle_runtime_cutover.py` -> `25 passed`
+  - timeline final-only smoke: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "global_canvas_silence_and_subtitle_lanes_share_expanded_height_evenly or timeline_update_segments_can_project_final_only_rows_to_global_canvas"` -> `2 passed, 191 deselected`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-010211-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`
+  - Jammini G3 scout: `.agents/sentinel/handoffs/20260628-230544-nle-g3-runtime-lane-owner-map-scout-jammini.md` -> `DEX_REVIEW_READY`
+  - latest source-app quick QA remains `output/manual_verification/latest/qa_suite_quick_v040100_20260628` -> `failed_count=0`; quick QA was not rerun for the focused runtime-lane `v04.01.03` checkpoint.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`
@@ -459,20 +461,14 @@ Completed item rule:
 
 ## Narrow Next Item
 
-Use `docs/planning_queue/ACTION_ITEMS.md` as the executable queue. The current narrow implementation target is group `G1. STT2 / Word Precision Generation Latency Profiling And Accuracy-Preserving Trim` unless the owner explicitly chooses the Mac App Store launch group:
+Use `docs/planning_queue/ACTION_ITEMS.md` as the executable queue. The current narrow implementation target is group `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`, next bounded slice:
 
-1. Preserve the cut-boundary profiling method: non-profile elapsed runs for speed truth, profiler diagnostics only for ownership.
-2. Use the new true wall-clock stage spans as speed evidence; do not infer elapsed cost only from non-additive cProfile cumulative rows.
-3. The zero-candidate LLM defer trim is already applied and verified; keep it because quality/timing stability passed, but do not treat it as a full latency fix.
-4. Do not retry High context-boundary LLM batching unless batch output is first proven decision-equivalent to the existing per-pair LLM checks on the same rows.
-5. Use STT2/word precision substage timing and `stt_collect_whisperkit_fallback` overhead on the long fixture before changing worker scheduling; local smoke points to collect/fallback time, not prepare/annotation.
-6. Run `tools/verify_reference_fixture_availability.py` before accepting any new latency trim. The current owner-required fixture is NAS HeyDealer first 180 seconds; if the real media or SRT is missing, fallback media can prove instrumentation and structural stability only.
-7. Use `tools/materialize_reference_srt.py` only for cached X5 60s short-loop smoke; do not treat that smoke as broad latency-trim acceptance.
-8. Run `tools/evaluate_reference_benchmark_acceptance.py` after each reference-scored benchmark; file/SRT preflight alone does not prove semantic alignment.
-9. Inspect STT2/word `applied_segment_count`, `range_audio_sec`, and `prepared_audio_sec` before proposing a trim; `stt2_selective_recheck.applied_count=1` alone is not a safe trim signal.
-10. Inspect STT2/word reason breakdown fields before removing any range family; current NAS evidence points away from STT2 skip and review-critical word-range removal.
-11. Inspect High context-boundary decision actions before changing postprocess behavior; current NAS evidence is keep/move/merge/invalid `2/0/0/0`, so only a decision-equivalent no-change gate is plausible.
-12. High context keep/no-correction cache, macro proofread response replay cache, opt-in STT2/word collect replay cache, opt-in STT1 primary collect replay cache, combined cache-key normalization, and all-hit macro warmup skip were originally synthetic-accepted on the owner-approved generated 3-minute fixture under the legacy score/overlap gate. The strict acceptance gate and VAD/STT consensus guard now reject the old tail-collapse benchmark and accept the fixed generated fallback run. Backfill on NAS HeyDealer or another representative owner fixture when available before claiming production-wide speed or enabling any STT collect cache by default.
+1. Continue only after reading the G3 current baseline and `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040103-g3-runtime-nle-lane-owner-map--final-authority-guard`.
+2. The completed first slice only establishes read-only runtime track metadata and final-authority guards. It does not add visible UI strips, scheduler changes, persisted disk-format cutover, STT2 skipping, or cache default promotion.
+3. Next safe slice is live status/feed wiring: compact progress/count events for VAD/STT1/STT2/final lanes, with no unbounded candidate payloads in status/ping.
+4. Preserve final authority: VAD/STT runtime rows must not enter final overlay, global canvas final rows, save/export rows, or persisted compatibility rows.
+5. If widening into visible timeline/global-canvas UI, require a fresh owner-approved UI scope, screenshots or automation snapshots, and proof that app commands, cancel/quit, save, and close do not starve behind preview updates.
+6. G0 App Store remains externally blocked on Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata. G1 cache/default promotion remains owner-review gated.
 13. Do not retry prepared recheck clip metadata reuse for cache-hit runs without new evidence; the 2026-06-28 candidate was rejected because prepare time stayed around `0.50s` and metadata/directory retention added complexity.
 14. Use `tools/summarize_stage_variance.py` when comparing existing generated/cache benchmark artifacts; it is analysis-only and must not be used to approve default cache enablement or production speed claims.
 15. Identify any further behavior-preserving candidate only from redundant waiting, duplicate cache work, avoidable scheduling serialization, or already-proven cleanup churn in STT1, selective STT2 rescue, word timestamp precision, VAD/STT consensus, or subtitle postprocess. The latest synthetic cache-hit run shows elapsed `1.312s`, STT1/STT2/word collect all `0.0s`, macro provider group `0`, final overlap `0`, generated SRT overlap `0`, and accepted scored quality.

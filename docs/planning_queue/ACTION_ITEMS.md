@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.01-source-app
+Document-Version: 04.01.03-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.01`.
+- App version: `04.01.03`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -189,7 +189,10 @@ Status: active planning item. This is a runtime/session visualization and schedu
 
 Current baseline:
 
+- First runtime owner-map/read-only projection slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040103-g3-runtime-nle-lane-owner-map--final-authority-guard`.
 - Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
+- `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata. Only `final` carries save/export authority; VAD/STT/subtitle-preview tracks are reference-only.
+- `core/project/nle_runtime_cutover.py` rejects `_nle_runtime_role=runtime_reference_only`, non-final `_nle_runtime_track`, and `_nle_save_export_authority=false` rows from final overlay, global canvas, and save/export projection even if those rows carry text.
 - Existing project state can store STT candidate tracks and VAD/voice activity as separate diagnostic/reference rows, while final subtitle rows remain the save/export authority.
 - Existing Apple Silicon worker planning lives under `core/runtime/multi_process.py` and `core/runtime/subtitle_resource_manager.py`, with `RuntimeResourceCoordinator`, `apply_apple_m_subtitle_pipeline_plan(...)`, active runtime labels, memory pressure snapshots, and benchmark-locked cut-boundary worker counts.
 - Prior lessons prohibit treating full-parallel STT, forced smaller STT windows, or speed-only native adoption as safe defaults without quality parity and real-media proof.
@@ -197,9 +200,7 @@ Current baseline:
 Detailed plan:
 
 1. Runtime track ownership map
-   - Define separate runtime-only NLE lanes for `VAD`, `STT1`, `STT2`, and `final`.
-   - Keep VAD/STT lanes as provisional/reference tracks; only final rows remain authoritative for save/export, render/export, and persisted project compatibility.
-   - Ensure STT1/STT2/VAD rows can be visible while generation is still running without mixing them into final overlay rows or subtitle save rows.
+   - Completed for the read-only feed/authority contract. Continue from the next slice only if it widens live status/feed wiring without changing final authority.
 
 2. Live projection and status feed
    - Route incremental VAD spans, STT1 preview rows, and STT2 recheck rows into an NLE runtime projection surface that can update the timeline/global canvas progressively.
@@ -242,8 +243,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.01"
-document_version: "04.01.01-source-app"
+app_version: "04.01.03"
+document_version: "04.01.03-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

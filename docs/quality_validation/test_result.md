@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.03 G3 Runtime NLE Lane Owner Map / Final Authority Guard - 2026-06-29 KST
+
+- 실행 모드: source-app G3 runtime NLE lane owner-map, final authority guard, and version/schema bump.
+- 결과: pass for runtime feed contract, final/save-export authority isolation, surrounding STT/global-canvas façade guards, and final-only timeline smoke.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.03.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-010211-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-230544-nle-g3-runtime-lane-owner-map-scout-jammini.md`
+- 실제 결과:
+  - App version updated to `04.01.03`.
+  - Project schema version updated to `04.01.03`.
+  - Runtime live-editor feed now has `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata.
+  - Only the `final` runtime track carries save/export authority.
+  - Runtime reference rows with text no longer promote into final overlay, global canvas, or save/export projection.
+- 검증:
+  - `./venv/bin/python -m py_compile core/engine/subtitle_live_editor_feed.py core/project/nle_runtime_cutover.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `17 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_subtitle_stt_segments_facade.py tests/test_subtitle_global_canvas_facade.py tests/test_project_nle_runtime_cutover.py` -> `25 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "global_canvas_silence_and_subtitle_lanes_share_expanded_height_evenly or timeline_update_segments_can_project_final_only_rows_to_global_canvas"` -> `2 passed, 191 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.03`, `PROJECT_SCHEMA_VERSION=04.01.03`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.02 NLE Close / Deferred-Save Boundary Fix - 2026-06-29 KST
 
 - 실행 모드: source-app NLE close/deferred-save boundary fix, vector-canvas time normalization, close retry-loop guard, and version/schema bump.

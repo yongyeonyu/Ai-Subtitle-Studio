@@ -32,10 +32,20 @@ def _is_preview_row(row: dict[str, Any]) -> bool:
     return any(bool(row.get(key)) for key in _PREVIEW_KEYS)
 
 
+def _is_runtime_reference_row(row: dict[str, Any]) -> bool:
+    if row.get("_nle_save_export_authority") is False:
+        return True
+    track = str(row.get("_nle_runtime_track") or "").strip()
+    if track and track != "final":
+        return True
+    role = str(row.get("_nle_runtime_role") or "").strip()
+    return role == "runtime_reference_only"
+
+
 def _is_final_overlay_row(row: dict[str, Any]) -> bool:
     if not isinstance(row, dict):
         return False
-    if bool(row.get("is_gap")) or _is_preview_row(row):
+    if bool(row.get("is_gap")) or _is_preview_row(row) or _is_runtime_reference_row(row):
         return False
     return bool(str(row.get("text", "") or "").strip())
 

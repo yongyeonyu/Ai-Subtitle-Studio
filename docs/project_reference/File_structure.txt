@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.02-source-app
+Document-Version: 04.01.03-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-28
 Updated-By: Codex
@@ -10,7 +10,7 @@ Role-Description-Rule: Tree entries must match current paths. Speculative cleanu
 AI Subtitle Studio - Shallow Actual File Structure
 Last Updated: 2026-06-29
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-App Version: 04.01.02
+App Version: 04.01.03
 Structure Document: docs/project_reference/File_structure.txt
 Note: Root development docs policy keeps AGENTS.md as the only root dev doc.
 ================================================================================

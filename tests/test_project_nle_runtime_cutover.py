@@ -130,6 +130,52 @@ class ProjectNleRuntimeCutoverTests(unittest.TestCase):
         self.assertFalse(any(row.get("_live_subtitle_preview") for row in export_rows))
         self.assertFalse(any("stt_candidates" in row for row in export_rows))
 
+    def test_runtime_reference_tracks_never_promote_to_final_surfaces_even_with_text(self):
+        rows = [
+            {"id": "caption_1", "start": 0.0, "end": 1.0, "text": "final"},
+            {
+                "id": "vad_1",
+                "start": 1.0,
+                "end": 2.0,
+                "text": "speech",
+                "_nle_runtime_track": "VAD",
+                "_nle_runtime_role": "runtime_reference_only",
+                "_nle_save_export_authority": False,
+            },
+            {
+                "id": "stt1_1",
+                "start": 2.0,
+                "end": 3.0,
+                "text": "raw stt1",
+                "_nle_runtime_track": "STT1",
+                "_nle_runtime_role": "runtime_reference_only",
+                "_nle_save_export_authority": False,
+            },
+            {
+                "id": "stt2_1",
+                "start": 3.0,
+                "end": 4.0,
+                "text": "raw stt2",
+                "_nle_runtime_track": "STT2",
+                "_nle_runtime_role": "runtime_reference_only",
+                "_nle_save_export_authority": False,
+            },
+        ]
+
+        overlay = nle_final_overlay_segments_from_editor_rows(rows, primary_fps=30.0, center_sec=0.5)
+        global_rows = nle_global_canvas_segments_from_editor_rows(rows, primary_fps=30.0)
+        export_rows = nle_save_export_segments_from_editor_rows(rows, primary_fps=30.0)
+        timeline_rows = nle_timeline_canvas_segments_from_editor_rows(rows, primary_fps=30.0)
+
+        self.assertEqual([row["text"] for row in overlay], ["final"])
+        self.assertEqual([row["text"] for row in global_rows], ["final"])
+        self.assertEqual([row["text"] for row in export_rows], ["final"])
+        self.assertEqual([row["text"] for row in timeline_rows], ["final", "speech", "raw stt1", "raw stt2"])
+        self.assertEqual(
+            [row["_nle_runtime_surface"] for row in timeline_rows],
+            ["timeline_canvas", "timeline_canvas_preview", "timeline_canvas_preview", "timeline_canvas_preview"],
+        )
+
     def test_save_export_cutover_accepts_vector_canvas_time_rows(self):
         rows = [
             {

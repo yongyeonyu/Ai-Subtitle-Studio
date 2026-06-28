@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.02-source-app
+Document-Version: 04.01.03-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,18 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.03 G3 Runtime NLE Lane Owner Map / Final Authority Guard
+
+Source request: owner approved persisted NLE/UI structure changes, requested remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stopping after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.03"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.03`.
+3. `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only NLE track metadata for `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final`; only `final` is marked authoritative for save/export.
+4. `core/project/nle_runtime_cutover.py` now blocks runtime-reference rows from final overlay, global canvas, and save/export projection even when those rows carry text.
+5. The G3 first slice intentionally did not add a new global-canvas strip, UI label/layout/color change, scheduler change, persisted NLE disk-format cutover, STT2 skip, or VAD visual-cut override.
+6. Jammini route proof, Jammini scout, and three sub-agent reviews were collected. Jammini's global-canvas VAD lane suggestion is deferred to a separate bounded UI/projection slice because this slice only establishes the feed/authority contract.
+7. Focused verification passed: compile check, `tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `17 passed`, surrounding façade guard -> `25 passed`, and timeline final-only smoke -> `2 passed, 191 deselected`.
 
 ## v04.01.02 NLE Close / Deferred-Save Boundary Fix
 

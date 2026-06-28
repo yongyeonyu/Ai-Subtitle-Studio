@@ -33,7 +33,46 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.02 / NLE Close Deferred-Save Boundary
+## Current Handoff - 2026-06-29 v04.01.03 / G3 Runtime NLE Lane Owner Map
+
+### Scope
+
+- Completed the first `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling` slice.
+- Bumped source-app version and project schema from `04.01.02` to `04.01.03`.
+- Added `docs/release_notes/RELEASE_v04.01.03.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.03`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.03`.
+- `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` tracks.
+- Only the `final` runtime track is save/export authoritative.
+- `core/project/nle_runtime_cutover.py` keeps runtime-reference rows out of final overlay, global canvas, and save/export projection even when those rows carry text.
+- No UI layout/label/color/menu/shortcut change, new global-canvas strip, scheduler change, persisted NLE disk-format cutover, STT2 skip, cache default promotion, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/engine/subtitle_live_editor_feed.py core/project/nle_runtime_cutover.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> pass.
+- Runtime lane contract subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `17 passed`.
+- Surrounding facade subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_live_editor_feed_facade.py tests/test_subtitle_stt_segments_facade.py tests/test_subtitle_global_canvas_facade.py tests/test_project_nle_runtime_cutover.py` -> `25 passed`.
+- Timeline final-only smoke: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "global_canvas_silence_and_subtitle_lanes_share_expanded_height_evenly or timeline_update_segments_can_project_final_only_rows_to_global_canvas"` -> `2 passed, 191 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.03`, `PROJECT_SCHEMA_VERSION=04.01.03`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- `git diff --check -- .` -> pass.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-010211-watchdog-handoff-probe.md`.
+- Jammini G3 scout: `.agents/sentinel/handoffs/20260628-230544-nle-g3-runtime-lane-owner-map-scout-jammini.md`.
+- Three sub-agent reviews were collected for owner-map, QE/final authority, and editor workflow constraints.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3, next bounded slice is compact live status/feed wiring for VAD/STT1/STT2/final progress. Do not add visible UI strips, scheduler changes, persisted disk-format ownership, STT2 skip, cache default promotion, or VAD visual-cut override without a new acceptance gate.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+## Previous Handoff - 2026-06-29 v04.01.02 / NLE Close Deferred-Save Boundary
 
 ### Scope
 

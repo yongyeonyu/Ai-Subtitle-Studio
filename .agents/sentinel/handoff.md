@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-230544-nle-g3-runtime-lane-owner-map-scout-jammini.md`
+- `.agents/sentinel/handoffs/20260629-010211-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260629-004654-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-234233-nle-close-deferred-save-blocker-scout-jammini.md`
 - `.agents/sentinel/handoffs/20260628-233050-app-store-identity-blocker-summary-jammini.md`
