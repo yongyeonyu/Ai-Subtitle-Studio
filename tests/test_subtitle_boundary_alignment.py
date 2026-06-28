@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from core.cut_boundary import magnetize_segments_to_cut_boundaries
 from core.cut_boundary import split_segments_by_cut_boundaries
@@ -16,6 +17,87 @@ from ui.timeline.timeline_analysis import (
 
 
 class SubtitleBoundaryAlignmentTests(unittest.TestCase):
+    def test_confirmed_cut_split_snap_trace_records_forced_split(self):
+        class FakeTraceLogger:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event, **fields):
+                self.events.append((event, fields))
+                return True
+
+        fps = 60000 / 1001
+        logger = FakeTraceLogger()
+        with patch("core.runtime.trace_logger.current_app_trace_logger", return_value=logger):
+            rows = split_segments_by_cut_boundaries(
+                [
+                    {
+                        "id": "seg-original",
+                        "segment_id": "stt-original",
+                        "start_frame": 2670,
+                        "end_frame": 2690,
+                        "start": 2670 / fps,
+                        "end": 2690 / fps,
+                        "text": "cut before cut after",
+                    }
+                ],
+                [{"timeline_frame": 2677, "fps": fps, "status": "confirmed", "source": "visual"}],
+                primary_fps=fps,
+            )
+
+        events = [(event, fields) for event, fields in logger.events if event == "confirmed_cut_split_snap"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(events), 2)
+        first_fields = events[0][1]
+        self.assertEqual(first_fields["event_type"], "cut_boundary_decision")
+        self.assertEqual(first_fields["action"], "split")
+        self.assertEqual(first_fields["decision"], "split")
+        self.assertEqual(first_fields["reason"], "confirmed_visual_cut_forced_split")
+        self.assertEqual(first_fields["frame"], 2677)
+        self.assertEqual(first_fields["provisional_frame"], 2677)
+        self.assertEqual((first_fields["fps_num"], first_fields["fps_den"]), (60000, 1001))
+        self.assertEqual(first_fields["split_frames"], [2677])
+        self.assertEqual(first_fields["source_segment_id"], "stt-original")
+
+    def test_confirmed_cut_split_snap_trace_records_edge_snap(self):
+        class FakeTraceLogger:
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event, **fields):
+                self.events.append((event, fields))
+                return True
+
+        fps = 60000 / 1001
+        logger = FakeTraceLogger()
+        with patch("core.runtime.trace_logger.current_app_trace_logger", return_value=logger):
+            rows = split_segments_by_cut_boundaries(
+                [
+                    {
+                        "start_frame": 2676,
+                        "end_frame": 2700,
+                        "start": 2676 / fps,
+                        "end": 2700 / fps,
+                        "text": "cut start caption",
+                    }
+                ],
+                [{"timeline_frame": 2677, "fps": fps, "status": "confirmed", "source": "visual"}],
+                primary_fps=fps,
+            )
+
+        events = [(event, fields) for event, fields in logger.events if event == "confirmed_cut_split_snap"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(events), 1)
+        fields = events[0][1]
+        self.assertEqual(fields["event_type"], "cut_boundary_decision")
+        self.assertEqual(fields["action"], "snap")
+        self.assertEqual(fields["decision"], "snap")
+        self.assertEqual(fields["reason"], "confirmed_visual_cut_edge_snap")
+        self.assertEqual(fields["frame"], 2677)
+        self.assertEqual(fields["provisional_frame"], 2677)
+        self.assertEqual((fields["fps_num"], fields["fps_den"]), (60000, 1001))
+        self.assertEqual(fields["edge_snap_frames"], [2677])
+
     def test_confirmed_cut_frame_2677_forces_subtitle_boundary(self):
         fps = 30.0
         rows = split_segments_by_cut_boundaries(

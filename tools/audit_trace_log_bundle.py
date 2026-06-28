@@ -14,7 +14,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.runtime.temp_workspace import REQUIRED_SUBDIRECTORIES, ensure_temp_workspace, workspace_usage
+import core.runtime.trace_logger as trace_logger_module
 from core.runtime.trace_logger import TRACE_MANIFEST_SCHEMA, TRACE_RUN_RETENTION_LIMIT, TRACE_SCHEMA, TraceLogger
+from core.cut_boundary import split_segments_by_cut_boundaries
 from tools.collect_trace_package import collect_trace_package
 
 
@@ -111,6 +113,26 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             widget="timeline_canvas",
             action="audit_frame_candidate",
         )
+        previous_app_trace = getattr(trace_logger_module, "_APP_TRACE_LOGGER", None)
+        trace_logger_module._APP_TRACE_LOGGER = logger
+        try:
+            split_segments_by_cut_boundaries(
+                [
+                    {
+                        "id": "trace-audit-caption",
+                        "segment_id": "trace-audit-stt",
+                        "start_frame": 2670,
+                        "end_frame": 2690,
+                        "start": 2670 / (60000 / 1001),
+                        "end": 2690 / (60000 / 1001),
+                        "text": "trace audit cut split",
+                    }
+                ],
+                [{"timeline_frame": 2677, "fps": 60000 / 1001, "status": "confirmed", "source": "visual"}],
+                primary_fps=60000 / 1001,
+            )
+        finally:
+            trace_logger_module._APP_TRACE_LOGGER = previous_app_trace
         logger.log_event(
             "timeline_repaint_summary",
             stage="ui",
@@ -147,6 +169,15 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             int(event.get("fps_num") or 0) == 60000 and int(event.get("fps_den") or 0) == 1001
             for event in frame_events
         )
+        confirmed_cut_events = [event for event in events if event.get("event") == "confirmed_cut_split_snap"]
+        confirmed_cut_trace_ok = bool(confirmed_cut_events) and all(
+            event.get("action") == "split"
+            and event.get("reason") == "confirmed_visual_cut_forced_split"
+            and int(event.get("frame") or 0) == 2677
+            and int(event.get("fps_num") or 0) == 60000
+            and int(event.get("fps_den") or 0) == 1001
+            for event in confirmed_cut_events
+        )
         media_fingerprint = manifest.get("media_fingerprint") if isinstance(manifest.get("media_fingerprint"), dict) else {}
         bounded_media_fingerprint = (
             bool(media_fingerprint.get("basename"))
@@ -173,6 +204,7 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             and all(event.get("schema") == TRACE_SCHEMA for event in events)
             and not event_missing_fields
             and frame_precision_ok
+            and confirmed_cut_trace_ok
             and bounded_media_fingerprint
             and package_complete
             and retention_ok
@@ -190,6 +222,8 @@ def build_trace_log_bundle_audit(*, output_dir: Path | None = None) -> dict[str,
             "latest_event_count": len(latest),
             "event_missing_fields": event_missing_fields,
             "frame_precision_ok": frame_precision_ok,
+            "confirmed_cut_trace_ok": confirmed_cut_trace_ok,
+            "confirmed_cut_event_count": len(confirmed_cut_events),
             "bounded_media_fingerprint": bounded_media_fingerprint,
             "media_fingerprint_keys": sorted(media_fingerprint.keys()),
             "package_complete": package_complete,
@@ -222,6 +256,8 @@ def write_trace_log_bundle_audit(output_dir: Path, payload: dict[str, Any]) -> N
         f"- Event count: `{payload.get('event_count')}`",
         f"- Event missing fields: `{', '.join(payload.get('event_missing_fields') or []) or 'none'}`",
         f"- Frame precision ok: `{bool(payload.get('frame_precision_ok'))}`",
+        f"- Confirmed cut trace ok: `{bool(payload.get('confirmed_cut_trace_ok'))}`",
+        f"- Confirmed cut event count: `{payload.get('confirmed_cut_event_count')}`",
         f"- Bounded media fingerprint: `{bool(payload.get('bounded_media_fingerprint'))}`",
         f"- Package complete: `{bool(payload.get('package_complete'))}`",
         f"- Package event count: `{payload.get('package_event_count')}`",

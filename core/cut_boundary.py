@@ -474,6 +474,16 @@ def snap_late_segment_starts_to_confirmed_cuts(
             "start_before_window_sec": round(start_before_window, 3),
             "start_after_window_sec": round(start_after_window, 3),
         }
+        _trace_confirmed_cut_segment_result(
+            row,
+            primary_fps=effective_fps,
+            action_override="late_start_snap",
+            cut_frame_override=new_start_frame,
+            reason_override="confirmed_visual_cut_late_start_snap",
+            original_start_sec_override=old_start,
+            original_end_sec_override=old_end,
+            snapped_time_override=new_start,
+        )
 
     return rows
 
@@ -696,6 +706,13 @@ def _fit_one_segment_to_cut(
         fitted_start_frame = scene_start_frame
         fitted_end_frame = scene_end_frame if scene_end_frame is not None else max(end_frame, scene_start_frame + 1)
     if fitted_end_frame <= fitted_start_frame + 1:
+        _trace_confirmed_cut_segment_result(
+            seg,
+            primary_fps=primary_fps,
+            action_override="drop",
+            cut_frame_override=scene_end_frame if scene_end_frame is not None else scene_start_frame,
+            reason_override="confirmed_visual_cut_min_duration_drop",
+        )
         return None
 
     row = deepcopy(seg)
@@ -773,6 +790,13 @@ def _split_one_segment_to_cuts(
         if cut > fitted_start_frame and cut < fitted_end_frame
     ]
     if fitted_end_frame <= fitted_start_frame + 1:
+        _trace_confirmed_cut_segment_result(
+            seg,
+            primary_fps=primary_fps,
+            action_override="drop",
+            cut_frame_override=edge_snap_frames[-1] if edge_snap_frames else inner_cuts[0],
+            reason_override="confirmed_visual_cut_min_duration_drop",
+        )
         return []
 
     spans: list[tuple[int, int]] = []
@@ -785,6 +809,13 @@ def _split_one_segment_to_cuts(
     spans.append((left, fitted_end_frame))
     spans = [(s, e) for s, e in spans if e > s]
     if not spans:
+        _trace_confirmed_cut_segment_result(
+            seg,
+            primary_fps=primary_fps,
+            action_override="drop",
+            cut_frame_override=split_cuts[0] if split_cuts else inner_cuts[0],
+            reason_override="confirmed_visual_cut_empty_span_drop",
+        )
         return []
 
     text_parts = _split_text_for_frame_spans(str(seg.get("text", "") or ""), spans)
@@ -830,6 +861,13 @@ def _split_one_segment_to_cuts(
             )
         elif edge_snap_frames:
             row["cut_boundary_edge_snapped"] = True
+        _trace_confirmed_cut_segment_result(
+            row,
+            primary_fps=primary_fps,
+            original_start_sec_override=frame_to_sec(start_frame, primary_fps),
+            original_end_sec_override=frame_to_sec(end_frame, primary_fps),
+            snapped_time_override=frame_to_sec(span_start, primary_fps),
+        )
         rows.append(row)
     return rows
 
@@ -851,6 +889,110 @@ def _assign_cut_split_identity(
     if base_segment_id:
         row["cut_boundary_source_segment_id"] = base_segment_id
         row["segment_id"] = f"{base_segment_id}__{suffix}"
+
+
+def _trace_confirmed_cut_segment_result(
+    row: dict[str, Any],
+    *,
+    primary_fps: float,
+    action_override: str | None = None,
+    cut_frame_override: int | None = None,
+    reason_override: str | None = None,
+    original_start_sec_override: float | None = None,
+    original_end_sec_override: float | None = None,
+    snapped_time_override: float | None = None,
+) -> None:
+    if not isinstance(row, dict):
+        return
+    action = str(action_override or "").strip()
+    reason = str(reason_override or "").strip()
+    policy = row.get("_cut_boundary_priority_policy") if isinstance(row.get("_cut_boundary_priority_policy"), dict) else {}
+    split_frames = [
+        int(frame)
+        for frame in (policy.get("split_frames") if isinstance(policy.get("split_frames"), list) else [])
+        if frame is not None
+    ]
+    edge_snap_frames = [
+        int(frame)
+        for frame in (policy.get("edge_snap_frames") if isinstance(policy.get("edge_snap_frames"), list) else [])
+        if frame is not None
+    ]
+    if not action:
+        if row.get("cut_boundary_forced_split"):
+            action = "split"
+            reason = reason or "confirmed_visual_cut_forced_split"
+        elif row.get("cut_boundary_edge_snapped"):
+            action = "snap"
+            reason = reason or "confirmed_visual_cut_edge_snap"
+        elif row.get("_cut_boundary_start_snap_policy"):
+            action = "late_start_snap"
+            reason = reason or "confirmed_visual_cut_late_start_snap"
+    if not action:
+        return
+    cut_frame = cut_frame_override
+    if cut_frame is None:
+        frames = split_frames or edge_snap_frames
+        if frames:
+            cut_frame = int(frames[0])
+        else:
+            start_snap = row.get("_cut_boundary_start_snap_policy")
+            if isinstance(start_snap, dict):
+                cut_sec = _as_float(start_snap.get("new_start", start_snap.get("cut_sec")), 0.0)
+                cut_frame = sec_to_frame(cut_sec, primary_fps)
+    if cut_frame is None:
+        return
+    try:
+        from core.runtime.trace_logger import current_app_trace_logger, fps_parts
+
+        logger = current_app_trace_logger()
+        if logger is None:
+            return
+        fps_num, fps_den = fps_parts(primary_fps)
+        start_frame, end_frame = _segment_frame_bounds(row, primary_fps)
+        start_sec = frame_to_sec(start_frame, primary_fps)
+        end_sec = frame_to_sec(end_frame, primary_fps)
+        original_start_sec = start_sec if original_start_sec_override is None else float(original_start_sec_override)
+        original_end_sec = end_sec if original_end_sec_override is None else float(original_end_sec_override)
+        snapped_time = (
+            float(snapped_time_override)
+            if snapped_time_override is not None
+            else frame_to_sec(int(cut_frame), primary_fps) if action in {"snap", "late_start_snap"} else start_sec
+        )
+        logger.log_event(
+            "confirmed_cut_split_snap",
+            stage="cut-boundary",
+            level="INFO",
+            event_type="cut_boundary_decision",
+            action=action,
+            decision=action,
+            reason=reason or "confirmed_visual_cut",
+            drop_reason=reason if action == "drop" else "",
+            source="confirmed_visual_cut",
+            frame=int(cut_frame),
+            provisional_frame=int(cut_frame),
+            time_sec=frame_to_sec(int(cut_frame), primary_fps),
+            fps=float(primary_fps or 0.0),
+            fps_num=fps_num,
+            fps_den=fps_den,
+            subtitle_index=int(row.get("index", row.get("line", 0)) or 0),
+            start_frame=start_frame,
+            end_frame=end_frame,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            original_time=original_start_sec,
+            original_start_sec=original_start_sec,
+            original_end_sec=original_end_sec,
+            snapped_time=snapped_time,
+            duration_sec=max(0.0, end_sec - start_sec),
+            segment_id=str(row.get("segment_id", row.get("id", "")) or ""),
+            source_segment_id=str(row.get("cut_boundary_source_segment_id", row.get("cut_boundary_source_id", "")) or ""),
+            split_index=int(row.get("cut_boundary_split_index", 0) or 0),
+            split_count=int(row.get("cut_boundary_split_count", 1) or 1),
+            split_frames=list(split_frames),
+            edge_snap_frames=list(edge_snap_frames),
+        )
+    except Exception:
+        pass
 
 
 def _build_cut_aligned_segment(

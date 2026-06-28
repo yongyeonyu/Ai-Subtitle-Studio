@@ -1,5 +1,7 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-120500-cut-boundary-trace-gap-scout.md`
+- `.agents/sentinel/handoffs/20260628-120409-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-115600-nle-preview-trace-event-scout.md`
 - `.agents/sentinel/handoffs/20260628-115539-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260628-114700-nle-preview-skimming-contract-scout.md`

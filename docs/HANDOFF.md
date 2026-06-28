@@ -33,6 +33,44 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Confirmed Cut Decision Trace
+
+### Scope
+
+- Continued the source-app NLE cut-boundary/trace workstream by adding best-effort trace events for confirmed visual-cut split/snap/drop decisions.
+- Modified `core/cut_boundary.py`, `tools/audit_trace_log_bundle.py`, and `tests/test_subtitle_boundary_alignment.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, and `COMPLETED_ACTION_ITEMS.md`.
+- No FFmpeg scene threshold, cut-boundary detection threshold, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Trace evidence: `output/manual_verification/latest/nle_confirmed_cut_trace_audit_20260628/trace_log_bundle_audit.md`
+- Trace audit passed: `true`.
+- Confirmed cut trace ok: `true`.
+- Confirmed cut event count: `2`.
+- Event name: `confirmed_cut_split_snap`.
+- Decision fields: `event_type=cut_boundary_decision`, `decision`, `provisional_frame`, `drop_reason`, source segment identity, start/end frame fields, `fps_num/fps_den`.
+- NAS HeyDealer first-180s acceptance: `output/manual_verification/latest/nle_confirmed_cut_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- NAS result: accepted `true`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration `180.0/180.0`, global max active `1`.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-120409-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-120500-cut-boundary-trace-gap-scout.md`
+- Dex classification: accept the instrumentation-only slice. The scout's requested `decision`, `provisional_frame`, and `drop_reason` fields were included; threshold tuning and QML/UI changes remain deferred.
+
+### Verification
+
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_subtitle_boundary_alignment.py tests/test_cut_boundary_auto_scan_backend.py tests/test_trace_logger.py` -> `65 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_trace_log_bundle.py --output-dir output/manual_verification/latest/nle_confirmed_cut_trace_audit_20260628` -> pass, `confirmed_cut_trace_ok=true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.MP4" --reference-srt "/Volumes/photo/22_유튜브영상_개인/[20260209]헤이딜러광고/헤이딜러_최종.srt" --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_121251/benchmark_results.json`.
+- `./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_121251/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_confirmed_cut_trace_nas_heydealer_20260628/acceptance` -> accepted `true`.
+
+### Next Recommended Action
+
+- Continue cut-boundary accuracy through scorer/source-fps fixture gates; keep preview thumbnail cache out of confirmed cut evidence.
+- Do not promote STT collect-cache defaults, persisted NLE fields, QML/GPU defaults, packaging/signing/upload, or App Store submission actions without explicit owner approval.
+
 ## Current Handoff - 2026-06-28 NLE Preview Skimming Trace Events
 
 ### Scope
