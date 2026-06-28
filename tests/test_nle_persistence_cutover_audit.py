@@ -17,7 +17,7 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["operation_roundtrip_all_passed"] is True
     assert report["operation_roundtrip_family_count"] == 11
     assert report["render_export_parity_passed"] is True
-    assert "persisted_nle_project_fields_not_approved" in report["blockers"]
+    assert "top_level_nle_payload_not_cut_over" in report["blockers"]
     runtime = report["checks"]["runtime_roundtrip"]
     assert runtime["loaded_runtime_state"] is True
     assert runtime["runtime_caption_count"] == 3
@@ -26,6 +26,13 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert runtime["storage_has_nle"] is False
     assert runtime["storage_has_nle_snapshot"] is False
     assert runtime["storage_has_quarantine"] is False
+    approved = report["checks"]["approved_snapshot_persistence"]
+    assert approved["ready"] is True
+    assert approved["snapshot_persisted"] is True
+    assert approved["storage_has_nle_snapshot"] is True
+    assert approved["storage_has_nle"] is False
+    assert approved["storage_has_runtime_nle_key"] is False
+    assert approved["legacy_rows_stable"] is True
 
 
 def test_nle_persistence_cutover_audit_includes_render_export_parity_gate():
@@ -123,6 +130,8 @@ def test_nle_persistence_cutover_audit_writes_json_and_markdown_reports():
         assert saved["schema"] == report["schema"]
         assert markdown.startswith("# NLE Persistence Cutover Audit")
         assert "## Render / Export Parity" in markdown
+        assert "## Approved Snapshot Persistence" in markdown
+        assert "- Snapshot persisted: `True`" in markdown
         assert "| exported_assets | True | 2 | 0 | 0 | 2 | 2 | 1 |" in markdown
         assert "## Operation Roundtrip Matrix" in markdown
         assert "| caption_text_edit | True | True | True | True | True | 0 | 1 |" in markdown

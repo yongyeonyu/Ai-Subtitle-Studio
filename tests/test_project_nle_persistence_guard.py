@@ -7,11 +7,13 @@ from pathlib import Path
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_GUARD_SCHEMA,
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
 )
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
-from core.project.project_context import build_editor_state
+from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_format import build_storage_project_payload, hydrate_project_runtime_views
 from core.project.project_io import (
     clear_project_file_cache,
@@ -41,6 +43,19 @@ def _legacy_project() -> dict:
             primary_fps=30.0,
         ),
     }
+
+
+def _row_signature(rows: list[dict]) -> list[tuple[str, int, int, bool]]:
+    return [
+        (
+            str(row.get("text") or ""),
+            int(row.get("start_frame", row.get("timeline_start_frame", 0)) or 0),
+            int(row.get("end_frame", row.get("timeline_end_frame", 0)) or 0),
+            bool(row.get("is_gap")),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    ]
 
 
 class NLEPersistenceGuardTests(unittest.TestCase):
@@ -132,6 +147,50 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         self.assertNotIn("nle_snapshot", storage)
         self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
         self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage)
+
+    def test_owner_approved_nle_snapshot_persistence_roundtrips_with_legacy_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "approved-nle-snapshot.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            }
+            expected_rows = _row_signature(project_segments_to_editor(project, include_analysis_candidates=False))
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            assert_no_unapproved_nle_persistence_fields(storage, surface="approved_snapshot_storage")
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            loaded_rows = _row_signature(project_segments_to_editor(loaded, include_analysis_candidates=False))
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+
+        self.assertIn("nle_snapshot", storage)
+        self.assertNotIn("nle", storage)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage)
+        self.assertEqual(storage["nle_snapshot"]["schema"], "ai_subtitle_studio.nle_snapshot.v1")
+        self.assertEqual(
+            storage["nle_snapshot"]["persistence"]["schema"],
+            NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
+        )
+        self.assertEqual(
+            storage["nle_snapshot"]["persistence"]["approval"],
+            NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        )
+        self.assertEqual(storage["nle_snapshot"]["metadata"]["caption_count"], 1)
+        self.assertEqual(loaded_rows, expected_rows)
+        self.assertIsInstance(loaded_state, NLEProjectState)
+        self.assertIn("nle_snapshot", storage_after)
+        self.assertEqual(
+            storage_after["nle_snapshot"]["persistence"]["approval"],
+            NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        )
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
 
 
 if __name__ == "__main__":

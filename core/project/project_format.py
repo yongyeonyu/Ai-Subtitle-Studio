@@ -10,6 +10,8 @@ from core.project.project_roughcut_store import (
 )
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    approved_nle_snapshot_persistence_requested,
+    nle_snapshot_persistence_approval_payload,
     strip_unapproved_nle_persistence_fields,
 )
 
@@ -239,6 +241,7 @@ def hydrate_project_runtime_views(project: dict[str, Any] | None) -> dict[str, A
 def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload = dict(project or {})
     strip_unapproved_nle_persistence_fields(payload, source="project_format.storage")
+    persist_nle_snapshot = approved_nle_snapshot_persistence_requested(payload)
     header = refresh_project_video_header(payload)
     payload["video"] = header
     compact_project_roughcut_payload(payload, primary_fps=project_primary_fps(payload))
@@ -251,6 +254,17 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload.pop("nle", None)
     payload.pop("nle_snapshot", None)
     payload.pop(NLE_PERSISTENCE_QUARANTINE_KEY, None)
+    if persist_nle_snapshot:
+        from core.project.nle_snapshot import build_project_nle_snapshot
+
+        snapshot_payload = build_project_nle_snapshot(payload, project_path="").to_dict()
+        snapshot_payload["persistence"] = nle_snapshot_persistence_approval_payload(
+            source="project_format.storage"
+        )
+        payload["nle_snapshot"] = snapshot_payload
+        payload["nle_persistence"] = nle_snapshot_persistence_approval_payload(
+            source="project_format.storage"
+        )
     editor_state = payload.get("editor_state")
     if isinstance(editor_state, dict):
         editor_state = dict(editor_state)
@@ -274,6 +288,8 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         "analysis",
         "middle_segments",
         "preliminary_middle_segments",
+        "nle_persistence",
+        "nle_snapshot",
         "roughcut_state",
         "roughcut",
         "roughcut_draft",

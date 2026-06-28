@@ -146,21 +146,23 @@ Rollback:
 
 Goal: Preserve the current source-app NLE runtime/session editing line while preventing accidental persisted disk-format cutover or native migration scope creep.
 
-Status: monitor-only active guard. Completed NLE/runtime/documentation slices are archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md` and `docs/nle_engine/NLE_Action.md`.
+Status: active approved-persistence guard. Owner approval for persisted NLE/UI structure was granted on 2026-06-28; approved `nle_snapshot` compatibility metadata persistence is now available behind the explicit `nle_persistence.persist_snapshot` plus `owner_approved_20260628` policy, while top-level `nle`, persisted `_nle_project_state`, canonical load ownership, and per-pixel drag writes remain gated.
 
 Current baseline:
 
 - Native migration is not an active direction for this repository.
 - The current Python/PyQt6 source app remains the working product line.
 - Bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths.
-- Persisted NLE project fields remain gated.
+- Approved `nle_snapshot` persistence metadata can be written as compatibility metadata for explicitly marked projects.
+- Top-level `nle` project documents, persisted `_nle_project_state`, and making `nle_snapshot` the canonical load owner remain gated.
 - Legacy save/reopen compatibility remains mandatory.
+- Latest approved snapshot persistence audit: `output/manual_verification/latest/nle_approved_snapshot_persistence_20260628_2315/nle_persistence_cutover_audit.md`; `prep_ready=true`, approved snapshot persistence `ready=true`, operation roundtrip all passed, render/export parity passed, and full cutover remains `persistence_cutover_ready=false`.
 
 Detailed plan:
 
 1. Keep `docs/nle_engine/NLE_Action.md` as the NLE plan and status file.
 2. Keep completed NLE slices out of this active queue; use archive pointers and validation evidence instead.
-3. Require fresh compatibility proof before any persisted NLE disk-format change.
+3. Require fresh compatibility proof before widening beyond approved `nle_snapshot` compatibility metadata.
 4. Require final-overlap, global-canvas, save/reopen, render/export, and Taption rule parity proof for any new editing-owner cutover.
 5. Do not reopen native migration, Swift rewrite, QML/GPU timeline defaults, or per-pixel NLE writes unless the owner explicitly creates a new acceptance gate.
 

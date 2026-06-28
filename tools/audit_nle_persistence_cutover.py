@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
     UNAPPROVED_NLE_PERSISTENCE_KEYS,
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
@@ -49,9 +50,9 @@ from core.project.project_io import (
 
 SCHEMA = "ai_subtitle_studio.nle_persistence_cutover_readiness.v1"
 CUTOVER_BLOCKERS = (
-    "persisted_nle_project_fields_not_approved",
-    "legacy_disk_shape_required_for_compatibility",
-    "owner_approval_required_before_disk_format_change",
+    "top_level_nle_payload_not_cut_over",
+    "runtime_nle_project_state_must_remain_runtime_only",
+    "legacy_disk_shape_required_for_full_cutover",
 )
 
 
@@ -321,6 +322,57 @@ def _row_signature(
     return signature
 
 
+def _approved_snapshot_persistence_check(work_dir: Path) -> dict[str, Any]:
+    project_path = work_dir / "approved-nle-snapshot.aissproj"
+    project = _legacy_project()
+    project["nle_persistence"] = {
+        "persist_snapshot": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    }
+    expected_rows = _row_signature(
+        project_segments_to_editor(project, include_analysis_candidates=False),
+        include_id=False,
+    )
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+    assert_no_unapproved_nle_persistence_fields(storage, surface="approved_snapshot_storage")
+    clear_project_file_cache(str(project_path))
+    loaded = read_project_file(str(project_path))
+    loaded_rows = _row_signature(
+        project_segments_to_editor(loaded, include_analysis_candidates=False),
+        include_id=False,
+    )
+    loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    snapshot = storage.get("nle_snapshot") if isinstance(storage.get("nle_snapshot"), dict) else {}
+    persistence = snapshot.get("persistence") if isinstance(snapshot.get("persistence"), dict) else {}
+    ready = (
+        bool(snapshot)
+        and str(snapshot.get("schema") or "") == "ai_subtitle_studio.nle_snapshot.v1"
+        and str(persistence.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
+        and expected_rows == loaded_rows
+        and isinstance(loaded_state, NLEProjectState)
+        and "nle" not in storage
+        and NLE_PROJECT_STATE_RUNTIME_KEY not in storage
+        and NLE_PERSISTENCE_QUARANTINE_KEY not in storage
+    )
+    return {
+        "project_path": str(project_path),
+        "ready": ready,
+        "snapshot_persisted": bool(snapshot),
+        "snapshot_schema": str(snapshot.get("schema") or ""),
+        "snapshot_caption_count": int((snapshot.get("metadata") or {}).get("caption_count") or 0)
+        if isinstance(snapshot.get("metadata"), dict)
+        else 0,
+        "approval": str(persistence.get("approval") or ""),
+        "legacy_rows_stable": expected_rows == loaded_rows,
+        "loaded_runtime_state": isinstance(loaded_state, NLEProjectState),
+        "storage_has_nle": "nle" in storage,
+        "storage_has_runtime_nle_key": NLE_PROJECT_STATE_RUNTIME_KEY in storage,
+        "storage_has_nle_snapshot": "nle_snapshot" in storage,
+        "storage_has_quarantine": NLE_PERSISTENCE_QUARANTINE_KEY in storage,
+    }
+
+
 def _marker_signature(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
     signature: list[dict[str, Any]] = []
     for row in rows:
@@ -525,6 +577,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     out_dir.mkdir(parents=True, exist_ok=True)
     runtime_roundtrip = _runtime_roundtrip_check(out_dir / "roundtrip_fixture")
     future_payload = _future_payload_quarantine_check()
+    approved_snapshot = _approved_snapshot_persistence_check(out_dir / "approved_snapshot_fixture")
     operation_roundtrip_matrix = _operation_roundtrip_matrix(out_dir / "operation_roundtrip_matrix")
     render_export_parity = _render_export_parity_check(out_dir / "render_export_parity")
     operation_roundtrip_all_passed = all(
@@ -542,6 +595,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     checks = {
         "runtime_roundtrip": runtime_roundtrip,
         "future_payload_quarantine": future_payload,
+        "approved_snapshot_persistence": approved_snapshot,
         "operation_roundtrip_matrix": operation_roundtrip_matrix,
         "render_export_parity": render_export_parity,
     }
@@ -550,6 +604,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and runtime_roundtrip["storage_clean"]
         and future_payload["quarantine_recorded"]
         and not future_payload["remaining_unapproved_fields"]
+        and approved_snapshot["ready"]
         and operation_roundtrip_all_passed
         and render_export_parity["stable"]
         and render_export_parity["storage_clean"]
@@ -564,16 +619,16 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "operation_roundtrip_all_passed": operation_roundtrip_all_passed,
         "operation_roundtrip_family_count": len(operation_roundtrip_matrix),
         "render_export_parity_passed": bool(render_export_parity["stable"]),
-        "owner_approval_required_before": [
+        "remaining_full_cutover_gates": [
             "persisting top-level nle payloads",
-            "persisting nle_snapshot payloads",
             "persisting _nle_project_state payloads",
-            "changing .aissproj legacy disk shape",
+            "making nle_snapshot the canonical load source",
+            "changing legacy editor_state compatibility guarantees",
         ],
         "next_safe_steps": [
-            "keep runtime-only NLE hydration and legacy disk payload",
-            "expand tests around save/reopen/export parity before any persisted NLE format proposal",
-            "treat this audit as readiness evidence only, not cutover approval",
+            "keep legacy editor rows canonical while nle_snapshot is persisted as compatibility metadata",
+            "expand save/reopen/export parity before making nle_snapshot a load owner",
+            "treat this audit as partial persisted-snapshot readiness, not full NLE disk-format cutover",
         ],
     }
 
@@ -587,6 +642,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     checks = payload.get("checks") if isinstance(payload.get("checks"), dict) else {}
     runtime = checks.get("runtime_roundtrip") if isinstance(checks.get("runtime_roundtrip"), dict) else {}
     future = checks.get("future_payload_quarantine") if isinstance(checks.get("future_payload_quarantine"), dict) else {}
+    approved = checks.get("approved_snapshot_persistence") if isinstance(checks.get("approved_snapshot_persistence"), dict) else {}
     operations = checks.get("operation_roundtrip_matrix") if isinstance(checks.get("operation_roundtrip_matrix"), list) else []
     render_export = checks.get("render_export_parity") if isinstance(checks.get("render_export_parity"), dict) else {}
     render_surfaces = (
@@ -607,6 +663,16 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Runtime caption count: `{runtime.get('runtime_caption_count')}`",
         f"- Disk storage clean of NLE runtime fields: `{bool(runtime.get('storage_clean'))}`",
         f"- Storage schema: `{runtime.get('storage_schema')}`",
+        "",
+        "## Approved Snapshot Persistence",
+        "",
+        f"- Ready: `{bool(approved.get('ready'))}`",
+        f"- Snapshot persisted: `{bool(approved.get('snapshot_persisted'))}`",
+        f"- Approval: `{approved.get('approval')}`",
+        f"- Legacy rows stable: `{bool(approved.get('legacy_rows_stable'))}`",
+        f"- Runtime NLE state hydrated: `{bool(approved.get('loaded_runtime_state'))}`",
+        f"- Storage has NLE snapshot: `{bool(approved.get('storage_has_nle_snapshot'))}`",
+        f"- Storage has top-level NLE/runtime/quarantine: `{bool(approved.get('storage_has_nle'))}/{bool(approved.get('storage_has_runtime_nle_key'))}/{bool(approved.get('storage_has_quarantine'))}`",
         "",
         "## Render / Export Parity",
         "",

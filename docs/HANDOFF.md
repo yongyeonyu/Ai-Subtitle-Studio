@@ -33,7 +33,46 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 App Store Packaging Runtime Fix
+## Current Handoff - 2026-06-28 NLE Approved Snapshot Persistence
+
+### Scope
+
+- After completing and committing the App Store packaging runtime fix, Dex implemented the first owner-approved persisted NLE structure slice.
+- The change allows `nle_snapshot` to be persisted only as compatibility metadata when the project explicitly carries `nle_persistence.persist_snapshot=true` and `approval=owner_approved_20260628`.
+- Top-level `nle`, persisted `_nle_project_state`, canonical load ownership from `nle_snapshot`, per-pixel drag writes, UI layout/label/color changes, subtitle quality policy changes, and STT/default-cache policy changes remain out of this slice.
+
+### Modified Files
+
+- `core/project/nle_persistence_guard.py`
+- `core/project/project_format.py`
+- `tools/audit_nle_persistence_cutover.py`
+- `tests/test_project_nle_persistence_guard.py`
+- `tests/test_nle_persistence_cutover_audit.py`
+- `docs/planning_queue/ACTION_ITEMS.md`
+- `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`
+- `docs/nle_engine/NLE_Action.md`
+- `docs/ARCHITECTURE.md`
+- `docs/FEATURE_REGISTRY.md`
+- `docs/HANDOFF.md`
+
+### Verification
+
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py` -> `5 passed`.
+- `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py` -> `10 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_approved_snapshot_persistence_20260628_2315` -> wrote `nle_persistence_cutover_audit.md`, `prep_ready=true`, approved snapshot persistence `ready=true`, operation roundtrip all passed, render/export parity passed, full cutover `false`.
+
+### Result
+
+- Approved `nle_snapshot` storage is now real but non-canonical compatibility metadata.
+- Legacy editor rows remain canonical for load/save, unapproved future payloads are still quarantined, and runtime `NLEProjectState` remains runtime-only.
+
+### Next Recommended Action
+
+- If continuing NLE, make `nle_snapshot` read-back parity explicit without making it the load owner yet: compare persisted snapshot versus freshly rebuilt snapshot across save/reopen/direct SRT/roughcut sidecar surfaces.
+- If continuing App Store, install/configure Apple Distribution and 3rd Party Mac Developer Installer identities, then rerun `.app` signing, `.pkg` build, package signature, App Store Connect validation, and sandbox workflow smoke.
+
+## Previous Handoff - 2026-06-28 App Store Packaging Runtime Fix
 
 ### Scope
 
