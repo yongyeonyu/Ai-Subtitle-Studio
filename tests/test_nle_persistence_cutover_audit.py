@@ -17,7 +17,8 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["operation_roundtrip_all_passed"] is True
     assert report["operation_roundtrip_family_count"] == 11
     assert report["render_export_parity_passed"] is True
-    assert "top_level_nle_payload_not_cut_over" in report["blockers"]
+    assert report["top_level_nle_shadow_ready"] is True
+    assert "top_level_nle_shadow_not_canonical_load_owner" in report["blockers"]
     runtime = report["checks"]["runtime_roundtrip"]
     assert runtime["loaded_runtime_state"] is True
     assert runtime["runtime_caption_count"] == 3
@@ -36,6 +37,17 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert approved["readback_parity_checked"] is True
     assert approved["readback_parity_stable"] is True
     assert approved["readback_mismatch_count"] == 0
+    top_level = report["checks"]["approved_top_level_nle_shadow"]
+    assert top_level["ready"] is True
+    assert top_level["storage_has_nle"] is True
+    assert top_level["storage_has_nle_snapshot"] is True
+    assert top_level["canonical_load_owner"] == "legacy_editor_state"
+    assert top_level["runtime_project_state_persisted"] is False
+    assert top_level["legacy_rows_stable"] is True
+    assert top_level["readback_parity_stable"] is True
+    assert top_level["runtime_report_persisted"] is False
+    assert top_level["runtime_state_persisted"] is False
+    assert top_level["quarantine_persisted"] is False
     corrupted = report["checks"]["corrupted_snapshot_readback"]
     assert corrupted["drift_detected"] is True
     assert corrupted["mismatch_count"] > 0
@@ -91,6 +103,19 @@ def test_nle_persistence_cutover_audit_includes_render_export_parity_gate():
     assert surfaces["global_canvas"]["gap_count"] == 1
     assert surfaces["global_canvas"]["candidate_count"] == 2
     assert surfaces["exported_assets"]["render_segment_count"] == 2
+
+
+def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
+    with tempfile.TemporaryDirectory() as tmp:
+        output_dir = Path(tmp)
+        report = build_nle_persistence_cutover_report(output_dir=output_dir)
+        write_nle_persistence_cutover_report(output_dir, report)
+
+        markdown = (output_dir / "nle_persistence_cutover_audit.md").read_text(encoding="utf-8")
+
+    assert "## Top-Level NLE Shadow" in markdown
+    assert "- Storage has top-level NLE: `True`" in markdown
+    assert "- Canonical load owner: `legacy_editor_state`" in markdown
 
 
 def test_nle_persistence_cutover_audit_records_future_payload_quarantine():

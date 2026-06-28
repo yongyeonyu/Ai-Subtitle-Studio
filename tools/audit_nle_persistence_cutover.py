@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA,
     UNAPPROVED_NLE_PERSISTENCE_KEYS,
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
@@ -35,7 +36,7 @@ from core.project.nle_dual_write import (
 )
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
 from core.project.nle_render_export_parity import assert_project_nle_render_export_parity
-from core.project.nle_snapshot import NLE_SNAPSHOT_READBACK_PARITY_KEY
+from core.project.nle_snapshot import NLE_SNAPSHOT_READBACK_PARITY_KEY, NLE_TOP_LEVEL_SHADOW_SCHEMA
 from core.project.project_context import (
     build_editor_state,
     project_cut_boundary_provisional_segments,
@@ -51,7 +52,7 @@ from core.project.project_io import (
 
 SCHEMA = "ai_subtitle_studio.nle_persistence_cutover_readiness.v1"
 CUTOVER_BLOCKERS = (
-    "top_level_nle_payload_not_cut_over",
+    "top_level_nle_shadow_not_canonical_load_owner",
     "runtime_nle_project_state_must_remain_runtime_only",
     "legacy_disk_shape_required_for_full_cutover",
 )
@@ -377,6 +378,75 @@ def _approved_snapshot_persistence_check(work_dir: Path) -> dict[str, Any]:
         "storage_has_runtime_nle_key": NLE_PROJECT_STATE_RUNTIME_KEY in storage,
         "storage_has_nle_snapshot": "nle_snapshot" in storage,
         "storage_has_quarantine": NLE_PERSISTENCE_QUARANTINE_KEY in storage,
+    }
+
+
+def _approved_top_level_nle_shadow_check(work_dir: Path) -> dict[str, Any]:
+    project_path = work_dir / "approved-top-level-nle-shadow.aissproj"
+    project = _legacy_project()
+    project["nle_persistence"] = {
+        "persist_snapshot": True,
+        "persist_top_level_nle": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    }
+    expected_rows = _row_signature(
+        project_segments_to_editor(project, include_analysis_candidates=False),
+        include_id=False,
+    )
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+    assert_no_unapproved_nle_persistence_fields(storage, surface="approved_top_level_nle_storage")
+    nle_payload = storage.get("nle") if isinstance(storage.get("nle"), dict) else {}
+    nle_metadata = nle_payload.get("metadata") if isinstance(nle_payload.get("metadata"), dict) else {}
+    nle_persistence = nle_payload.get("persistence") if isinstance(nle_payload.get("persistence"), dict) else {}
+    clear_project_file_cache(str(project_path))
+    loaded = read_project_file(str(project_path))
+    loaded_rows = _row_signature(
+        project_segments_to_editor(loaded, include_analysis_candidates=False),
+        include_id=False,
+    )
+    loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    parity = loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY) if isinstance(loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY), dict) else {}
+    write_project_file(str(project_path), loaded)
+    storage_after = read_project_storage_payload(str(project_path))
+    ready = (
+        str(nle_payload.get("schema") or "") == NLE_TOP_LEVEL_SHADOW_SCHEMA
+        and str(nle_payload.get("role") or "") == "shadow_metadata"
+        and str(nle_payload.get("canonical_load_owner") or "") == "legacy_editor_state"
+        and not bool(nle_payload.get("runtime_project_state_persisted"))
+        and str(nle_persistence.get("schema") or "") == NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA
+        and str(nle_persistence.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
+        and bool(nle_persistence.get("legacy_editor_state_remains_canonical"))
+        and loaded_rows == expected_rows
+        and isinstance(loaded_state, NLEProjectState)
+        and bool(parity.get("stable"))
+        and "nle_snapshot" in storage
+        and NLE_PROJECT_STATE_RUNTIME_KEY not in storage
+        and NLE_PERSISTENCE_QUARANTINE_KEY not in storage
+        and NLE_SNAPSHOT_READBACK_PARITY_KEY not in storage_after
+        and NLE_PROJECT_STATE_RUNTIME_KEY not in storage_after
+        and NLE_PERSISTENCE_QUARANTINE_KEY not in storage_after
+    )
+    return {
+        "project_path": str(project_path),
+        "ready": ready,
+        "shadow_schema": str(nle_payload.get("schema") or ""),
+        "shadow_role": str(nle_payload.get("role") or ""),
+        "canonical_load_owner": str(nle_payload.get("canonical_load_owner") or ""),
+        "runtime_project_state_persisted": bool(nle_payload.get("runtime_project_state_persisted")),
+        "persistence_schema": str(nle_persistence.get("schema") or ""),
+        "approval": str(nle_persistence.get("approval") or ""),
+        "legacy_rows_stable": loaded_rows == expected_rows,
+        "readback_parity_stable": bool(parity.get("stable")),
+        "caption_count": int(nle_metadata.get("caption_count") or 0),
+        "marker_count": int(nle_metadata.get("marker_count") or 0),
+        "render_plan_count": int(nle_metadata.get("render_plan_count") or 0),
+        "storage_has_nle": "nle" in storage,
+        "storage_has_nle_snapshot": "nle_snapshot" in storage,
+        "storage_has_runtime_nle_key": NLE_PROJECT_STATE_RUNTIME_KEY in storage,
+        "runtime_report_persisted": NLE_SNAPSHOT_READBACK_PARITY_KEY in storage_after,
+        "runtime_state_persisted": NLE_PROJECT_STATE_RUNTIME_KEY in storage_after,
+        "quarantine_persisted": NLE_PERSISTENCE_QUARANTINE_KEY in storage_after,
     }
 
 
@@ -707,6 +777,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     runtime_roundtrip = _runtime_roundtrip_check(out_dir / "roundtrip_fixture")
     future_payload = _future_payload_quarantine_check()
     approved_snapshot = _approved_snapshot_persistence_check(out_dir / "approved_snapshot_fixture")
+    top_level_nle_shadow = _approved_top_level_nle_shadow_check(out_dir / "approved_top_level_nle_fixture")
     corrupted_snapshot = _corrupted_snapshot_readback_check(out_dir / "corrupted_snapshot_fixture")
     roughcut_sidecar = _roughcut_sidecar_readback_check(out_dir / "roughcut_sidecar_readback_fixture")
     operation_roundtrip_matrix = _operation_roundtrip_matrix(out_dir / "operation_roundtrip_matrix")
@@ -727,6 +798,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "runtime_roundtrip": runtime_roundtrip,
         "future_payload_quarantine": future_payload,
         "approved_snapshot_persistence": approved_snapshot,
+        "approved_top_level_nle_shadow": top_level_nle_shadow,
         "corrupted_snapshot_readback": corrupted_snapshot,
         "roughcut_sidecar_readback": roughcut_sidecar,
         "operation_roundtrip_matrix": operation_roundtrip_matrix,
@@ -738,6 +810,10 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and future_payload["quarantine_recorded"]
         and not future_payload["remaining_unapproved_fields"]
         and approved_snapshot["ready"]
+        and top_level_nle_shadow["ready"]
+        and not top_level_nle_shadow["runtime_report_persisted"]
+        and not top_level_nle_shadow["runtime_state_persisted"]
+        and not top_level_nle_shadow["quarantine_persisted"]
         and corrupted_snapshot["drift_detected"]
         and corrupted_snapshot["legacy_rows_stable"]
         and not corrupted_snapshot["runtime_report_persisted"]
@@ -763,8 +839,9 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "operation_roundtrip_all_passed": operation_roundtrip_all_passed,
         "operation_roundtrip_family_count": len(operation_roundtrip_matrix),
         "render_export_parity_passed": bool(render_export_parity["stable"]),
+        "top_level_nle_shadow_ready": bool(top_level_nle_shadow["ready"]),
         "remaining_full_cutover_gates": [
-            "persisting top-level nle payloads",
+            "making top-level nle payloads canonical load owners",
             "persisting _nle_project_state payloads",
             "making nle_snapshot the canonical load source",
             "changing legacy editor_state compatibility guarantees",
@@ -787,6 +864,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     runtime = checks.get("runtime_roundtrip") if isinstance(checks.get("runtime_roundtrip"), dict) else {}
     future = checks.get("future_payload_quarantine") if isinstance(checks.get("future_payload_quarantine"), dict) else {}
     approved = checks.get("approved_snapshot_persistence") if isinstance(checks.get("approved_snapshot_persistence"), dict) else {}
+    top_level = checks.get("approved_top_level_nle_shadow") if isinstance(checks.get("approved_top_level_nle_shadow"), dict) else {}
     corrupted = checks.get("corrupted_snapshot_readback") if isinstance(checks.get("corrupted_snapshot_readback"), dict) else {}
     roughcut = checks.get("roughcut_sidecar_readback") if isinstance(checks.get("roughcut_sidecar_readback"), dict) else {}
     operations = checks.get("operation_roundtrip_matrix") if isinstance(checks.get("operation_roundtrip_matrix"), list) else []
@@ -821,6 +899,19 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Runtime NLE state hydrated: `{bool(approved.get('loaded_runtime_state'))}`",
         f"- Storage has NLE snapshot: `{bool(approved.get('storage_has_nle_snapshot'))}`",
         f"- Storage has top-level NLE/runtime/quarantine: `{bool(approved.get('storage_has_nle'))}/{bool(approved.get('storage_has_runtime_nle_key'))}/{bool(approved.get('storage_has_quarantine'))}`",
+        "",
+        "## Top-Level NLE Shadow",
+        "",
+        f"- Ready: `{bool(top_level.get('ready'))}`",
+        f"- Storage has top-level NLE: `{bool(top_level.get('storage_has_nle'))}`",
+        f"- Storage has NLE snapshot: `{bool(top_level.get('storage_has_nle_snapshot'))}`",
+        f"- Schema: `{top_level.get('shadow_schema')}`",
+        f"- Role: `{top_level.get('shadow_role')}`",
+        f"- Canonical load owner: `{top_level.get('canonical_load_owner')}`",
+        f"- Runtime project state persisted: `{bool(top_level.get('runtime_project_state_persisted'))}`",
+        f"- Legacy rows stable: `{bool(top_level.get('legacy_rows_stable'))}`",
+        f"- Read-back parity stable: `{bool(top_level.get('readback_parity_stable'))}`",
+        f"- Runtime report/state/quarantine persisted: `{bool(top_level.get('runtime_report_persisted'))}/{bool(top_level.get('runtime_state_persisted'))}/{bool(top_level.get('quarantine_persisted'))}`",
         "",
         "## Corrupted Snapshot Readback",
         "",

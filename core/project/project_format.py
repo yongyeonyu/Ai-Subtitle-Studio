@@ -11,7 +11,9 @@ from core.project.project_roughcut_store import (
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
     approved_nle_snapshot_persistence_requested,
+    approved_top_level_nle_persistence_requested,
     nle_snapshot_persistence_approval_payload,
+    nle_top_level_persistence_approval_payload,
     strip_unapproved_nle_persistence_fields,
 )
 
@@ -242,6 +244,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload = dict(project or {})
     strip_unapproved_nle_persistence_fields(payload, source="project_format.storage")
     persist_nle_snapshot = approved_nle_snapshot_persistence_requested(payload)
+    persist_top_level_nle = approved_top_level_nle_persistence_requested(payload)
     header = refresh_project_video_header(payload)
     payload["video"] = header
     compact_project_roughcut_payload(payload, primary_fps=project_primary_fps(payload))
@@ -255,17 +258,31 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload.pop("nle", None)
     payload.pop("nle_snapshot", None)
     payload.pop(NLE_PERSISTENCE_QUARANTINE_KEY, None)
-    if persist_nle_snapshot:
-        from core.project.nle_snapshot import build_project_nle_snapshot
+    if persist_nle_snapshot or persist_top_level_nle:
+        from core.project.nle_snapshot import build_project_nle_snapshot, build_top_level_nle_shadow_payload
 
         snapshot_payload = build_project_nle_snapshot(payload, project_path="").to_dict()
-        snapshot_payload["persistence"] = nle_snapshot_persistence_approval_payload(
+        if persist_nle_snapshot:
+            snapshot_payload["persistence"] = nle_snapshot_persistence_approval_payload(
+                source="project_format.storage"
+            )
+            payload["nle_snapshot"] = snapshot_payload
+        if persist_top_level_nle:
+            payload["nle"] = build_top_level_nle_shadow_payload(
+                payload,
+                project_path="",
+                snapshot_payload=snapshot_payload,
+            )
+            payload["nle"]["persistence"] = nle_top_level_persistence_approval_payload(
+                source="project_format.storage"
+            )
+        policy_payload = nle_snapshot_persistence_approval_payload(
             source="project_format.storage"
         )
-        payload["nle_snapshot"] = snapshot_payload
-        payload["nle_persistence"] = nle_snapshot_persistence_approval_payload(
-            source="project_format.storage"
-        )
+        if persist_top_level_nle:
+            policy_payload["persist_top_level_nle"] = True
+            policy_payload["top_level_nle_schema"] = "ai_subtitle_studio.nle_shadow_project.v1"
+        payload["nle_persistence"] = policy_payload
     editor_state = payload.get("editor_state")
     if isinstance(editor_state, dict):
         editor_state = dict(editor_state)
@@ -291,6 +308,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         "preliminary_middle_segments",
         "nle_persistence",
         "nle_snapshot",
+        "nle",
         "roughcut_state",
         "roughcut",
         "roughcut_draft",

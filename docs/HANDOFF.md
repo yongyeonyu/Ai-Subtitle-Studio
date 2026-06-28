@@ -33,7 +33,64 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 NLE Direct SRT / Roughcut Readback Parity
+## Current Handoff - 2026-06-29 Top-Level NLE Shadow Metadata
+
+### Scope
+
+- Dex completed the next owner-approved persisted NLE structure slice: top-level `nle` shadow metadata persistence.
+- Top-level `nle` can now be stored only for explicitly marked projects with `nle_persistence.persist_snapshot=true`, `persist_top_level_nle=true`, `approval=owner_approved_20260628`, and an approved companion `nle_snapshot`.
+- The stored top-level payload is `schema=ai_subtitle_studio.nle_shadow_project.v1`, `role=shadow_metadata`, and `canonical_load_owner=legacy_editor_state`.
+- Persisted `nle_snapshot` and top-level `nle` remain compatibility metadata. Legacy editor rows remain canonical, and persisted `_nle_project_state`, canonical NLE load ownership, per-pixel drag writes, UI layout/label/color changes, subtitle quality policy changes, and STT/default-cache policy changes remain out of this slice.
+
+### Modified Files
+
+- `core/project/nle_persistence_guard.py`
+- `core/project/nle_snapshot.py`
+- `core/project/project_format.py`
+- `tools/audit_nle_persistence_cutover.py`
+- `tests/test_project_nle_persistence_guard.py`
+- `tests/test_nle_persistence_cutover_audit.py`
+- `.agents/sentinel/handoff.md`
+- `.agents/sentinel/handoffs/20260628-231113-nle-top-level-payload-scout-jammini.md`
+- `.agents/sentinel/handoffs/20260628-231132-top-level-nle-shadow-metadata-architecture-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-231149-top-level-nle-shadow-metadata-qa-gates-seorin.md`
+- `.agents/sentinel/handoffs/20260628-231205-top-level-nle-shadow-metadata-workflow-yujin.md`
+- `docs/planning_queue/ACTION_ITEMS.md`
+- `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`
+- `docs/nle_engine/NLE_Action.md`
+- `docs/ARCHITECTURE.md`
+- `docs/FEATURE_REGISTRY.md`
+- `docs/HANDOFF.md`
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/nle_snapshot.py core/project/project_format.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py` -> `8 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `6 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_render_export_parity.py` -> `2 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "snapshot or editor_row_readback_parity"` -> `16 passed, 4 subtests passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_top_level_shadow_metadata_20260629_0020` -> wrote `nle_persistence_cutover_audit.md`; `prep_ready=true`, `top_level_nle_shadow_ready=true`, `canonical_load_owner=legacy_editor_state`, legacy rows stable `true`, read-back parity stable `true`, runtime report/runtime state/quarantine persisted `false/false/false`, operation roundtrip all passed, render/export parity passed, and full cutover `false`.
+
+### Jammini / Agent Review
+
+- Route status was verified before dispatch.
+- Jammini scout: `.agents/sentinel/handoffs/20260628-231113-nle-top-level-payload-scout-jammini.md`; accepted only for bounded file/test scouting and rejected as stale where it assumed snapshot-only work.
+- `한결` architecture review: `.agents/sentinel/handoffs/20260628-231132-top-level-nle-shadow-metadata-architecture-hangyeol.md`; accepted the shadow-metadata principle and canonical legacy load owner, rejected schema/version bump scope.
+- `서린` QE gate review: `.agents/sentinel/handoffs/20260628-231149-top-level-nle-shadow-metadata-qa-gates-seorin.md`; accepted storage-negative and drift/readback parity gates.
+- `유진` workflow review: `.agents/sentinel/handoffs/20260628-231205-top-level-nle-shadow-metadata-workflow-yujin.md`; accepted no-visible-UI-change direction and deferred user-facing warnings/popups.
+
+### Result
+
+- Approved top-level `nle` shadow metadata can now travel with approved `nle_snapshot` metadata for compatibility inspection.
+- Reopen/load still comes from legacy rows. Runtime `_nle_project_state` and readback reports are stripped before storage.
+- Completed slice recorded in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`; active queue now points to the latest top-level shadow evidence path.
+
+### Next Recommended Action
+
+- If continuing NLE, choose the next compatibility proof before any canonical load-owner work: broader real-project save/reopen/export parity, persisted metadata migration/backfill audit, or a UI-facing NLE control surface with explicit owner-approved UI scope.
+- If continuing App Store, install/configure Apple Distribution and 3rd Party Mac Developer Installer identities, then rerun `.app` signing, `.pkg` build, package signature, App Store Connect validation, and sandbox workflow smoke.
+
+## Previous Handoff - 2026-06-29 NLE Direct SRT / Roughcut Readback Parity
 
 ### Scope
 

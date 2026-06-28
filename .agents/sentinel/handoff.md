@@ -1,5 +1,9 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-231205-top-level-nle-shadow-metadata-workflow-yujin.md`
+- `.agents/sentinel/handoffs/20260628-231149-top-level-nle-shadow-metadata-qa-gates-seorin.md`
+- `.agents/sentinel/handoffs/20260628-231132-top-level-nle-shadow-metadata-architecture-hangyeol.md`
+- `.agents/sentinel/handoffs/20260628-231113-nle-top-level-payload-scout-jammini.md`
 - `.agents/sentinel/handoffs/20260628-225431-nle-direct-srt-roughcut-parity-workflow-yujin.md`
 - `.agents/sentinel/handoffs/20260628-225414-nle-direct-srt-roughcut-parity-qa-gates-seorin.md`
 - `.agents/sentinel/handoffs/20260628-235400-nle-direct-srt-roughcut-parity-architecture-hangyeol.md`

@@ -19,6 +19,7 @@ from core.roughcut.models import EDLSegment
 from core.roughcut.renderer_skeleton import RenderCommandPlan, build_concat_render_plan
 
 NLE_SNAPSHOT_SCHEMA = "ai_subtitle_studio.nle_snapshot.v1"
+NLE_TOP_LEVEL_SHADOW_SCHEMA = "ai_subtitle_studio.nle_shadow_project.v1"
 NLE_SNAPSHOT_READBACK_PARITY_SCHEMA = "ai_subtitle_studio.nle_snapshot_readback_parity.v1"
 NLE_SNAPSHOT_READBACK_PARITY_KEY = "_nle_snapshot_readback_parity"
 
@@ -777,12 +778,46 @@ def build_project_nle_snapshot(project: dict[str, Any], *, project_path: str = "
     )
 
 
+def build_top_level_nle_shadow_payload(
+    project: dict[str, Any],
+    *,
+    project_path: str = "",
+    snapshot_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if isinstance(snapshot_payload, dict):
+        snapshot = deepcopy(snapshot_payload)
+    else:
+        snapshot = build_project_nle_snapshot(project, project_path=project_path).to_dict()
+    metadata = snapshot.get("metadata") if isinstance(snapshot.get("metadata"), dict) else {}
+    return {
+        "schema": NLE_TOP_LEVEL_SHADOW_SCHEMA,
+        "role": "shadow_metadata",
+        "canonical_load_owner": "legacy_editor_state",
+        "runtime_project_state_persisted": False,
+        "source_project_path": str(project_path or snapshot.get("source_project_path") or ""),
+        "assets": deepcopy(snapshot.get("assets") or []),
+        "sequences": deepcopy(snapshot.get("sequences") or []),
+        "render_plans": deepcopy(snapshot.get("render_plans") or []),
+        "metadata": {
+            "source": "nle_snapshot_adapter",
+            "source_snapshot_schema": str(snapshot.get("schema") or ""),
+            "read_only": True,
+            "legacy_editor_state_remains_canonical": True,
+            "asset_count": int(metadata.get("asset_count") or 0),
+            "caption_count": int(metadata.get("caption_count") or 0),
+            "marker_count": int(metadata.get("marker_count") or 0),
+            "render_plan_count": int(metadata.get("render_plan_count") or 0),
+        },
+    }
+
+
 __all__ = [
     "CaptionSegment",
     "Clip",
     "NLE_SNAPSHOT_READBACK_PARITY_KEY",
     "NLE_SNAPSHOT_READBACK_PARITY_SCHEMA",
     "NLE_SNAPSHOT_SCHEMA",
+    "NLE_TOP_LEVEL_SHADOW_SCHEMA",
     "NLESnapshot",
     "ProjectAsset",
     "RenderPlan",
@@ -791,6 +826,7 @@ __all__ = [
     "Track",
     "attach_nle_snapshot_readback_parity",
     "build_project_nle_snapshot",
+    "build_top_level_nle_shadow_payload",
     "build_nle_snapshot_readback_parity_report",
     "build_nle_snapshot_readback_parity_report_for_editor_rows",
     "build_concat_render_plan_from_snapshot",

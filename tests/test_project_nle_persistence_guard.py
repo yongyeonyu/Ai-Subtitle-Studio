@@ -9,12 +9,14 @@ from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
+    NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA,
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
 )
 from core.project.nle_snapshot import (
     NLE_SNAPSHOT_READBACK_PARITY_KEY,
     NLE_SNAPSHOT_READBACK_PARITY_SCHEMA,
+    NLE_TOP_LEVEL_SHADOW_SCHEMA,
 )
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
 from core.project.project_context import build_editor_state, project_segments_to_editor
@@ -203,6 +205,80 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
         self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
         self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+
+    def test_owner_approved_top_level_nle_shadow_roundtrips_without_load_ownership(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "approved-top-level-nle-shadow.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "persist_top_level_nle": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            }
+            expected_rows = _row_signature(project_segments_to_editor(project, include_analysis_candidates=False))
+
+            write_project_file(str(project_path), copy.deepcopy(project))
+            storage = read_project_storage_payload(str(project_path))
+            assert_no_unapproved_nle_persistence_fields(storage, surface="approved_top_level_nle_storage")
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            parity = loaded.get(NLE_SNAPSHOT_READBACK_PARITY_KEY)
+            loaded_rows = _row_signature(project_segments_to_editor(loaded, include_analysis_candidates=False))
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+
+        nle_payload = storage["nle"]
+        self.assertIn("nle_snapshot", storage)
+        self.assertEqual(nle_payload["schema"], NLE_TOP_LEVEL_SHADOW_SCHEMA)
+        self.assertEqual(nle_payload["role"], "shadow_metadata")
+        self.assertEqual(nle_payload["canonical_load_owner"], "legacy_editor_state")
+        self.assertFalse(nle_payload["runtime_project_state_persisted"])
+        self.assertEqual(
+            nle_payload["persistence"]["schema"],
+            NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA,
+        )
+        self.assertEqual(
+            nle_payload["persistence"]["approval"],
+            NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        )
+        self.assertEqual(nle_payload["metadata"]["caption_count"], 1)
+        self.assertEqual(nle_payload["sequences"][0]["captions"][0]["text"], "first")
+        self.assertEqual(loaded_rows, expected_rows)
+        self.assertIsInstance(loaded_state, NLEProjectState)
+        self.assertTrue(parity["checked"])
+        self.assertTrue(parity["stable"])
+        self.assertIn("nle", storage_after)
+        self.assertIn("nle_snapshot", storage_after)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+        storage_without_snapshot = copy.deepcopy(storage)
+        storage_without_snapshot.pop("nle_snapshot", None)
+        with self.assertRaisesRegex(ValueError, "unapproved_nle_persistence_fields:missing_snapshot_companion:nle"):
+            assert_no_unapproved_nle_persistence_fields(
+                storage_without_snapshot,
+                surface="missing_snapshot_companion",
+            )
+        report = strip_unapproved_nle_persistence_fields(
+            storage_without_snapshot,
+            source="missing_snapshot_companion",
+        )
+        self.assertEqual(report["stripped_keys"], ["nle"])
+        self.assertNotIn("nle", storage_without_snapshot)
+        self.assertIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_without_snapshot)
+
+    def test_top_level_nle_shadow_requires_snapshot_persistence_gate(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_top_level_nle": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        }
+
+        storage = build_storage_project_payload(copy.deepcopy(project))
+
+        self.assertNotIn("nle", storage)
+        self.assertNotIn("nle_snapshot", storage)
 
     def test_corrupted_approved_nle_snapshot_records_runtime_readback_drift_without_persisting_report(self):
         with tempfile.TemporaryDirectory() as tmp:
