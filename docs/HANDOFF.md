@@ -33,6 +33,45 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Preview Cache-Miss Block-Free Guard
+
+### Scope
+
+- Added a focused guard for preview/skimming cache misses so slow frame preparation cannot block `VideoPlayerWidget.preview_seek()`.
+- Updated `tests/test_video_player_widget.py`, `tools/audit_nle_preview_skimming_cache.py`, `tests/test_nle_preview_skimming_cache_audit.py`, NLE/status docs, and completed action history.
+- No UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG, cut-boundary evidence ownership, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_preview_skimming_cache_miss_block_free_20260628/nle_preview_skimming_cache_audit.md`
+- `ready=true`; preview cache contract remains `purpose=editor_preview_skimming`, `evidence_role=user_preview_only`, `cut_boundary_evidence=false`, `ui_thread_decode_allowed=false`.
+- `cache_miss_thread_contract` fields are all `true`: worker-thread scheduling, decode inside worker, worker named `video-preview-frame-cache`, worker-active reentry guard, and signal-based ready paint.
+- Focused PyQt guard proves `preview_seek()` returns before a slow worker decode completes and stays below the `50ms` acceptance threshold.
+- NAS preflight: `output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`.
+- NAS acceptance: `output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`; accepted `true`, elapsed `45.744s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, global max-active `1`.
+- NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_preview_cache_miss_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Prep: `.agents/sentinel/handoffs/20260628-163300-nle-preview-skimming-cache-miss-prep.md`
+- Dex classification: accepted as a bounded support input. The implementation kept the scope to test/audit hardening and did not add new UI design, persisted NLE fields, App Store work, or runtime subtitle-generation policy changes.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/audit_nle_preview_skimming_cache.py tests/test_nle_preview_skimming_cache_audit.py tests/test_video_player_widget.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player_widget.py -k "preview_seek_cache_miss or preview_frame_cache_prepare or nearest_preview_frame_trace"` -> `4 passed, 79 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_preview_frame_cache.py` -> `5 passed`.
+- `./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_cache_miss_block_free_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_preview_cache_miss_nas_20260628` -> timeout detected `false`.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md`, using owner-map/audit proof before adopting any new mutation source.
+- Keep persisted NLE project fields, per-pixel NLE writes, QML/GPU default surfaces, runtime undo/redo UI changes, and App Store packaging/submission work blocked until explicit owner approval and compatibility proof exist.
+
 ## Current Handoff - 2026-06-28 NLE Drag Commit-Boundary Guard
 
 ### Scope

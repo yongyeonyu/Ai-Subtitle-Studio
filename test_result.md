@@ -1,5 +1,40 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Preview Cache-Miss Block-Free Guard - 2026-06-28 KST
+
+- 실행 모드: source-app NLE preview/skimming cache-miss UI-thread block-prevention guard.
+- 결과: pass for slow cache-miss worker nonblocking behavior, preview-cache worker contract audit, NAS HeyDealer first-180s strict acceptance, and timeout comparison. No UI/UX layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2 policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, runtime undo/redo UI, cut-boundary evidence ownership, or per-pixel NLE write changed.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_preview_skimming_cache_miss_block_free_20260628/nle_preview_skimming_cache_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_preview_skimming_cache_miss_block_free_20260628/nle_preview_skimming_cache_audit.json`
+  - NAS preflight: `output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_preview_cache_miss_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini prep: `.agents/sentinel/handoffs/20260628-163300-nle-preview-skimming-cache-miss-prep.md`
+- 실제 결과:
+  - Audit `ready=true`.
+  - Preview provenance `purpose=editor_preview_skimming`, `evidence_role=user_preview_only`, `cut_boundary_evidence=false`, `ui_thread_decode_allowed=false`.
+  - `cache_miss_thread_contract` all `true`: worker-thread scheduling, in-worker decode, named `video-preview-frame-cache` worker, worker-active reentry guard, and signal-based ready paint.
+  - Focused PyQt guard proves `preview_seek()` returns before slow worker decode completes and stays below `50ms`.
+- NAS 상태:
+  - Preflight ready `true`; media exists `true`; reference SRT exists `true`; clipped reference rows `89`.
+  - Acceptance `true`; elapsed `45.744s`; raw/final/reference `58/56/89`.
+  - Quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max-active `1`.
+  - STT1/STT2/word selected `21/37/7`.
+  - Stage spans: STT1 `18.261775s`, STT2 `14.358197s`, word precision `12.541529s`, subtitle postprocess `0.500109s`.
+  - Timeout comparison against baseline `20260628_152303`: `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_preview_skimming_cache.py tests/test_nle_preview_skimming_cache_audit.py tests/test_video_player_widget.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player_widget.py -k "preview_seek_cache_miss or preview_frame_cache_prepare or nearest_preview_frame_trace"` -> `4 passed, 79 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_preview_frame_cache.py` -> `5 passed`.
+  - `./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_cache_miss_block_free_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_preflight_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> wrote `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_preview_skimming_cache_miss_nas_heydealer_20260628/acceptance` -> accepted `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_152303/benchmark_results.json .codex_work/benchmarks/subtitle_pipeline_variants/20260628_153555/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_preview_cache_miss_nas_20260628` -> timeout detected `false`.
+
 ## NLE Drag Commit-Boundary Guard - 2026-06-28 KST
 
 - 실행 모드: source-app Taption-style timeline body-drag commit-boundary guard.

@@ -219,6 +219,17 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_preview_fram
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_timeline_playhead_fit.py -k "scrub_updates_playhead_immediately_and_uses_lightweight_preview_seek or scrub_throttles_video_seek_during_fast_mouse_moves or timing_drag_preview_updates_playhead_and_uses_lightweight_preview_seek or auto_cut_boundary_preview_moves_playhead_without_thumbnail_work"
 ```
 
+For cache-miss UI-thread block prevention, add the stricter slow-worker guard and audit:
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_preview_skimming_cache.py tests/test_nle_preview_skimming_cache_audit.py tests/test_video_player_widget.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_video_player_widget.py -k "preview_seek_cache_miss or preview_frame_cache_prepare or nearest_preview_frame_trace"
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_skimming_cache_audit.py tests/test_preview_frame_cache.py
+./venv/bin/python tools/audit_nle_preview_skimming_cache.py --output-dir output/manual_verification/latest/nle_preview_skimming_cache_miss_block_free_YYYYMMDD
+```
+
+Acceptance requires audit `ready=true`, every `cache_miss_thread_contract` field `true`, slow-worker `preview_seek()` elapsed below `50ms`, preview provenance `user_preview_only`, `cut_boundary_evidence=false`, and `ui_thread_decode_allowed=false`.
+
 ## NLE mutable owner pilot validation
 
 Runtime-only NLE state changes should prove legacy hydration, non-persistence of NLE runtime fields, direct SRT/no-media safety, save/reopen compatibility, final-surface no-overlap projection, and roughcut sidecar/render parity.

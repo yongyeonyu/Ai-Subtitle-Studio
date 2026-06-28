@@ -48,6 +48,8 @@ Trace files are diagnostic evidence only. They must not become subtitle timing, 
 
 Skimming preview thumbnails live under the temp workspace `Preview/FrameThumbnails` via `core/runtime/preview_frame_cache.py`. This cache is only a UI responsiveness aid for `VideoPlayerWidget.preview_seek()` and related drag/hover/seek flows. Cache hits may update the existing thumbnail surface, while cache misses only schedule background thumbnail preparation; the UI thread must not synchronously decode frames during scrub/skimming.
 
+`ui/editor/video_player_surface.py` owns the cache-miss worker boundary: `ensure_preview_frame(...)` runs inside the named `video-preview-frame-cache` worker, `_preview_frame_worker_active` prevents worker floods, and ready paints return through `preview_thumbnail_ready` so the UI thread performs only signal handling and existing-surface updates.
+
 The preview frame cache is not cut-boundary proof, subtitle timing evidence, save-file state, or a replacement for the existing 720p playback proxy in `core/video_preview_proxy.py`.
 
 ## UI layer

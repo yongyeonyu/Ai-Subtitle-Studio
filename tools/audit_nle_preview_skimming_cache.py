@@ -78,6 +78,25 @@ def _trace_event_contract() -> dict[str, Any]:
     }
 
 
+def _cache_miss_thread_contract() -> dict[str, Any]:
+    source_path = ROOT / "ui" / "editor" / "video_player_surface.py"
+    text = source_path.read_text(encoding="utf-8")
+    schedule_idx = text.find("def _schedule_preview_frame_cache_prepare(")
+    worker_idx = text.find("def _worker() -> None:", schedule_idx)
+    ensure_idx = text.find("result = ensure_preview_frame(", worker_idx)
+    thread_idx = text.find("threading.Thread(", worker_idx)
+    return {
+        "owner": "ui.editor.video_player_surface.VideoPlayerSurfaceMixin",
+        "cache_miss_uses_worker_thread": schedule_idx >= 0 and worker_idx > schedule_idx and thread_idx > worker_idx,
+        "decode_runs_inside_worker": worker_idx >= 0 and ensure_idx > worker_idx,
+        "worker_thread_named": 'name="video-preview-frame-cache"' in text,
+        "worker_started_after_decode_closure": thread_idx > ensure_idx > worker_idx,
+        "worker_active_flag_guards_reentry": "self._preview_frame_worker_active = True" in text
+        and "self._preview_frame_worker_active = False" in text,
+        "ready_paint_uses_signal": "self.preview_thumbnail_ready.emit(request_key, str(result.path))" in text,
+    }
+
+
 def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, Any]:
     work_dir = output_dir / "_work"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -115,6 +134,7 @@ def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, An
     manifest_path = preview_cache.preview_frame_manifest_path(cached_path)
     video_surface = _video_surface_contract()
     trace_events = _trace_event_contract()
+    cache_miss_thread = _cache_miss_thread_contract()
     preview_workspace_isolated = (
         "Preview" in str(frame_cache_dir)
         and "FrameThumbnails" in str(frame_cache_dir)
@@ -138,6 +158,7 @@ def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, An
         and source_fps_grid_ok
         and all(bool(value) for key, value in video_surface.items() if key != "owner")
         and all(bool(value) for key, value in trace_events.items() if key != "owner")
+        and all(bool(value) for key, value in cache_miss_thread.items() if key != "owner")
     )
     return {
         "schema": SCHEMA,
@@ -159,6 +180,7 @@ def build_nle_preview_skimming_cache_report(*, output_dir: Path) -> dict[str, An
         "manifest_fps": manifest.get("fps"),
         "video_surface_contract": video_surface,
         "trace_event_contract": trace_events,
+        "cache_miss_thread_contract": cache_miss_thread,
         "blocked_scope": list(BLOCKED_SCOPE),
     }
 
@@ -207,6 +229,20 @@ def write_nle_preview_skimming_cache_report(output_dir: Path, report: dict[str, 
             preview_fields=report["trace_event_contract"]["preview_only_fields_present"],
             exact_fps=report["trace_event_contract"]["exact_fps_fields_present"],
             throttle=report["trace_event_contract"]["preview_seek_throttle_present"],
+        ),
+        "",
+        "## Cache Miss Thread Contract",
+        "",
+        "| owner | worker_thread | decode_in_worker | named_thread | start_after_closure | reentry_guard | ready_signal |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| {owner} | {worker} | {decode} | {named} | {start_after} | {guard} | {signal} |".format(
+            owner=report["cache_miss_thread_contract"]["owner"],
+            worker=report["cache_miss_thread_contract"]["cache_miss_uses_worker_thread"],
+            decode=report["cache_miss_thread_contract"]["decode_runs_inside_worker"],
+            named=report["cache_miss_thread_contract"]["worker_thread_named"],
+            start_after=report["cache_miss_thread_contract"]["worker_started_after_decode_closure"],
+            guard=report["cache_miss_thread_contract"]["worker_active_flag_guards_reentry"],
+            signal=report["cache_miss_thread_contract"]["ready_paint_uses_signal"],
         ),
         "",
         "## Blocked Scope",

@@ -2,6 +2,8 @@
 # Phase: PHASE2
 import json
 import os
+import threading
+import time
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -1596,6 +1598,50 @@ class VideoPlayerWidgetTests(unittest.TestCase):
                 show_nearest.assert_called_once_with(f.name, 3.0, width=320)
                 schedule_preview.assert_called_once_with(f.name, 3.0, width=320)
                 show_thumb.assert_not_called()
+        finally:
+            widget.close()
+            widget.deleteLater()
+            self.app.processEvents()
+
+    def test_initial_paused_preview_seek_cache_miss_returns_before_slow_worker_decode(self):
+        widget = VideoPlayerWidget()
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+                widget._current_source_path = f.name
+                widget._rebuild_frame_time_map(duration=10.0, fps=30.0)
+                widget._media_source_loaded = True
+                widget._video_surface_primed = False
+                worker_started = threading.Event()
+                original_thread = threading.Thread
+                worker_threads = []
+
+                def _slow_ensure_preview_frame(*_args, **_kwargs):
+                    worker_started.set()
+                    time.sleep(0.12)
+                    return SimpleNamespace(status="created", path="/tmp/preview.jpg")
+
+                def _thread_factory(*, target, daemon, name):
+                    thread = original_thread(target=target, daemon=daemon, name=name)
+                    worker_threads.append(thread)
+                    return thread
+
+                with patch.object(widget.media_player, "setPosition") as set_position, \
+                     patch.object(widget, "_show_nearest_preview_frame_at", return_value=False) as show_nearest, \
+                     patch.object(widget, "show_cached_thumbnail_at", return_value=True) as show_thumb, \
+                     patch("ui.editor.video_player_surface.ensure_preview_frame", side_effect=_slow_ensure_preview_frame), \
+                     patch("ui.editor.video_player_surface.threading.Thread", side_effect=_thread_factory):
+                    started_at = time.monotonic()
+                    widget.preview_seek(3.0)
+                    elapsed = time.monotonic() - started_at
+                    self.assertLess(elapsed, 0.05)
+                    self.assertTrue(worker_started.wait(1.0))
+                    for thread in worker_threads:
+                        thread.join(1.0)
+
+                set_position.assert_called_once_with(3000)
+                show_nearest.assert_called_once_with(f.name, 3.0, width=320)
+                show_thumb.assert_not_called()
+                self.assertEqual([thread.name for thread in worker_threads], ["video-preview-frame-cache"])
         finally:
             widget.close()
             widget.deleteLater()

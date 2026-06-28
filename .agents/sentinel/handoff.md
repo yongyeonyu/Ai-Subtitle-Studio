@@ -1,5 +1,6 @@
 # Sentinel Handoffs Index
 
+- `.agents/sentinel/handoffs/20260628-163300-nle-preview-skimming-cache-miss-prep.md`
 - `.agents/sentinel/handoffs/20260628-161800-next-nle-taption-ux-scout.md`
 - `.agents/sentinel/handoffs/20260628-160200-nle-operation-journal-trace.md`
 - `.agents/sentinel/handoffs/20260628-155100-project-io-save-load-trace.md`
