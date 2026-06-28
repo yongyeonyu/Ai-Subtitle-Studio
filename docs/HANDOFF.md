@@ -33,7 +33,52 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.08 / G3 Real-Media Live Runtime Observability Proof
+## Current Handoff - 2026-06-29 v04.01.09 / G3-G2 Final-Overlap Deferred-Save Retry Guard
+
+### Scope
+
+- Completed the final-overlap deferred-save retry guard slice for `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling` and `G2. Source-App NLE / Taption Editing Continuity`.
+- Bumped source-app version and project schema from `04.01.08` to `04.01.09`.
+- Added `docs/release_notes/RELEASE_v04.01.09.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.09`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.09`.
+- `ui/editor/editor_save_manager.py` now treats `nle_save_export_final_overlap` as a nonretryable deferred project-save failure outside close/exit paths.
+- Final-overlap deferred save clears stale pending snapshot state and does not schedule another retry timer.
+- Ordinary retryable writer failures still reschedule through the existing deferred-save retry path.
+- The strict final-overlap save/export guard was not weakened or bypassed.
+- No visible UI layout/label/color/menu/shortcut change, STT/VAD algorithm change, worker fan-out change, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile ui/editor/editor_save_manager.py tests/test_editor_autosave_cleanup.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused autosave guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_autosave_cleanup.py -k "deferred_project_save or close_flush_failure"` -> `7 passed, 44 deselected`.
+- Focused save/export strict guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "save_export_cutover"` -> `5 passed, 8 deselected`.
+- Combined NLE save/export/autosave guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py` -> `71 passed`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.09`, `PROJECT_SCHEMA_VERSION=04.01.09`.
+- `git diff --check -- .` -> pass.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-030627-watchdog-handoff-probe.md`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints; all warned not to overclaim this retry cleanup as full save/reopen/final-export acceptance.
+
+### Remaining Risks
+
+- The final subtitle overlap that triggers `nle_save_export_final_overlap` remains open. This release stops retry churn only.
+- G3 still needs same-media quality/speed, save/reopen, final export, and global-canvas acceptance before the broader runtime-visibility gate can close.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G2/G3, fix the underlying final-overlap data issue from the NAS-derived live proof run, then rerun same-media save/reopen/final-export evidence.
+- If continuing proof-only work, keep runtime/status proof separate from final quality/speed/save-reopen proof.
+
+## Previous Handoff - 2026-06-29 v04.01.08 / G3 Real-Media Live Runtime Observability Proof
 
 ### Scope
 

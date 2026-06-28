@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.08-source-app
+Document-Version: 04.01.09-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.08`.
+- App version: `04.01.09`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -146,7 +146,7 @@ Rollback:
 
 Goal: Preserve the current source-app NLE runtime/session editing line while preventing accidental persisted disk-format cutover or native migration scope creep.
 
-Status: active approved-persistence guard. Owner approval for persisted NLE/UI structure was granted on 2026-06-28; approved `nle_snapshot` compatibility metadata and top-level `nle` shadow metadata persistence are now available behind explicit `nle_persistence` flags plus `owner_approved_20260628`, while persisted `_nle_project_state`, canonical load ownership, and per-pixel drag writes remain gated. Close/deferred-save vector-time boundary blocker is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040102-nle-close--deferred-save-boundary-fix`.
+Status: active approved-persistence guard. Owner approval for persisted NLE/UI structure was granted on 2026-06-28; approved `nle_snapshot` compatibility metadata and top-level `nle` shadow metadata persistence are now available behind explicit `nle_persistence` flags plus `owner_approved_20260628`, while persisted `_nle_project_state`, canonical load ownership, and per-pixel drag writes remain gated. Close/deferred-save vector-time boundary blocker is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040102-nle-close--deferred-save-boundary-fix`; final-overlap deferred-save retry guard is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040109-g3g2-final-overlap-deferred-save-retry-guard`.
 
 Current baseline:
 
@@ -159,6 +159,7 @@ Current baseline:
 - Legacy save/reopen compatibility remains mandatory.
 - Latest top-level NLE shadow metadata proof: `output/manual_verification/latest/nle_top_level_shadow_metadata_20260629_0020/nle_persistence_cutover_audit.md`; `prep_ready=true`, `top_level_nle_shadow_ready=true`, storage has approved top-level `nle` plus `nle_snapshot`, `canonical_load_owner=legacy_editor_state`, legacy rows and read-back parity are stable, runtime report/runtime state/quarantine do not persist, operation roundtrip all passed across `11` families, render/export parity passed, and full cutover remains `persistence_cutover_ready=false`.
 - Completed close/deferred-save blocker proof: `output/manual_verification/latest/nle_close_deferred_save_v040102_20260629/close_deferred_save_report.md`; raw vector `time.start_frame/end_frame` rows no longer collapse into `nle_save_export_invalid_duration`, close-triggered deferred-save failures no longer reschedule stale retry loops, and true final overlaps still raise `nle_save_export_final_overlap`.
+- Completed final-overlap deferred-save retry guard: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040109-g3g2-final-overlap-deferred-save-retry-guard`; `nle_save_export_final_overlap` remains a strict save/export failure, but deferred project save now treats it as nonretryable and clears stale pending snapshots instead of scheduling repeated retries. Ordinary writer failures still reschedule.
 
 Detailed plan:
 
@@ -195,8 +196,9 @@ Current baseline:
 - Live runtime observability proof harness slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040106-g3-live-runtime-observability-proof-harness`.
 - Live runtime observability strong-evidence gate slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040107-g3-live-runtime-observability-strong-evidence-gate`.
 - Representative real-media live runtime observability proof slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040108-g3-real-media-live-runtime-observability-proof`.
+- Final-overlap deferred-save retry guard slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040109-g3g2-final-overlap-deferred-save-retry-guard`.
 - Latest real-media live proof: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`; `status=passed`, `issues=[]`, `failed_sample_count=0`, `generation_completed=true`, pre-final VAD/STT1/STT2 observations `16/172/44`, no raw leak, no final-authority drift, no projection-budget drift, and `21` snapshots.
-- The same live proof run exposed an existing post-SRT-save `nle_save_export_final_overlap` save/export and deferred-save retry failure. This remains a separate G2/G3 blocker before claiming same-media save/reopen or final-export acceptance.
+- The same live proof run exposed an existing post-SRT-save `nle_save_export_final_overlap` save/export failure. The `v04.01.09` guard stops that failure from causing repeated deferred-save retries, but the underlying final subtitle overlap remains a separate G2/G3 blocker before claiming same-media save/reopen or final-export acceptance.
 - Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
 - `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata. Only `final` carries save/export authority; VAD/STT/subtitle-preview tracks are reference-only.
 - `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_track_counts` / `nle_runtime_tracks` metadata without raw STT/VAD/subtitle-preview row text or large segment payloads, and UDP compaction preserves the count summary.
@@ -217,7 +219,7 @@ Detailed plan:
 
 3. Resource-balanced parallel scheduling
    - Completed the read-only live projection budget telemetry slice: reserve at least one interactive core where applicable, expose foreground save/export/close and pressure labels, keep projection worker count at `0`, and prove the live display/status path does not take subtitle worker-pool threads.
-   - Real-media `live-nle-proof` runtime/status/snapshot evidence is complete for the current slice. Continue from the next slice only with same-media quality/speed/save-reopen evidence or a separately measured worker enforcement change; keep STT1 on the current high-quality native path and run STT2/word precision only within selective, quality-preserving budgets.
+   - Real-media `live-nle-proof` runtime/status/snapshot evidence and final-overlap deferred-save retry cleanup are complete for the current slices. Continue from the next slice only with the underlying final-overlap data fix, same-media quality/speed/save-reopen evidence, or a separately measured worker enforcement change; keep STT1 on the current high-quality native path and run STT2/word precision only within selective, quality-preserving budgets.
    - On Apple Silicon, describe accelerator use as ANE/GPU/CPU in docs and logs where user-visible. Do not make PyTorch MPS a production default.
    - Avoid full-core aggressive scheduling as a default. Let worker counts ramp only when memory pressure is normal and active runtime labels show no competing foreground save/export/close action.
    - Prevent the live NLE display path from taking threads away from the actual subtitle conversion path. Projection and painting should coalesce updates, reuse existing row snapshots, and drop stale preview frames rather than blocking STT workers.
@@ -252,8 +254,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.08"
-document_version: "04.01.08-source-app"
+app_version: "04.01.09"
+document_version: "04.01.09-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

@@ -654,6 +654,46 @@ class EditorAutosaveCleanupTests(unittest.TestCase):
         self.assertEqual(editor._deferred_project_save_nonretryable_close_error, "nle_save_export_final_overlap")
         single_shot.assert_not_called()
 
+    def test_deferred_project_save_final_overlap_does_not_retry_when_not_closing(self):
+        editor = _QObjectDeferredProjectSaveEditor("/tmp/worker-project.aissproj")
+        editor._schedule_deferred_project_save(
+            editor._get_current_segments(),
+            schedule_analysis_refresh=False,
+        )
+
+        with patch(
+            "ui.editor.editor_save_manager._write_project_save_snapshot",
+            side_effect=ValueError("nle_save_export_final_overlap"),
+        ), patch("ui.editor.editor_save_manager.QTimer.singleShot") as single_shot:
+            result = editor._run_deferred_project_save(editor._deferred_project_save_generation, force=True)
+
+        self.assertFalse(result)
+        self.assertFalse(editor._deferred_project_save_pending)
+        self.assertFalse(editor._deferred_project_save_running)
+        self.assertEqual(editor._deferred_project_save_segments, [])
+        self.assertEqual(editor._deferred_project_save_options, {})
+        self.assertEqual(editor._deferred_project_save_nonretryable_close_error, "nle_save_export_final_overlap")
+        single_shot.assert_not_called()
+
+    def test_deferred_project_save_retryable_error_still_reschedules(self):
+        editor = _QObjectDeferredProjectSaveEditor("/tmp/worker-project.aissproj")
+        editor._schedule_deferred_project_save(
+            editor._get_current_segments(),
+            schedule_analysis_refresh=False,
+        )
+
+        with patch(
+            "ui.editor.editor_save_manager._write_project_save_snapshot",
+            side_effect=RuntimeError("temporary writer failure"),
+        ), patch("ui.editor.editor_save_manager.QTimer.singleShot") as single_shot:
+            result = editor._run_deferred_project_save(editor._deferred_project_save_generation, force=True)
+
+        self.assertFalse(result)
+        self.assertTrue(editor._deferred_project_save_pending)
+        self.assertFalse(editor._deferred_project_save_running)
+        self.assertEqual(editor._deferred_project_save_nonretryable_close_error, "")
+        single_shot.assert_called_once()
+
     def test_persist_editor_srts_prefers_opened_source_srt_path_for_direct_srt_mode(self):
         editor = _SourceSrtSaveEditor()
 

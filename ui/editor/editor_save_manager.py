@@ -39,6 +39,12 @@ DEFAULT_DEFERRED_PROJECT_SAVE_DELAY_MS = 4_000
 DEFAULT_DEFERRED_EDITOR_LEARNING_HOLD_MS = 600_000
 
 
+def _deferred_project_save_error_is_nonretryable(error: Any, *, force_reason: str = "") -> bool:
+    if str(force_reason or "") in {"close", "exit"}:
+        return True
+    return "nle_save_export_final_overlap" in str(error or "")
+
+
 def reusable_cache_paths() -> list[str]:
     output_dir = os.path.abspath(str(config.OUTPUT_DIR or ""))
     cache_paths = [
@@ -1331,7 +1337,7 @@ class EditorSaveManagerMixin:
                 )
             except Exception as exc:
                 get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {exc}")
-                if bool(force) and str(force_reason or "") in {"close", "exit"}:
+                if _deferred_project_save_error_is_nonretryable(exc, force_reason=str(force_reason or "")):
                     self._deferred_project_save_pending = False
                     self._deferred_project_save_segments = []
                     self._deferred_project_save_options = {}
@@ -1609,7 +1615,7 @@ class EditorSaveManagerMixin:
         error = state.get("error")
         if error is not None:
             get_logger().log(f"⚠️ 프로젝트 지연 저장 실패: {error}")
-            if str(state.get("force_reason") or "") in {"close", "exit"}:
+            if _deferred_project_save_error_is_nonretryable(error, force_reason=str(state.get("force_reason") or "")):
                 self._deferred_project_save_pending = False
                 self._deferred_project_save_segments = []
                 self._deferred_project_save_options = {}

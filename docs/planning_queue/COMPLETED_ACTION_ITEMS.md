@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.08-source-app
+Document-Version: 04.01.09-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,20 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.09 G3/G2 Final-Overlap Deferred-Save Retry Guard
+
+Source request: continue remaining action-item execution after owner approval for App Store packaging/signing/upload/metadata work and persisted NLE/UI structure scope; distribute work through Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.09"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.09`.
+3. `ui/editor/editor_save_manager.py` now classifies `nle_save_export_final_overlap` as a nonretryable deferred project-save error, even when the save was not triggered by close/exit.
+4. On that final-overlap failure, deferred save clears the stale pending snapshot, segments, and options, records the nonretryable error, and does not schedule another retry timer.
+5. Ordinary deferred-save writer failures remain retryable and still reschedule through the existing timer path.
+6. The strict `nle_save_export_final_overlap` save/export guard was not weakened, bypassed, or converted into acceptance. The underlying final subtitle overlap and same-media save/reopen/final-export proof remain open G2/G3 blockers.
+7. Jammini route proof was refreshed at `.agents/sentinel/handoffs/20260629-030627-watchdog-handoff-probe.md`, and three sub-agent reviews were used as architecture/QE/editor-workflow guardrails.
+8. The three review viewpoints converged on the narrow boundary: stop retry churn for nonretryable final-overlap save/export failure, preserve final authority, preserve normal retry behavior for transient writer failures, and do not overclaim full save/reopen acceptance.
+9. Focused verification passed: compile check for touched modules/tests, `tests/test_editor_autosave_cleanup.py -k "deferred_project_save or close_flush_failure"` -> `7 passed, 44 deselected`, `tests/test_project_nle_runtime_cutover.py -k "save_export_cutover"` -> `5 passed, 8 deselected`, combined save/export/autosave guard -> `71 passed`, App Store/bundle guard -> `9 passed`, project/status guard -> `66 passed, 79 deselected`, direct version assertion -> `APP_VERSION=04.01.09` / `PROJECT_SCHEMA_VERSION=04.01.09`, and `git diff --check -- .` -> pass.
 
 ## v04.01.08 G3 Real-Media Live Runtime Observability Proof
 

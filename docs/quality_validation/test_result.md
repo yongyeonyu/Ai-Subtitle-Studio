@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.09 G3/G2 Final-Overlap Deferred-Save Retry Guard - 2026-06-29 KST
+
+- 실행 모드: source-app G3/G2 deferred-save retry guard, final-overlap nonretryable cleanup, retryable deferred-save preservation, and version/schema bump.
+- 결과: pass for focused deferred-save retry behavior. This is not same-media save/reopen or final export acceptance.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.09.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-030627-watchdog-handoff-probe.md`
+- 실제 결과:
+  - App version updated to `04.01.09`.
+  - Project schema version updated to `04.01.09`.
+  - `ui/editor/editor_save_manager.py` treats `nle_save_export_final_overlap` as a nonretryable deferred project-save error outside close/exit paths.
+  - Final-overlap deferred save clears stale pending snapshot state and does not schedule another retry timer.
+  - Retryable writer failures still reschedule through the existing deferred-save retry path.
+  - The strict `nle_save_export_final_overlap` save/export guard remains active; the underlying final subtitle overlap remains a separate G2/G3 blocker.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/editor/editor_save_manager.py tests/test_editor_autosave_cleanup.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_editor_autosave_cleanup.py -k "deferred_project_save or close_flush_failure"` -> `7 passed, 44 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py -k "save_export_cutover"` -> `5 passed, 8 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_project_assets.py tests/test_editor_autosave_cleanup.py` -> `71 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.09`, `PROJECT_SCHEMA_VERSION=04.01.09`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.08 G3 Real-Media Live Runtime Observability Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G3 representative real-media live runtime/status proof, STT-source preview-row runtime counting, status budget preservation, and version/schema bump.
