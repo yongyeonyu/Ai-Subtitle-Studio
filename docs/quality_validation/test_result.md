@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.14 G3 Active Global-Canvas Responsiveness Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G3 same-media active global-canvas/timeline responsiveness proof and version/schema bump.
+- 결과: pass for the bounded active global-canvas responsiveness slice. This is not full G3 completion because any additional active-worker final-surface proof remains a separate gate if selected by the queue.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.14.md`
+  - Active global-canvas proof: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040114-g3-active-global-canvas-responsiveness-proof`
+- 실제 결과:
+  - App version updated to `04.01.14`.
+  - Project schema version updated to `04.01.14`.
+  - `tools/remote_verify.py editor-sequence` can now map existing timeline/global proof actions: `timeline-zoom-in`, `timeline-zoom-out`, `timeline-fit`, `timeline-time-window`, `timeline-max`, and `zoom-max`.
+  - Active proof: `open-media` and `start-current-pipeline` succeeded, active samples reported `ST_PROC/backend_active=true`, timeline zoom/fit/time-window/max plus zoom-max/play/pause/status/guided-status all returned `ok=true`, max command elapsed was `0.267435s`, all `19` snapshots were nonzero, final track count stayed `0`, and cancel returned to `backend_active=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tools/remote_verify.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py -k "global_canvas_responsiveness or generation_status_and_wait or active_worker_control"` -> `3 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "editor_timeline_view_command_exercises_zoom_and_fit or status_command_reports_compact_nle_runtime_track_counts or dispatch_status_command"` -> `7 passed, 77 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.14`, `PROJECT_SCHEMA_VERSION=04.01.14`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.13 G3 Open-Media Generation And Active-Worker Responsiveness Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G3 same-media app-command open/start/status/cancel/close/quit responsiveness proof and version/schema bump.

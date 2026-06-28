@@ -44,13 +44,13 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.13` from `core/runtime/config.py`
-- Project schema version: `04.01.13` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.13.md`
+- App version: `04.01.14` from `core/runtime/config.py`
+- Project schema version: `04.01.14` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.14.md`
 - Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040100_20260628`
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`
 
-`v04.01.13` is a source-app release checkpoint, not App Store submission proof.
+`v04.01.14` is a source-app release checkpoint, not App Store submission proof.
 
 ## Active Groups
 
@@ -75,7 +75,7 @@ locations instead:
 High-value completed evidence families include Taption subtitle segment parity,
 final/preview isolation, voice-silence magnet parity, neighbor-collision guard,
 NLE runtime/session mutation adoption, save/reopen compatibility, render/export
-parity, trace-bundle retention, and `v04.01.13` source release proof.
+parity, trace-bundle retention, and `v04.01.14` source release proof.
 
 ## Must Not Break
 

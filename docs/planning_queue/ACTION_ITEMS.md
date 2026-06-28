@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.13-source-app
+Document-Version: 04.01.14-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -34,11 +34,11 @@ completed proof logs back into this active queue.
 
 Goal: Make the current macOS source app releasable through the Mac App Store by closing packaging, signing, sandbox, App Store Connect validation, and owner-metadata gates without weakening subtitle quality or changing UI/UX.
 
-Status: active blocker-closure group. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28; final App Store `.pkg`, validation, upload, and submission remain blocked until the required Apple Distribution/Installer identities and owner metadata values are available.
+Status: active blocker-closure group. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28 and reconfirmed on 2026-06-29; final App Store `.pkg`, validation, upload, and submission remain blocked until the required Apple Distribution/Installer identities and owner metadata values are available.
 
 Current baseline:
 
-- App version: `04.01.13`.
+- App version: `04.01.14`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -146,7 +146,7 @@ Rollback:
 
 Goal: Preserve the current source-app NLE runtime/session editing line while preventing accidental persisted disk-format cutover or native migration scope creep.
 
-Status: active approved-persistence guard. Owner approval for persisted NLE/UI structure was granted on 2026-06-28; approved `nle_snapshot` compatibility metadata and top-level `nle` shadow metadata persistence are now available behind explicit `nle_persistence` flags plus `owner_approved_20260628`, while persisted `_nle_project_state`, canonical load ownership, and per-pixel drag writes remain gated. Close/deferred-save vector-time boundary blocker is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040102-nle-close--deferred-save-boundary-fix`; final-overlap deferred-save retry guard is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040109-g3g2-final-overlap-deferred-save-retry-guard`; final save/export micro-overlap shared-boundary repair is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040110-g2g3-final-save-export-micro-overlap-shared-boundary-repair`.
+Status: active approved-persistence guard. Owner approval for persisted NLE/UI structure was granted on 2026-06-28 and reconfirmed on 2026-06-29; approved `nle_snapshot` compatibility metadata and top-level `nle` shadow metadata persistence are now available behind explicit `nle_persistence` flags plus `owner_approved_20260628`, while persisted `_nle_project_state`, canonical load ownership, and per-pixel drag writes remain gated. Close/deferred-save vector-time boundary blocker is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040102-nle-close--deferred-save-boundary-fix`; final-overlap deferred-save retry guard is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040109-g3g2-final-overlap-deferred-save-retry-guard`; final save/export micro-overlap shared-boundary repair is completed and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040110-g2g3-final-save-export-micro-overlap-shared-boundary-repair`.
 
 Current baseline:
 
@@ -187,7 +187,7 @@ Rollback:
 
 Goal: Show STT1, STT2, and VAD as live NLE runtime tracks while subtitle generation is running, without slowing the full subtitle conversion path or weakening final subtitle quality.
 
-Status: active quality/save-export gate. The representative real-media live runtime observability proof is complete, but G3 remains open until same-media quality/speed, save/reopen, final export, and UI/app-command responsiveness gates are accepted. This is a runtime/session visualization and scheduling plan only; it does not approve persisted NLE disk-format cutover, STT2 skipping, model downsizing, quality-gate loosening, UI/UX redesign, or production default cache promotion.
+Status: active quality/save-export gate. The representative real-media live runtime observability proof, same-media quality/speed proof, direct save/reopen/export proof, open/start/cancel/close/quit responsiveness proof, and active global-canvas responsiveness proof are complete. G3 remains open only for any additional active-worker final-surface proof selected by the queue. This is a runtime/session visualization and scheduling plan only; it does not approve persisted NLE disk-format cutover, STT2 skipping, model downsizing, quality-gate loosening, UI/UX redesign, or production default cache promotion.
 
 Current baseline:
 
@@ -201,11 +201,13 @@ Current baseline:
 - Final save/export micro-overlap shared-boundary repair slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040110-g2g3-final-save-export-micro-overlap-shared-boundary-repair`.
 - Same-media benchmark acceptance and editor-sequence proof-harness guard slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040111-g3-same-media-benchmark-acceptance-and-editor-sequence-guard`.
 - Direct-SRT app-command save/reopen/export proof slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040112-g3-direct-srt-app-command-savereopenexport-proof`.
+- Active global-canvas responsiveness proof slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040114-g3-active-global-canvas-responsiveness-proof`.
 - Latest real-media live proof: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.md`; `status=passed`, `issues=[]`, `failed_sample_count=0`, `generation_completed=true`, pre-final VAD/STT1/STT2 observations `16/172/44`, no raw leak, no final-authority drift, no projection-budget drift, and `21` snapshots.
 - The same live proof run exposed an existing post-SRT-save `nle_save_export_final_overlap` save/export failure. The `v04.01.09` guard stops that failure from causing repeated deferred-save retries, and the `v04.01.10` slice repairs the observed tiny live-SRT quantization overlap for final save/export projection. Full same-media save/reopen, final-export, quality/speed, and global-canvas acceptance remain separate G2/G3 proof gates.
 - The `v04.01.11` same-media benchmark proof accepted the NAS HeyDealer 0-180s High-mode run with final `0/0/0`, save/reopen stable `true`, and global max active `1`.
 - The `v04.01.12` direct-SRT app-command proof closed the reachable-bridge save/project/SRT/video export and reopened-project export slice for the same media: direct save/export and reopened export both held `64` final rows/SRT blocks, and MOV output bytes were nonzero.
-- The `v04.01.13` open-media generation responsiveness proof closed the same-media app-command open/start/status/cancel/close/quit slice. Evidence: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md`, `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json`, and `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json`. `open-media` and `start-current-pipeline` succeeded, active samples reported `ST_PROC` with `backend_active=true`, status/guided-status command elapsed samples stayed below `0.01s` during the sampled active window, cancel returned `current_pipeline_cancel_requested` and then `ST_IDLE/backend_active=false`, and close/quit requests returned while active before the bridge became unreachable after the app exited. Broader global-canvas responsiveness and any additional active-worker save proof remain separate gates.
+- The `v04.01.13` open-media generation responsiveness proof closed the same-media app-command open/start/status/cancel/close/quit slice. Evidence: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md`, `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json`, and `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json`. `open-media` and `start-current-pipeline` succeeded, active samples reported `ST_PROC` with `backend_active=true`, status/guided-status command elapsed samples stayed below `0.01s` during the sampled active window, cancel returned `current_pipeline_cancel_requested` and then `ST_IDLE/backend_active=false`, and close/quit requests returned while active before the bridge became unreachable after the app exited.
+- The `v04.01.14` active global-canvas responsiveness proof closed the same-media timeline/global-canvas view-control slice. Evidence: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md`; `open-media` and `start-current-pipeline` succeeded, active samples reported `ST_PROC/backend_active=true`, timeline zoom/fit/time-window/max, zoom-max, play/pause, status, and guided-status all returned `ok=true`, max command elapsed was `0.267435s`, all `19` snapshots were nonzero, final track count stayed `0` in the sampled active pre-final window, and cancel returned to `backend_active=false`. Any additional active-worker final-surface proof remains a separate gate if selected by the queue.
 - Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
 - `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata. Only `final` carries save/export authority; VAD/STT/subtitle-preview tracks are reference-only.
 - `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_track_counts` / `nle_runtime_tracks` metadata without raw STT/VAD/subtitle-preview row text or large segment payloads, and UDP compaction preserves the count summary.
@@ -233,8 +235,8 @@ Detailed plan:
 
 4. Performance and quality proof
    - Measure baseline and candidate on the same representative media with non-profile elapsed truth, stage spans, memory pressure, active worker counts, and UI/app-command responsiveness.
-   - Required proof includes raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stability, global canvas `max_active_segments=1`, and no increase in total subtitle conversion time beyond measurement noise. The same-media benchmark part passed in `v04.01.11`; direct-SRT app-command save/reopen/export passed in `v04.01.12`; open-media generation plus active-worker status/cancel/close/quit responsiveness passed in `v04.01.13`; broader global-canvas responsiveness and any additional active-worker save proof remain separate gates.
-   - Record before/after artifacts under `output/manual_verification/latest/`. Runtime/status evidence that STT1/STT2/VAD appear progressively during generation is now available; same-media benchmark acceptance is now available; direct-SRT app-command save/export/reopen evidence is now available; open/start/status/cancel/close/quit responsiveness evidence is now available. The next proof must stay bounded to the remaining global-canvas or active-worker final-surface gate selected by the owner queue.
+   - Required proof includes raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stability, global canvas `max_active_segments=1`, and no increase in total subtitle conversion time beyond measurement noise. The same-media benchmark part passed in `v04.01.11`; direct-SRT app-command save/reopen/export passed in `v04.01.12`; open-media generation plus active-worker status/cancel/close/quit responsiveness passed in `v04.01.13`; active global-canvas responsiveness passed in `v04.01.14`; any additional active-worker final-surface proof remains a separate gate if selected by the queue.
+   - Record before/after artifacts under `output/manual_verification/latest/`. Runtime/status evidence that STT1/STT2/VAD appear progressively during generation is now available; same-media benchmark acceptance is now available; direct-SRT app-command save/export/reopen evidence is now available; open/start/status/cancel/close/quit responsiveness evidence is now available; active global-canvas responsiveness evidence is now available. The next proof must stay bounded to the remaining active-worker final-surface gate selected by the owner queue.
 
 5. Implementation guardrails
    - Implement in narrow slices: first runtime owner-map and read-only projection, then live status feed, then scheduler budget telemetry, then visual/runtime proof.
@@ -261,8 +263,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.13"
-document_version: "04.01.13-source-app"
+app_version: "04.01.14"
+document_version: "04.01.14-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

@@ -100,6 +100,49 @@ class RemoteVerifyActionTests(unittest.TestCase):
             ["start-current-pipeline", "status", "guided-subtitle-status"],
         )
 
+    def test_editor_sequence_maps_global_canvas_responsiveness_actions(self):
+        recorded: list[dict] = []
+
+        def _fake_record_step(report, output_dir, step_name, **kwargs):
+            recorded.append({"name": step_name, **kwargs})
+            report.setdefault("steps", []).append({"name": step_name, "result": {"ok": True}})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("tools.remote_verify._record_step", side_effect=_fake_record_step):
+                with patch("tools.remote_verify._capture_status", return_value={"ok": True, "data": {}}):
+                    with patch("tools.remote_verify._write_report_files", return_value=None):
+                        exit_code = remote_verify._run_editor_sequence(
+                            _args(
+                                tmp,
+                                [
+                                    "timeline-zoom-in",
+                                    "timeline-zoom-out",
+                                    "timeline-fit",
+                                    "timeline-time-window",
+                                    "timeline-max",
+                                    "zoom-max",
+                                ],
+                            )
+                        )
+
+        self.assertEqual(exit_code, 0)
+        commands = [item for item in recorded if item.get("command")]
+        self.assertEqual(
+            [item["command"] for item in commands],
+            [
+                "editor-timeline-view",
+                "editor-timeline-view",
+                "editor-timeline-view",
+                "editor-timeline-view",
+                "editor-timeline-view",
+                "editor-zoom-max",
+            ],
+        )
+        self.assertEqual(
+            [item["options"].get("action") for item in commands[:5]],
+            ["zoom-in", "zoom-out", "fit", "time-window", "max"],
+        )
+
     def test_editor_sequence_maps_menu_dialog_stt_and_lora_actions(self):
         recorded: list[dict] = []
 

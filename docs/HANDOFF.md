@@ -33,7 +33,48 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.13 / G3 Open-Media Generation And Active-Worker Responsiveness Proof
+## Current Handoff - 2026-06-29 v04.01.14 / G3 Active Global-Canvas Responsiveness Proof
+
+### Scope
+
+- Completed the G3 same-media active global-canvas/timeline responsiveness proof slice.
+- Bumped source-app version and project schema from `04.01.13` to `04.01.14`.
+- Added `docs/release_notes/RELEASE_v04.01.14.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.14`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.14`.
+- `tools/remote_verify.py editor-sequence` can now call existing timeline/global proof actions: `timeline-zoom-in`, `timeline-zoom-out`, `timeline-fit`, `timeline-time-window`, `timeline-max`, and `zoom-max`.
+- Same-media active global-canvas proof showed `open-media` and `start-current-pipeline` success, active `ST_PROC/backend_active=true` samples, timeline zoom/fit/time-window/max plus zoom-max/play/pause/status/guided-status all returning `ok=true`, max command elapsed `0.267435s`, `19` nonzero snapshots, final track count staying `0`, and cancel returning to `backend_active=false`.
+- No full G3 completion claim, visible UI layout/label/color/menu/shortcut change, STT/VAD algorithm change, worker fan-out change, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tools/remote_verify.py tests/test_remote_verify_actions.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused remote-verify guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py -k "global_canvas_responsiveness or generation_status_and_wait or active_worker_control"` -> `3 passed, 13 deselected`.
+- Focused app-command timeline/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "editor_timeline_view_command_exercises_zoom_and_fit or status_command_reports_compact_nle_runtime_track_counts or dispatch_status_command"` -> `7 passed, 77 deselected`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.14`, `PROJECT_SCHEMA_VERSION=04.01.14`.
+- `git diff --check -- .` -> pass.
+- Active global-canvas proof: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints. The current Jammini `--handoff-probe` packet timed out without a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- Any additional active-worker final-surface proof remains a separate G3 gate if selected by the queue.
+- G0 App Store has owner approval for packaging/signing/upload/metadata execution, but remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata values.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3, pick only a bounded active-worker final-surface proof from `docs/planning_queue/ACTION_ITEMS.md`.
+- Keep live-NLE proof, same-media benchmark acceptance, direct-SRT app-command proof, active-worker responsiveness proof, active global-canvas proof, and App Store submission proof as separate evidence surfaces.
+
+## Previous Handoff - 2026-06-29 v04.01.13 / G3 Open-Media Generation And Active-Worker Responsiveness Proof
 
 ### Scope
 

@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.13-source-app
+Document-Version: 04.01.14-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,20 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.14 G3 Active Global-Canvas Responsiveness Proof
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item. Owner also approved App Store packaging/signing/upload/metadata execution and persisted NLE/UI structure scope.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.14"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.14`.
+3. `tools/remote_verify.py editor-sequence` now maps existing automation actions for global-canvas responsiveness proof: `timeline-zoom-in`, `timeline-zoom-out`, `timeline-fit`, `timeline-time-window`, `timeline-max`, and `zoom-max`.
+4. `tests/test_remote_verify_actions.py` now covers the new action-to-command mapping without changing editor UI, timeline painting, NLE persistence, or final save/export authority.
+5. Same-media active global-canvas proof passed at `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md`: `open-media` and `start-current-pipeline` succeeded, active samples reported `ST_PROC/backend_active=true`, timeline view commands and play/pause/status/guided-status all returned `ok=true`, max command elapsed was `0.267435s`, all `19` snapshots were nonzero, and final track count stayed `0` throughout the active pre-final window.
+6. `cancel-current-pipeline` returned successfully and post-cancel status reported `backend_active=false`.
+7. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. The current Jammini `--handoff-probe` packet timed out without a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+8. Focused verification passed: compile check for touched version/proof modules; `tests/test_remote_verify_actions.py -k "global_canvas_responsiveness or generation_status_and_wait or active_worker_control"` -> `3 passed, 13 deselected`; `tests/test_app_command_bridge.py -k "editor_timeline_view_command_exercises_zoom_and_fit or status_command_reports_compact_nle_runtime_track_counts or dispatch_status_command"` -> `7 passed, 77 deselected`; App Store/bundle guard -> `9 passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.14` / `PROJECT_SCHEMA_VERSION=04.01.14`; `git diff --check -- .` -> pass.
+9. This slice does not claim full G3 completion, speed improvement, active video-export while generation is running, worker fan-out/scheduler change, cache default promotion, persisted NLE disk-format cutover, visible UI redesign, App Store readiness, upload, or submission. Any additional active-worker final-surface proof remains a separate gate if selected by the queue.
 
 ## v04.01.13 G3 Open-Media Generation And Active-Worker Responsiveness Proof
 

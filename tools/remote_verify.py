@@ -745,6 +745,25 @@ def _editor_action_spec(
         return {"command": "editor-playback", "options": {"action": "play"}, "snapshot": False, "path": ""}
     if action in {"pause", "playback-pause"}:
         return {"command": "editor-playback", "options": {"action": "pause"}, "snapshot": False, "path": ""}
+    timeline_actions = {
+        "timeline-zoom-in": "zoom-in",
+        "zoom-in": "zoom-in",
+        "timeline-zoom-out": "zoom-out",
+        "zoom-out": "zoom-out",
+        "timeline-fit": "fit",
+        "timeline-time-window": "time-window",
+        "time-window": "time-window",
+        "timeline-max": "max",
+    }
+    if action in timeline_actions:
+        return {
+            "command": "editor-timeline-view",
+            "options": {"action": timeline_actions[action]},
+            "snapshot": False,
+            "path": "",
+        }
+    if action in {"zoom-max", "editor-zoom-max"}:
+        return {"command": "editor-zoom-max", "options": {}, "snapshot": False, "path": ""}
     if action in {"start-current-pipeline", "start-pipeline", "start-generation"}:
         return {"command": "start-current-pipeline", "options": {}, "snapshot": False, "path": ""}
     if action in {"status", "status-probe"}:
@@ -1057,7 +1076,7 @@ def _parser() -> argparse.ArgumentParser:
         "--actions",
         nargs="*",
         default=[],
-        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause start-current-pipeline status-probe guided-status-probe wait-N save-project cancel-current-pipeline app-close-request app-quit-request save-subtitles export-subtitles export-subtitle-video move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
+        help="Supported: begin-smart-split set-inline-cursor commit-inline-edit smart-split play pause timeline-zoom-in timeline-zoom-out timeline-fit timeline-time-window timeline-max zoom-max start-current-pipeline status-probe guided-status-probe wait-N save-project cancel-current-pipeline app-close-request app-quit-request save-subtitles export-subtitles export-subtitle-video move-segment-left move-segment-right move-diamond merge-diamond video-show video-hide video-toggle stt-enable stt-disable stt-toggle open-dictionary open-settings open-speaker-settings capture-active-dialog capture-dictionary close-active-dialog lora-run-now lora-pause lora-resume snapshot",
     )
     editor.add_argument("--snapshot-each-step", action="store_true")
 
