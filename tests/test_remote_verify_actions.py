@@ -137,47 +137,67 @@ class RemoteVerifyActionTests(unittest.TestCase):
     def test_live_nle_proof_accepts_pre_final_compact_runtime_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
+            data = {
+                "editor_state": "ST_PROC",
+                "backend_active": True,
+                "nle_runtime_track_counts": {
+                    "VAD": 2,
+                    "STT1": 1,
+                    "STT2": 1,
+                    "subtitle_preview": 1,
+                    "final": 0,
+                },
+                "nle_runtime_tracks": {
+                    "compact_payload": True,
+                    "counts": {"VAD": 2, "STT1": 1, "STT2": 1, "subtitle_preview": 1, "final": 0},
+                    "tracks": {
+                        "VAD": {"count": 2, "authoritative_for_save_export": False},
+                        "STT1": {"count": 1, "authoritative_for_save_export": False},
+                        "STT2": {"count": 1, "authoritative_for_save_export": False},
+                        "subtitle_preview": {"count": 1, "authoritative_for_save_export": False},
+                        "final": {"count": 0, "authoritative_for_save_export": True},
+                    },
+                },
+                "runtime_resource": {
+                    "live_nle_projection_budget": {
+                        "dedicated_worker_count": 0,
+                        "max_projection_workers": 0,
+                        "shares_subtitle_worker_pool": False,
+                        "uses_existing_row_snapshots": True,
+                        "coalesces_updates": True,
+                        "drops_stale_preview_frames": True,
+                        "quality_policy": "final_authority_unchanged",
+                    }
+                },
+            }
             samples = [
+                remote_verify._live_nle_sample_from_status(
+                    {"ok": True, "data": data},
+                    elapsed_sec=1.25,
+                    latency_sec=0.03,
+                    poll_index=0,
+                ),
+                remote_verify._live_nle_sample_from_status(
+                    {"ok": True, "data": data},
+                    elapsed_sec=2.25,
+                    latency_sec=0.02,
+                    poll_index=1,
+                ),
                 remote_verify._live_nle_sample_from_status(
                     {
                         "ok": True,
                         "data": {
-                            "editor_state": "ST_PROC",
-                            "backend_active": True,
-                            "nle_runtime_track_counts": {
-                                "VAD": 2,
-                                "STT1": 1,
-                                "STT2": 1,
-                                "subtitle_preview": 1,
-                                "final": 0,
-                            },
-                            "nle_runtime_tracks": {
-                                "compact_payload": True,
-                                "counts": {"VAD": 2, "STT1": 1, "STT2": 1, "subtitle_preview": 1, "final": 0},
-                                "tracks": {
-                                    "VAD": {"count": 2, "authoritative_for_save_export": False},
-                                    "STT1": {"count": 1, "authoritative_for_save_export": False},
-                                    "STT2": {"count": 1, "authoritative_for_save_export": False},
-                                    "subtitle_preview": {"count": 1, "authoritative_for_save_export": False},
-                                    "final": {"count": 0, "authoritative_for_save_export": True},
-                                },
-                            },
-                            "runtime_resource": {
-                                "live_nle_projection_budget": {
-                                    "dedicated_worker_count": 0,
-                                    "max_projection_workers": 0,
-                                    "shares_subtitle_worker_pool": False,
-                                    "uses_existing_row_snapshots": True,
-                                    "coalesces_updates": True,
-                                    "drops_stale_preview_frames": True,
-                                    "quality_policy": "final_authority_unchanged",
-                                }
-                            },
+                            **data,
+                            "editor_state": "READY",
+                            "backend_active": False,
+                            "auto_processing_active": False,
+                            "guided_snapshot_run": {"active": False, "last_stage_key": "completed"},
                         },
                     },
-                    elapsed_sec=1.25,
-                    latency_sec=0.03,
-                )
+                    elapsed_sec=3.25,
+                    latency_sec=0.02,
+                    poll_index=2,
+                ),
             ]
 
             report = remote_verify._build_live_nle_runtime_proof_report(
@@ -192,7 +212,137 @@ class RemoteVerifyActionTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "passed")
         self.assertEqual(sorted(report["observed_pre_final_tracks"]), ["STT1", "STT2", "VAD"])
+        self.assertEqual(report["pre_final_observation_counts"], {"VAD": 2, "STT1": 2, "STT2": 2})
+        self.assertTrue(report["generation_completed"])
         self.assertEqual(report["issues"], [])
+
+    def test_live_nle_proof_blocks_single_pre_final_observation_per_track(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            sample = remote_verify._live_nle_sample_from_status(
+                {
+                    "ok": True,
+                    "data": {
+                        "editor_state": "ST_PROC",
+                        "backend_active": True,
+                        "nle_runtime_track_counts": {
+                            "VAD": 5,
+                            "STT1": 4,
+                            "STT2": 3,
+                            "subtitle_preview": 1,
+                            "final": 0,
+                        },
+                        "nle_runtime_tracks": {
+                            "compact_payload": True,
+                            "counts": {"VAD": 5, "STT1": 4, "STT2": 3, "subtitle_preview": 1, "final": 0},
+                            "tracks": {
+                                "VAD": {"count": 5, "authoritative_for_save_export": False},
+                                "STT1": {"count": 4, "authoritative_for_save_export": False},
+                                "STT2": {"count": 3, "authoritative_for_save_export": False},
+                                "subtitle_preview": {"count": 1, "authoritative_for_save_export": False},
+                                "final": {"count": 0, "authoritative_for_save_export": True},
+                            },
+                        },
+                        "runtime_resource": {
+                            "live_nle_projection_budget": {
+                                "dedicated_worker_count": 0,
+                                "max_projection_workers": 0,
+                                "shares_subtitle_worker_pool": False,
+                                "uses_existing_row_snapshots": True,
+                                "coalesces_updates": True,
+                                "drops_stale_preview_frames": True,
+                                "quality_policy": "final_authority_unchanged",
+                            }
+                        },
+                    },
+                },
+                elapsed_sec=1.0,
+                latency_sec=0.01,
+                poll_index=0,
+            )
+
+            report = remote_verify._build_live_nle_runtime_proof_report(
+                media_path="/tmp/demo.mp4",
+                output_dir=output_dir,
+                start_result={"ok": True},
+                samples=[sample],
+                snapshot_dir=output_dir / "snapshots",
+                started_at="start",
+                ended_at="end",
+            )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["pre_final_observation_counts"], {"VAD": 1, "STT1": 1, "STT2": 1})
+        self.assertIn("insufficient_pre_final_observations:VAD,STT1,STT2", report["issues"])
+
+    def test_live_nle_proof_does_not_count_completed_samples_as_pre_final_observations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            base_data = {
+                "nle_runtime_track_counts": {
+                    "VAD": 2,
+                    "STT1": 2,
+                    "STT2": 2,
+                    "subtitle_preview": 1,
+                    "final": 1,
+                },
+                "nle_runtime_tracks": {
+                    "compact_payload": True,
+                    "counts": {"VAD": 2, "STT1": 2, "STT2": 2, "subtitle_preview": 1, "final": 1},
+                    "tracks": {
+                        "VAD": {"count": 2, "authoritative_for_save_export": False},
+                        "STT1": {"count": 2, "authoritative_for_save_export": False},
+                        "STT2": {"count": 2, "authoritative_for_save_export": False},
+                        "subtitle_preview": {"count": 1, "authoritative_for_save_export": False},
+                        "final": {"count": 1, "authoritative_for_save_export": True},
+                    },
+                },
+                "runtime_resource": {
+                    "live_nle_projection_budget": {
+                        "dedicated_worker_count": 0,
+                        "max_projection_workers": 0,
+                        "shares_subtitle_worker_pool": False,
+                        "uses_existing_row_snapshots": True,
+                        "coalesces_updates": True,
+                        "drops_stale_preview_frames": True,
+                        "quality_policy": "final_authority_unchanged",
+                    }
+                },
+            }
+            pre_final = remote_verify._live_nle_sample_from_status(
+                {"ok": True, "data": {**base_data, "editor_state": "ST_PROC", "backend_active": True}},
+                elapsed_sec=1.0,
+                latency_sec=0.01,
+                poll_index=0,
+            )
+            completed = remote_verify._live_nle_sample_from_status(
+                {
+                    "ok": True,
+                    "data": {
+                        **base_data,
+                        "editor_state": "READY",
+                        "backend_active": False,
+                        "guided_snapshot_run": {"active": False, "last_stage_key": "completed"},
+                    },
+                },
+                elapsed_sec=2.0,
+                latency_sec=0.01,
+                poll_index=1,
+            )
+
+            report = remote_verify._build_live_nle_runtime_proof_report(
+                media_path="/tmp/demo.mp4",
+                output_dir=output_dir,
+                start_result={"ok": True},
+                samples=[pre_final, completed],
+                snapshot_dir=output_dir / "snapshots",
+                started_at="start",
+                ended_at="end",
+            )
+
+        self.assertTrue(report["generation_completed"])
+        self.assertEqual(report["pre_final_observation_counts"], {"VAD": 1, "STT1": 1, "STT2": 1})
+        self.assertIn("insufficient_pre_final_observations:VAD,STT1,STT2", report["issues"])
 
     def test_live_nle_proof_blocks_raw_payload_and_final_authority_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -251,6 +401,7 @@ class RemoteVerifyActionTests(unittest.TestCase):
         self.assertEqual(report["status"], "blocked")
         self.assertIn("missing_pre_final_tracks:STT2", report["issues"])
         self.assertIn("raw_runtime_payload_leak", report["issues"])
+        self.assertIn("compact_runtime_payload_contract_failed", report["issues"])
         self.assertIn("final_authority_contract_failed", report["issues"])
         self.assertIn("live_projection_budget_contract_failed", report["issues"])
 
@@ -267,13 +418,16 @@ class RemoteVerifyActionTests(unittest.TestCase):
                 "sample_count": 1,
                 "generation_completed": True,
                 "required_tracks": ["VAD", "STT1", "STT2"],
+                "min_pre_final_observations": 2,
+                "pre_final_observation_counts": {"VAD": 2, "STT1": 2, "STT2": 2},
                 "observed_pre_final_tracks": {
-                    "VAD": {"elapsed_sec": 1.0, "count": 1, "stage": "vad"},
-                    "STT1": {"elapsed_sec": 1.0, "count": 1, "stage": "stt"},
-                    "STT2": {"elapsed_sec": 1.0, "count": 1, "stage": "stt2"},
+                    "VAD": {"first_elapsed_sec": 1.0, "last_elapsed_sec": 2.0, "observation_count": 2, "max_count": 1, "stage": "vad"},
+                    "STT1": {"first_elapsed_sec": 1.0, "last_elapsed_sec": 2.0, "observation_count": 2, "max_count": 1, "stage": "stt"},
+                    "STT2": {"first_elapsed_sec": 1.0, "last_elapsed_sec": 2.0, "observation_count": 2, "max_count": 1, "stage": "stt2"},
                 },
                 "issues": [],
                 "raw_payload_leak_elapsed_sec": [],
+                "compact_payload_failure_elapsed_sec": [],
                 "final_authority_failure_elapsed_sec": [],
                 "budget_failure_elapsed_sec": [],
                 "snapshot_files": [],
@@ -285,11 +439,14 @@ class RemoteVerifyActionTests(unittest.TestCase):
 
             summary = (output_dir / "live_nle_runtime_proof.json").read_text(encoding="utf-8")
             samples = (output_dir / "status_samples.json").read_text(encoding="utf-8")
+            jsonl_samples = (output_dir / "observability_samples.jsonl").read_text(encoding="utf-8")
             md = (output_dir / "live_nle_runtime_proof.md").read_text(encoding="utf-8")
 
         self.assertNotIn('"samples"', summary)
         self.assertIn('"large": "sample"', samples)
-        self.assertIn("| VAD | yes | 1.0 | 1 | vad |", md)
+        self.assertIn('"large": "sample"', jsonl_samples)
+        self.assertEqual(len([line for line in jsonl_samples.splitlines() if line.strip()]), 1)
+        self.assertIn("| VAD | yes | 2 | 1.0 | 2.0 | 1 | vad |", md)
 
 
 if __name__ == "__main__":

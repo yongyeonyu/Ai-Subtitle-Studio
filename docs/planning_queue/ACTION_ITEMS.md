@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.06-source-app
+Document-Version: 04.01.07-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.06`.
+- App version: `04.01.07`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -193,6 +193,7 @@ Current baseline:
 - Compact live status/feed wiring slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040104-g3-compact-live-status-feed`.
 - Scheduler-budget telemetry slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040105-g3-live-nle-projection-scheduler-budget-telemetry`.
 - Live runtime observability proof harness slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040106-g3-live-runtime-observability-proof-harness`.
+- Live runtime observability strong-evidence gate slice is complete and archived in `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040107-g3-live-runtime-observability-strong-evidence-gate`.
 - Existing runtime surfaces already preserve live STT preview rows through `_live_stt_preview_segments`, `stt_preview_source=STT1/STT2`, and global-canvas STT lane tests.
 - `core/engine/subtitle_live_editor_feed.py` now exposes runtime-only `VAD`, `STT1`, `STT2`, `subtitle_preview`, and `final` track metadata. Only `final` carries save/export authority; VAD/STT/subtitle-preview tracks are reference-only.
 - `status`, `ping`, and `guided-subtitle-status` now expose compact `nle_runtime_track_counts` / `nle_runtime_tracks` metadata without raw STT/VAD/subtitle-preview row text or large segment payloads, and UDP compaction preserves the count summary.
@@ -200,7 +201,7 @@ Current baseline:
 - Existing project state can store STT candidate tracks and VAD/voice activity as separate diagnostic/reference rows, while final subtitle rows remain the save/export authority.
 - Existing Apple Silicon worker planning lives under `core/runtime/multi_process.py` and `core/runtime/subtitle_resource_manager.py`, with `RuntimeResourceCoordinator`, `apply_apple_m_subtitle_pipeline_plan(...)`, active runtime labels, memory pressure snapshots, and benchmark-locked cut-boundary worker counts.
 - `RuntimeResourceCoordinator` now reports `live_nle_projection_budget` telemetry: live projection uses existing row snapshots, dedicated projection workers `0`, subtitle worker-pool sharing `false`, coalesced updates, stale preview-frame drops, interactive reserve cores, foreground save/export/close labels, and critical/exit projection disablement. This is telemetry only; it does not change worker fan-out.
-- `tools/remote_verify.py live-nle-proof` can now collect a compact `guided-subtitle-status` time-series and optional existing-window snapshots, then write `live_nle_runtime_proof.md/json` plus `status_samples.json` for G3 runtime observability review. The harness rejects missing pre-final `VAD`/`STT1`/`STT2` counts, raw runtime payload leakage, final-authority drift, and live projection budget drift on active samples.
+- `tools/remote_verify.py live-nle-proof` can now collect a compact `guided-subtitle-status` time-series and optional existing-window snapshots, then write `live_nle_runtime_proof.md/json`, `status_samples.json`, and `observability_samples.jsonl` for G3 runtime observability review. The harness requires each required runtime track (`VAD`, `STT1`, `STT2`) to be observed in at least two distinct pre-final active polls by default, requires generation completion, and rejects missing/insufficient pre-final observations, non-compact payloads, raw runtime payload leakage, final-authority drift, and live projection budget drift on active samples.
 - Prior lessons prohibit treating full-parallel STT, forced smaller STT windows, or speed-only native adoption as safe defaults without quality parity and real-media proof.
 
 Detailed plan:
@@ -248,8 +249,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.06"
-document_version: "04.01.06-source-app"
+app_version: "04.01.07"
+document_version: "04.01.07-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

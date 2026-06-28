@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.06-source-app
+Document-Version: 04.01.07-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,20 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.07 G3 Live Runtime Observability Strong Evidence Gate
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.07"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.07`.
+3. `tools/remote_verify.py live-nle-proof` now defaults to at least two distinct active pre-final observations for each required runtime track: `VAD`, `STT1`, and `STT2`.
+4. The proof report now blocks `generation_not_completed`, insufficient pre-final observations, and non-compact runtime payloads, while preserving the existing raw-payload leak, final-authority, and projection-budget guards.
+5. The report schema is now `ai_subtitle_studio.live_nle_runtime_proof.v2`.
+6. `observability_samples.jsonl` is written alongside `status_samples.json`; the summary JSON remains redacted and does not inline the detailed samples.
+7. The slice did not perform actual real-media proof, final quality/speed acceptance, visible UI changes, STT/VAD algorithm changes, worker fan-out changes, cache default promotion, persisted NLE disk-format cutover, App Store package/upload/submission, or metadata submission.
+8. Jammini route proof and review were collected through physical handoff files.
+9. Focused verification passed: compile check, `tests/test_remote_verify_actions.py` -> `9 passed`, expanded app-command/NLE status guard -> `115 passed`, App Store/bundle guard -> `9 passed`, and project/status guard -> `66 passed, 79 deselected`.
 
 ## v04.01.06 G3 Live Runtime Observability Proof Harness
 

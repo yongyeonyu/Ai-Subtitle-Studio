@@ -18,6 +18,7 @@ from tools.automation_command_client import send_app_command_with_readiness_retr
 
 _LIVE_NLE_TRACK_ORDER = ("VAD", "STT1", "STT2", "subtitle_preview", "final")
 _LIVE_NLE_REQUIRED_RUNTIME_TRACKS = ("VAD", "STT1", "STT2")
+_LIVE_NLE_DEFAULT_MIN_PRE_FINAL_OBSERVATIONS = 2
 
 
 def _default_output_dir(label: str) -> Path:
@@ -183,6 +184,8 @@ def _live_nle_sample_from_status(
     *,
     elapsed_sec: float,
     latency_sec: float,
+    command: str = "guided-subtitle-status",
+    poll_index: int | None = None,
 ) -> dict[str, Any]:
     data = _result_data(result)
     guided = data.get("guided_snapshot_run") if isinstance(data.get("guided_snapshot_run"), dict) else {}
@@ -201,6 +204,8 @@ def _live_nle_sample_from_status(
     except Exception:
         subtitle_count = 0
     return {
+        "command": str(command or ""),
+        "poll_index": int(poll_index) if poll_index is not None else None,
         "elapsed_sec": round(float(elapsed_sec or 0.0), 3),
         "latency_sec": round(float(latency_sec or 0.0), 3),
         "ok": bool(result.get("ok", False)) if isinstance(result, dict) else False,
@@ -220,6 +225,53 @@ def _live_nle_sample_from_status(
     }
 
 
+def _pre_final_observation_summary(
+    samples: list[dict[str, Any]],
+    *,
+    min_observations: int,
+) -> tuple[dict[str, dict[str, Any]], dict[str, int], list[str], list[str]]:
+    required_min = max(1, int(min_observations or 1))
+    observed: dict[str, dict[str, Any]] = {}
+    observation_counts: dict[str, int] = {}
+    missing: list[str] = []
+    insufficient: list[str] = []
+    for track in _LIVE_NLE_REQUIRED_RUNTIME_TRACKS:
+        track_samples: list[dict[str, Any]] = []
+        seen_keys: set[Any] = set()
+        for index, sample in enumerate(samples):
+            counts = sample.get("nle_runtime_track_counts") if isinstance(sample.get("nle_runtime_track_counts"), dict) else {}
+            if not bool(sample.get("pre_final_active")) or int(counts.get(track, 0) or 0) <= 0:
+                continue
+            key = sample.get("poll_index")
+            if key is None:
+                key = index
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            track_samples.append(sample)
+        observation_counts[track] = len(track_samples)
+        if not track_samples:
+            missing.append(track)
+            continue
+        if len(track_samples) < required_min:
+            insufficient.append(track)
+            continue
+        first = track_samples[0]
+        last = track_samples[-1]
+        max_count = max(
+            int((sample.get("nle_runtime_track_counts") or {}).get(track, 0) or 0)
+            for sample in track_samples
+        )
+        observed[track] = {
+            "first_elapsed_sec": first.get("elapsed_sec"),
+            "last_elapsed_sec": last.get("elapsed_sec"),
+            "observation_count": len(track_samples),
+            "max_count": max_count,
+            "stage": last.get("generation_stage"),
+        }
+    return observed, observation_counts, missing, insufficient
+
+
 def _build_live_nle_runtime_proof_report(
     *,
     media_path: str,
@@ -229,24 +281,23 @@ def _build_live_nle_runtime_proof_report(
     snapshot_dir: Path,
     started_at: str,
     ended_at: str,
+    min_pre_final_observations: int = _LIVE_NLE_DEFAULT_MIN_PRE_FINAL_OBSERVATIONS,
 ) -> dict[str, Any]:
-    observed: dict[str, dict[str, Any]] = {}
-    for track in _LIVE_NLE_REQUIRED_RUNTIME_TRACKS:
-        for sample in samples:
-            counts = sample.get("nle_runtime_track_counts") if isinstance(sample.get("nle_runtime_track_counts"), dict) else {}
-            if bool(sample.get("pre_final_active")) and int(counts.get(track, 0) or 0) > 0:
-                observed[track] = {
-                    "elapsed_sec": sample.get("elapsed_sec"),
-                    "count": int(counts.get(track, 0) or 0),
-                    "stage": sample.get("generation_stage"),
-                }
-                break
-    missing = [track for track in _LIVE_NLE_REQUIRED_RUNTIME_TRACKS if track not in observed]
+    required_min = max(1, int(min_pre_final_observations or 1))
+    observed, observation_counts, missing, insufficient = _pre_final_observation_summary(
+        samples,
+        min_observations=required_min,
+    )
     failed_samples = [sample for sample in samples if not bool(sample.get("ok", False))]
     raw_payload_leaks = [
         sample.get("elapsed_sec")
         for sample in samples
         if bool((sample.get("compact_runtime_track_contract") or {}).get("raw_payload_leak", False))
+    ]
+    compact_payload_failures = [
+        sample.get("elapsed_sec")
+        for sample in samples
+        if not bool((sample.get("compact_runtime_track_contract") or {}).get("compact_payload", True))
     ]
     final_authority_failures = [
         sample.get("elapsed_sec")
@@ -265,17 +316,24 @@ def _build_live_nle_runtime_proof_report(
         issues.append("guided_subtitle_run_start_failed")
     if missing:
         issues.append("missing_pre_final_tracks:" + ",".join(missing))
+    if insufficient:
+        issues.append("insufficient_pre_final_observations:" + ",".join(insufficient))
     if failed_samples:
         issues.append("status_poll_failed")
     if raw_payload_leaks:
         issues.append("raw_runtime_payload_leak")
+    if compact_payload_failures:
+        issues.append("compact_runtime_payload_contract_failed")
     if final_authority_failures:
         issues.append("final_authority_contract_failed")
     if budget_failures:
         issues.append("live_projection_budget_contract_failed")
+    generation_completed = any(bool(sample.get("generation_completed")) for sample in samples)
+    if not generation_completed:
+        issues.append("generation_not_completed")
     status = "passed" if not issues else "blocked"
     return {
-        "schema": "ai_subtitle_studio.live_nle_runtime_proof.v1",
+        "schema": "ai_subtitle_studio.live_nle_runtime_proof.v2",
         "status": status,
         "media_path": str(media_path or ""),
         "output_dir": str(output_dir),
@@ -285,11 +343,15 @@ def _build_live_nle_runtime_proof_report(
         "start_result_ok": bool(start_result.get("ok", False)),
         "sample_count": len(samples),
         "failed_sample_count": len(failed_samples),
-        "generation_completed": any(bool(sample.get("generation_completed")) for sample in samples),
+        "generation_completed": generation_completed,
         "required_tracks": list(_LIVE_NLE_REQUIRED_RUNTIME_TRACKS),
+        "min_pre_final_observations": required_min,
         "observed_pre_final_tracks": observed,
+        "pre_final_observation_counts": observation_counts,
         "missing_pre_final_tracks": missing,
+        "insufficient_pre_final_observation_tracks": insufficient,
         "raw_payload_leak_elapsed_sec": raw_payload_leaks,
+        "compact_payload_failure_elapsed_sec": compact_payload_failures,
         "final_authority_failure_elapsed_sec": final_authority_failures,
         "budget_failure_elapsed_sec": budget_failures,
         "snapshot_files": snapshot_files,
@@ -312,29 +374,40 @@ def _write_live_nle_runtime_proof(output_dir: Path, report: dict[str, Any]) -> N
         json.dumps(report.get("samples", []), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    jsonl_lines = [json.dumps(sample, ensure_ascii=False, sort_keys=True) for sample in list(report.get("samples") or [])]
+    (output_dir / "observability_samples.jsonl").write_text(
+        ("\n".join(jsonl_lines) + "\n") if jsonl_lines else "",
+        encoding="utf-8",
+    )
     lines = [
         "# Live NLE Runtime Proof",
         "",
         f"- status: `{report.get('status')}`",
         f"- media_path: `{report.get('media_path')}`",
         f"- sample_count: `{report.get('sample_count')}`",
+        f"- min_pre_final_observations: `{report.get('min_pre_final_observations')}`",
         f"- generation_completed: `{report.get('generation_completed')}`",
         f"- issues: `{', '.join(report.get('issues') or []) or 'none'}`",
         "",
         "## Required Runtime Tracks",
         "",
-        "| Track | Observed before final | First elapsed | Count | Stage |",
-        "| --- | --- | ---: | ---: | --- |",
+        "| Track | Observed before final | Observations | First elapsed | Last elapsed | Max count | Stage |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
     ]
     observed = report.get("observed_pre_final_tracks") if isinstance(report.get("observed_pre_final_tracks"), dict) else {}
+    observation_counts = (
+        report.get("pre_final_observation_counts") if isinstance(report.get("pre_final_observation_counts"), dict) else {}
+    )
     for track in report.get("required_tracks") or []:
         item = observed.get(track) if isinstance(observed, dict) else None
         lines.append(
-            "| {track} | {ok} | {elapsed} | {count} | {stage} |".format(
+            "| {track} | {ok} | {observations} | {first_elapsed} | {last_elapsed} | {max_count} | {stage} |".format(
                 track=track,
                 ok="yes" if isinstance(item, dict) else "no",
-                elapsed=(item or {}).get("elapsed_sec", ""),
-                count=(item or {}).get("count", ""),
+                observations=(item or {}).get("observation_count", observation_counts.get(track, 0)),
+                first_elapsed=(item or {}).get("first_elapsed_sec", ""),
+                last_elapsed=(item or {}).get("last_elapsed_sec", ""),
+                max_count=(item or {}).get("max_count", ""),
                 stage=(item or {}).get("stage", ""),
             )
         )
@@ -344,9 +417,11 @@ def _write_live_nle_runtime_proof(output_dir: Path, report: dict[str, Any]) -> N
             "## Guard Summary",
             "",
             f"- Raw runtime payload leak elapsed samples: `{report.get('raw_payload_leak_elapsed_sec')}`",
+            f"- Compact payload failure elapsed samples: `{report.get('compact_payload_failure_elapsed_sec')}`",
             f"- Final-authority failure elapsed samples: `{report.get('final_authority_failure_elapsed_sec')}`",
             f"- Live projection budget failure elapsed samples: `{report.get('budget_failure_elapsed_sec')}`",
             f"- Snapshot files: `{report.get('snapshot_files')}`",
+            f"- JSONL samples: `observability_samples.jsonl`",
             "",
             "## Notes",
             "",
@@ -368,6 +443,7 @@ def _run_live_nle_proof(args: argparse.Namespace) -> int:
     poll_sec = max(0.1, float(args.poll_sec or 1.0))
     max_duration_sec = max(poll_sec, float(args.max_duration_sec or 120.0))
     status_timeout = max(0.5, float(args.timeout or 8.0))
+    min_pre_final_observations = max(1, int(args.min_pre_final_observations or _LIVE_NLE_DEFAULT_MIN_PRE_FINAL_OBSERVATIONS))
 
     start_result: dict[str, Any] = {"ok": False, "error": "media_missing", "data": {}}
     if media_path and os.path.isfile(media_path):
@@ -393,6 +469,7 @@ def _run_live_nle_proof(args: argparse.Namespace) -> int:
             snapshot_dir=snapshot_dir,
             started_at=started_at,
             ended_at=ended_at,
+            min_pre_final_observations=min_pre_final_observations,
         )
         _write_live_nle_runtime_proof(output_dir, report)
         print(
@@ -415,6 +492,7 @@ def _run_live_nle_proof(args: argparse.Namespace) -> int:
     started_monotonic = time.monotonic()
     next_snapshot_at = started_monotonic
     snapshot_index = 0
+    poll_index = 0
     while time.monotonic() < deadline:
         before = time.monotonic()
         try:
@@ -426,8 +504,11 @@ def _run_live_nle_proof(args: argparse.Namespace) -> int:
             status,
             elapsed_sec=now - started_monotonic,
             latency_sec=now - before,
+            command="guided-subtitle-status",
+            poll_index=poll_index,
         )
         samples.append(sample)
+        poll_index += 1
 
         if bool(args.capture_snapshots) and now >= next_snapshot_at:
             snapshot_label = f"live_nle_{snapshot_index:02d}_{int(sample['elapsed_sec'] * 1000):06d}ms"
@@ -435,14 +516,11 @@ def _run_live_nle_proof(args: argparse.Namespace) -> int:
             snapshot_index += 1
             next_snapshot_at = now + max(1.0, float(args.snapshot_interval_sec or 5.0))
 
-        required_seen = all(
-            any(
-                bool(candidate.get("pre_final_active"))
-                and int((candidate.get("nle_runtime_track_counts") or {}).get(track, 0) or 0) > 0
-                for candidate in samples
-            )
-            for track in _LIVE_NLE_REQUIRED_RUNTIME_TRACKS
+        observed, _, missing, insufficient = _pre_final_observation_summary(
+            samples,
+            min_observations=min_pre_final_observations,
         )
+        required_seen = bool(observed) and not missing and not insufficient
         completed = bool(sample.get("generation_completed"))
         if completed and required_seen:
             break
@@ -459,6 +537,7 @@ def _run_live_nle_proof(args: argparse.Namespace) -> int:
         snapshot_dir=snapshot_dir,
         started_at=started_at,
         ended_at=ended_at,
+        min_pre_final_observations=min_pre_final_observations,
     )
     _write_live_nle_runtime_proof(output_dir, report)
     print(
@@ -826,6 +905,11 @@ def _parser() -> argparse.ArgumentParser:
     live_nle.add_argument("--start-timeout", type=float, default=30.0)
     live_nle.add_argument("--poll-sec", type=float, default=1.0)
     live_nle.add_argument("--max-duration-sec", type=float, default=180.0)
+    live_nle.add_argument(
+        "--min-pre-final-observations",
+        type=int,
+        default=_LIVE_NLE_DEFAULT_MIN_PRE_FINAL_OBSERVATIONS,
+    )
     live_nle.add_argument("--capture-snapshots", action="store_true")
     live_nle.add_argument("--snapshot-interval-sec", type=float, default=5.0)
     live_nle.add_argument("--wait-after-completion", action="store_true")

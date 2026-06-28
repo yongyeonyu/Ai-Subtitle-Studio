@@ -86,16 +86,18 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/remote_verify.py --timeout 4 l
   --media "/path/to/media.mp4" \
   --poll-sec 1.0 \
   --max-duration-sec 240 \
+  --min-pre-final-observations 2 \
   --capture-snapshots \
   --output-dir output/manual_verification/latest/g3_live_runtime_observability_YYYYMMDD_HHMM
 ```
 
 The harness writes `live_nle_runtime_proof.md`, `live_nle_runtime_proof.json`,
-and `status_samples.json`. A pass means compact status samples observed `VAD`,
-`STT1`, and `STT2` before final generation completed while preserving compact
-payload, final-authority, and live projection budget contracts. It does not by
-itself approve subtitle quality, conversion-speed regression, App Store
-packaging, or persisted NLE disk-format cutover.
+`status_samples.json`, and `observability_samples.jsonl`. A pass means compact
+status samples observed `VAD`, `STT1`, and `STT2` in at least two distinct
+active pre-final polls by default, generation completed, and compact payload,
+final-authority, and live projection budget contracts were preserved. It does
+not by itself approve subtitle quality, conversion-speed regression, App Store
+packaging, real-media visual proof, or persisted NLE disk-format cutover.
 
 ## NLE preview-cache relink validation
 

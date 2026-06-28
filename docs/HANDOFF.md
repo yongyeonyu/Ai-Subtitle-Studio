@@ -33,7 +33,47 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.06 / G3 Live Runtime Observability Proof Harness
+## Current Handoff - 2026-06-29 v04.01.07 / G3 Live Runtime Observability Strong Evidence Gate
+
+### Scope
+
+- Completed the strong-evidence gate slice for `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`.
+- Bumped source-app version and project schema from `04.01.06` to `04.01.07`.
+- Added `docs/release_notes/RELEASE_v04.01.07.md`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.07`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.07`.
+- `tools/remote_verify.py live-nle-proof` now defaults to at least two distinct active pre-final observations for each required runtime track: `VAD`, `STT1`, and `STT2`.
+- The report schema is now `ai_subtitle_studio.live_nle_runtime_proof.v2`.
+- The harness blocks missing/insufficient pre-final observations, `generation_not_completed`, non-compact runtime payloads, raw runtime payload leakage, non-final save/export authority drift, and live projection budget drift.
+- `observability_samples.jsonl` is written alongside `status_samples.json`; `live_nle_runtime_proof.json` remains a redacted summary without inlined samples.
+- No visible UI layout/label/color/menu/shortcut change, actual worker fan-out change, STT/VAD algorithm change, STT2 skip, model downgrade, cache default promotion, persisted NLE disk-format cutover, App Store `.pkg`, upload, or submission was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py` -> pass.
+- Focused proof-harness guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `9 passed`.
+- Expanded app-command/NLE status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `115 passed`.
+- App Store/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.07`, `PROJECT_SCHEMA_VERSION=04.01.07`.
+- Jammini probe: `.agents/sentinel/handoffs/20260629-021822-watchdog-handoff-probe.md`.
+- Jammini strong-evidence gate review: `.agents/sentinel/handoffs/20260628-272711-g3-observability-strong-evidence-gate-review-jammini.md`.
+- Three sub-agent reviews were collected for architecture, QE, and editor workflow constraints; all recommended distinct pre-final observations and artifact wording that does not overclaim real-media proof.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G3, run the strengthened harness against a fixture that actually exercises selective STT2, preferably the NAS HeyDealer first-180s path when available:
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/remote_verify.py --timeout 4 live-nle-proof --media "/path/to/media.mp4" --poll-sec 1.0 --max-duration-sec 240 --min-pre-final-observations 2 --capture-snapshots --output-dir output/manual_verification/latest/g3_live_runtime_observability_YYYYMMDD_HHMM`
+- Treat the harness pass as runtime/status/visual-observability evidence only. Same-media final quality/speed proof remains separate and must still cover raw/final/reference counts, quality/text/timing, final invalid/non-monotonic/overlap, save/reopen stability, and global canvas max-active.
+- G0 App Store remains blocked on Apple Distribution/Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, and owner metadata.
+- G1 collect-cache/default promotion remains owner-review gated.
+
+## Previous Handoff - 2026-06-29 v04.01.06 / G3 Live Runtime Observability Proof Harness
 
 ### Scope
 

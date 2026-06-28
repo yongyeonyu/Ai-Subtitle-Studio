@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.07 G3 Live Runtime Observability Strong Evidence Gate - 2026-06-29 KST
+
+- 실행 모드: source-app G3 live NLE runtime observability harness guard, stronger pre-final observation gate, JSONL sample artifact, and version/schema bump.
+- 결과: pass for focused mocked status contract coverage. The harness now blocks single-sample observation, completed-sample miscounting, incomplete generation, non-compact runtime payloads, raw runtime payload leakage, final-authority drift, live projection budget drift, and missing/insufficient pre-final VAD/STT1/STT2 observations.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.07.md`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-021822-watchdog-handoff-probe.md`
+  - Jammini review: `.agents/sentinel/handoffs/20260628-272711-g3-observability-strong-evidence-gate-review-jammini.md`
+- 실제 결과:
+  - App version updated to `04.01.07`.
+  - Project schema version updated to `04.01.07`.
+  - `tools/remote_verify.py live-nle-proof` now requires at least two distinct active pre-final polls for each required runtime track by default.
+  - The harness writes `observability_samples.jsonl` alongside `status_samples.json`, while keeping `live_nle_runtime_proof.json` redacted from detailed sample bodies.
+  - No real-media live proof, final quality/speed acceptance, UI layout/label change, STT/VAD algorithm change, worker fan-out change, cache default promotion, App Store package/upload/submission, or persisted NLE disk-format change was performed.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/remote_verify.py tests/test_remote_verify_actions.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_remote_verify_actions.py tests/test_app_command_bridge.py tests/test_app_command_server.py tests/test_subtitle_live_editor_feed_facade.py tests/test_project_nle_runtime_cutover.py` -> `115 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `9 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 79 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.07`, `PROJECT_SCHEMA_VERSION=04.01.07`.
+
 ## v04.01.06 G3 Live Runtime Observability Proof Harness - 2026-06-29 KST
 
 - 실행 모드: source-app G3 live NLE runtime observability proof harness, compact status time-series gate, and version/schema bump.
