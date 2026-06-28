@@ -1,5 +1,30 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Selection Sync Validation - 2026-06-28 KST
+
+- 실행 모드: source-app reload/restore active selection parity validation between visible editor rows and runtime `NLEProjectState`.
+- 결과: pass for exact-start shared-boundary active selection, matching editor/NLE active signatures, clean persisted storage, zero operation-journal writes, strict NAS HeyDealer first-180s acceptance, and no STT worker timeout. UI layout/labels/colors/menus/popups, subtitle quality policy, STT/STT2/default-cache policy, persisted NLE disk-format, App Store packaging/signing/upload, DMG behavior, and per-pixel NLE writes did not change.
+- 저장 위치:
+  - Audit: `output/manual_verification/latest/nle_selection_sync_validation_20260628/nle_selection_sync_validation.md`
+  - NAS preflight: `output/manual_verification/latest/nle_selection_sync_validation_nas_preflight_20260628/reference_fixture_availability.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_192507/benchmark_results.json`
+  - NAS acceptance: `output/manual_verification/latest/nle_selection_sync_validation_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_selection_sync_validation_nas_20260628/stt_worker_timeout_audit.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-101805-next-nle-taption-runtime-contract-scout.md`
+- 실제 결과:
+  - Audit `ready=true`; active boundary policy `exact_start_frame_wins_at_shared_boundary`.
+  - Editor active signature id `caption_0002`; NLE active signature id `caption_0002`.
+  - Operation journal count `0`; storage forbidden key count `0`; persisted NLE fields changed `false`.
+  - NAS acceptance `accepted=true`, elapsed `46.06s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; short/long `0/0`; global max active `1`.
+  - Timeout audit `timeout_detected=false`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_project_state.py tools/audit_nle_selection_sync_validation.py tests/test_nle_selection_sync_validation.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_selection_sync_validation.py` -> `3 passed`.
+  - `./venv/bin/python tools/audit_nle_selection_sync_validation.py --output-dir output/manual_verification/latest/nle_selection_sync_validation_20260628` -> ready `true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "reload_replaces_pending_segments_before_project_restore or live_stt_preview_updates_timeline_without_editor_commit"` -> `2 passed, 87 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "runtime_nle_project_state or direct_srt_rows"` -> `2 passed, 13 deselected`.
+
 ## NLE Roughcut Sidecar Compatibility - 2026-06-28 KST
 
 - 실행 모드: source-app roughcut `_render_plan.json` / `_edl.json` sidecar restore plus NLE render/export parity compatibility audit.

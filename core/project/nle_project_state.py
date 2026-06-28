@@ -354,6 +354,74 @@ def assert_nle_editor_rows_consistent(
             raise ValueError(f"nle_editor_text_drift:{index}")
 
 
+def nle_active_selection_signature(
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    active_sec: float,
+    primary_fps: float,
+) -> dict[str, Any]:
+    fps = normalize_fps(primary_fps)
+    active_frame = sec_to_nearest_frame(max(0.0, _as_float(active_sec, 0.0)), fps)
+    candidates: list[dict[str, Any]] = []
+    for index, row in enumerate(list(rows or [])):
+        if not isinstance(row, dict):
+            continue
+        start_frame, end_frame = _row_frame_bounds(row, fps=fps)
+        if end_frame < start_frame:
+            continue
+        candidates.append(
+            {
+                "row_index": index,
+                "id": str(row.get("id") or ""),
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "is_gap": bool(row.get("is_gap")),
+                "text": "" if bool(row.get("is_gap")) else str(row.get("text", "") or ""),
+                "active_frame": active_frame,
+            }
+        )
+    exact_start = [row for row in candidates if row["start_frame"] == active_frame]
+    if exact_start:
+        return exact_start[0]
+    containing = [
+        row
+        for row in candidates
+        if row["start_frame"] < active_frame < max(row["start_frame"] + 1, row["end_frame"])
+    ]
+    return containing[0] if containing else {}
+
+
+def assert_nle_active_selection_consistent(
+    editor_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    nle_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    active_sec: float,
+    primary_fps: float,
+) -> None:
+    assert_nle_editor_rows_consistent(editor_rows, nle_rows, primary_fps=primary_fps)
+    editor_sig = nle_active_selection_signature(
+        editor_rows,
+        active_sec=active_sec,
+        primary_fps=primary_fps,
+    )
+    nle_sig = nle_active_selection_signature(
+        nle_rows,
+        active_sec=active_sec,
+        primary_fps=primary_fps,
+    )
+    if not editor_sig and not nle_sig:
+        return
+    if bool(editor_sig) != bool(nle_sig):
+        raise ValueError("nle_active_selection_presence_drift")
+    for key in ("row_index", "start_frame", "end_frame", "is_gap", "text"):
+        if editor_sig.get(key) != nle_sig.get(key):
+            raise ValueError(f"nle_active_selection_{key}_drift:{editor_sig.get(key)}!={nle_sig.get(key)}")
+    editor_id = str(editor_sig.get("id") or "")
+    nle_id = str(nle_sig.get("id") or "")
+    if editor_id and nle_id and editor_id != nle_id:
+        raise ValueError(f"nle_active_selection_id_drift:{editor_id}!={nle_id}")
+
+
 __all__ = [
     "NLECaptionState",
     "NLEOperationJournalEntry",
@@ -363,8 +431,10 @@ __all__ = [
     "NLE_PROJECT_STATE_RUNTIME_KEY",
     "NLE_PROJECT_STATE_SCHEMA",
     "attach_project_nle_state",
+    "assert_nle_active_selection_consistent",
     "assert_nle_editor_rows_consistent",
     "build_project_nle_state",
+    "nle_active_selection_signature",
     "project_nle_state",
     "project_segments_from_nle_state",
     "record_nle_operation_journal_entry",

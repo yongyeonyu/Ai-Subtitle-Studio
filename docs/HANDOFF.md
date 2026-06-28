@@ -33,7 +33,53 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-28 NLE Roughcut Sidecar Compatibility
+## Current Handoff - 2026-06-28 NLE Selection Sync Validation
+
+### Scope
+
+- Continued the owner goal to move AI Subtitle Studio toward a video-editor/NLE structure by proving reload/restore active selection parity between visible editor rows and runtime `NLEProjectState` rows.
+- Added `core.project.nle_project_state.nle_active_selection_signature(...)` and `assert_nle_active_selection_consistent(...)`.
+- Added `tools/audit_nle_selection_sync_validation.py` and `tests/test_nle_selection_sync_validation.py`.
+- The audit proves a shared-boundary active time prefers the exact next segment start, editor/NLE active signatures match the same caption, runtime storage stays object-attribute only, operation journal count stays `0`, and persisted storage stays clean of `_nle_project_state`, `nle`, and `nle_snapshot`.
+- No UI layout/labels/colors/menus/popups, subtitle generation policy, STT/STT2/default-cache policy, persisted `.aissproj` NLE fields, App Store packaging/signing/upload, DMG, runtime undo/redo UI, or per-pixel NLE write behavior changed.
+
+### Results
+
+- Audit: `output/manual_verification/latest/nle_selection_sync_validation_20260628/nle_selection_sync_validation.md`
+- `ready=true`; active boundary policy `exact_start_frame_wins_at_shared_boundary`; editor/NLE active caption id `caption_0002`; operation journal count `0`; storage forbidden key count `0`.
+- NAS HeyDealer preflight: `output/manual_verification/latest/nle_selection_sync_validation_nas_preflight_20260628/reference_fixture_availability.md`; ready `true`, media/SRT exist `true/true`, clipped reference rows `89`.
+- NAS HeyDealer current-head regression: `output/manual_verification/latest/nle_selection_sync_validation_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- Run `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_192507/benchmark_results.json`: accepted `true`, elapsed `46.06s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, short/long `0/0`, global max-active `1`.
+- Timeout audit: `output/manual_verification/latest/stt_worker_timeout_compare_nle_selection_sync_validation_nas_20260628/stt_worker_timeout_audit.md`; timeout detected `false`.
+
+### Jammini
+
+- Scout: `.agents/sentinel/handoffs/20260628-101805-next-nle-taption-runtime-contract-scout.md`
+- Dex classification: accepted the selection-sync validation direction but narrowed it to a validation helper/audit/test contract. Runtime fallback recovery, UI redesign, persisted NLE fields, per-pixel writes, STT/default promotion, and App Store packaging remain deferred.
+
+### Verification
+
+- `./venv/bin/python -m py_compile core/project/nle_project_state.py tools/audit_nle_selection_sync_validation.py tests/test_nle_selection_sync_validation.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_selection_sync_validation.py` -> `3 passed`.
+- `./venv/bin/python tools/audit_nle_selection_sync_validation.py --output-dir output/manual_verification/latest/nle_selection_sync_validation_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "reload_replaces_pending_segments_before_project_restore or live_stt_preview_updates_timeline_without_editor_commit"` -> `2 passed, 87 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "runtime_nle_project_state or direct_srt_rows"` -> `2 passed, 13 deselected`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_reference_fixture_availability.py --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --output-dir output/manual_verification/latest/nle_selection_sync_validation_nas_preflight_20260628` -> ready `true`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/benchmark_subtitle_pipeline_variants.py --suite modes --variants mode_high --media ... --reference-srt ... --start-sec 0 --duration-sec 180 --keep-artifacts` -> `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_192507/benchmark_results.json`.
+- `./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_192507/benchmark_results.json --output-dir output/manual_verification/latest/nle_selection_sync_validation_nas_heydealer_20260628/acceptance` -> accepted `true`.
+- `./venv/bin/python tools/audit_stt_worker_timeout.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_192507/benchmark_results.json --output-dir output/manual_verification/latest/stt_worker_timeout_compare_nle_selection_sync_validation_nas_20260628` -> timeout detected `false`.
+
+### Known Notes
+
+- This slice adds a reusable validation contract; it does not make active selection a save/edit commit and does not write NLE state on hover/selection movement.
+- Persisted NLE disk fields, UI redesign, runtime fallback-recovery rewrites, per-pixel writes, QML/GPU default timeline surfaces, detector-threshold changes, App Store packaging/submission work, and STT/default-cache policy changes remain blocked until explicit owner approval and compatibility proof exist.
+
+### Next Recommended Action
+
+- Continue with the next safe NLE/Taption runtime contract from `ACTION_ITEMS.md` / `NLE_Action.md`. Good candidates should be bounded to existing source-app owner paths, prove Taption release-commit/no-overlap behavior, and avoid persisted NLE fields or UI redesign unless the owner explicitly asks.
+- For generation-affecting or performance/default-cache work, keep using the available NAS HeyDealer first-180s MP4/SRT preflight plus strict acceptance and timeout audit.
+
+## Previous Handoff - 2026-06-28 NLE Roughcut Sidecar Compatibility
 
 ### Scope
 
