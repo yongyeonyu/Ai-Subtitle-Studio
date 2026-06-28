@@ -33,6 +33,54 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-28 NLE Fixed Cut-Boundary Fixture Gate
+
+### Scope
+
+- Continued the source-app NLE cut-boundary accuracy workstream by adding an exact-frame fixture gate for target frames `2766` and `2677`.
+- Modified `tools/verify_cut_boundary_source_fps_scout.py`.
+- Added `tests/test_cut_boundary_fixture_2766_2677.py`.
+- Updated `ACTION_ITEMS.md`, `NLE_Action.md`, `COMPLETED_ACTION_ITEMS.md`, `docs/VALIDATION.md`, and `test_result.md`.
+- No FFmpeg/visual scorer thresholds, subtitle quality policy, STT/STT2 policy, UI layout, labels, colors, menus, popups, QML/GPU timeline surface, App Store packaging/signing/upload, DMG, or persisted NLE disk fields changed.
+
+### Results
+
+- Fixed fixture evidence: `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_20260628/source_fps_scout.md`
+- Local fixture path: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`
+- Pipe fps: `60000/1001`.
+- Target frames: `2766`, `2677`.
+- Fixture scout passed: `true`.
+- Probe source: latest artifact `ffprobe`; fallback path `spotlight_fps_override` is covered when probe access times out.
+- Frame extract status: `metadata_only`.
+- Candidate detected: `false/false`.
+- Frame preserved: `true/true`.
+- This is metadata/frame-grid proof only. Do not present it as visual cut detection proof because this gate intentionally does not use visual frame extraction.
+- NAS HeyDealer first-180s acceptance: `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+- NAS result: accepted `true`, elapsed `374.308s`, raw/final/reference `55/57/89`, quality/text/timing `93.955/94.867/0.5536s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration `180.0/180.0`, global max active `1`.
+- NAS latency caveat: this run hit WhisperKit worker timeout/fallback for STT1 (`150s`) and STT2 (`150s`), and word precision timed out at `30s`; treat this as a separate STT runtime diagnostic, not as a cut-boundary regression.
+
+### Jammini
+
+- Route probe: `.agents/sentinel/handoffs/20260628-121751-watchdog-handoff-probe.md`
+- Scout: `.agents/sentinel/handoffs/20260628-131900-nle-fixed-cut-boundary-fixture-proof.md`
+- Dex classification: accept the bounded fixture-gate slice. Jammini recommended a mock/integration guard and explicitly deferred FFmpeg/OpenCV scene-threshold changes and QML/UI work.
+
+### Verification
+
+- `./venv/bin/python -m py_compile tools/verify_cut_boundary_source_fps_scout.py tests/test_cut_boundary_fixture_2766_2677.py` -> pass.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `2 passed, 1 skipped`.
+- `AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE="/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2677" AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `3 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_subtitle_boundary_alignment.py tests/test_trace_logger.py` -> `65 passed`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" --pairs 2765:2766,2676:2677 --pipe-max-fps 60 --fps-override 60000/1001 --allow-metadata-only --probe-timeout-sec 5 --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_20260628` -> pass.
+- NAS preflight: `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_nas_heydealer_20260628/preflight/reference_fixture_availability.md` -> ready `true`, clipped reference rows `89`.
+- NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json`.
+- `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_nas_heydealer_20260628/acceptance` -> accepted `true`.
+
+### Next Recommended Action
+
+- Continue cut-boundary accuracy through real visual detection/scorer verification only after decoder access is reliable; keep the metadata-only fixture gate as a frame-grid/split-snap guard.
+- Open a separate STT runtime worker timeout diagnostic if generation latency is the next owner priority.
+
 ## Current Handoff - 2026-06-28 NLE Confirmed Cut Decision Trace
 
 ### Scope

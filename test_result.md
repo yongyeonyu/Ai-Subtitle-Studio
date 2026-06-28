@@ -1,5 +1,38 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## NLE Fixed Cut-Boundary Fixture Gate - 2026-06-28 KST
+
+- 실행 모드: source-app fixed cut-boundary frame `2766`/`2677` fixture gate plus NAS HeyDealer first-180s regression.
+- 결과: pass; exact 60000/1001fps frame-grid preservation and split/snap no-crossing guards are covered, with NAS first-180s strict acceptance still passing.
+- 저장 위치:
+  - Fixed fixture scout: `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_20260628/source_fps_scout.md`
+  - NAS preflight: `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_nas_heydealer_20260628/preflight/reference_fixture_availability.md`
+  - NAS acceptance: `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`
+  - NAS benchmark: `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json`
+  - Jammini route probe: `.agents/sentinel/handoffs/20260628-121751-watchdog-handoff-probe.md`
+  - Jammini scout: `.agents/sentinel/handoffs/20260628-131900-nle-fixed-cut-boundary-fixture-proof.md`
+- 수정 요약:
+  - `tools/verify_cut_boundary_source_fps_scout.py` now supports probe/frame-extract timeouts, `--pipe-max-fps`, `--fps-override`, `--allow-metadata-only`, and markdown evidence output.
+  - `tests/test_cut_boundary_fixture_2766_2677.py` covers metadata-only frame-grid preservation, env-gated real fixture proof, and confirmed split/snap rows that do not cross target frames.
+  - No FFmpeg/visual scorer thresholds, subtitle quality policy, STT/STT2 policy, UI/UX, QML/GPU defaults, App Store packaging/signing/upload, DMG behavior, or persisted NLE disk fields changed.
+- 실제 고정 fixture 결과:
+  - Scout passed `true`; pipe fps `60000/1001`; target frames `2766`, `2677`.
+  - Probe source latest artifact `ffprobe`; fallback path `spotlight_fps_override` is covered when probe access times out; frame extract status `metadata_only`.
+  - Candidate detected `false/false`; frame preserved `true/true`.
+  - This is metadata/frame-grid proof only, not visual cut detection proof.
+- NAS HeyDealer regression:
+  - Acceptance `true`; elapsed `374.308s`; raw/final/reference `55/57/89`.
+  - Quality/text/timing `93.955/94.867/0.5536s`.
+  - Final invalid/non-monotonic/overlap `0/0/0`; final last end/duration bound `180.0/180.0`; final short/long `0/0`; global max active `1`.
+  - Latency caveat: STT1 and STT2 WhisperKit workers each timed out at `150s` before MLX fallback, and word precision timed out at `30s`; this is a separate STT runtime diagnostic, not a cut-boundary failure.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/verify_cut_boundary_source_fps_scout.py tests/test_cut_boundary_fixture_2766_2677.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `2 passed, 1 skipped`.
+  - `AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE=... AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2677" AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py` -> `3 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_auto_scan_backend.py tests/test_subtitle_boundary_alignment.py tests/test_trace_logger.py` -> `65 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py ... --fps-override 60000/1001 --allow-metadata-only --probe-timeout-sec 5 --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_20260628` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/evaluate_reference_benchmark_acceptance.py .codex_work/benchmarks/subtitle_pipeline_variants/20260628_123336/benchmark_results.json --media-duration-sec 180.0 --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_nas_heydealer_20260628/acceptance` -> `accepted=true`.
+
 ## NLE Preview Skimming Trace Events - 2026-06-28 KST
 
 - 실행 모드: source-app NLE preview/skimming trace-event contract audit.

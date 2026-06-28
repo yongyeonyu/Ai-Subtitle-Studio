@@ -99,10 +99,22 @@ The trace audit must prove required temp directories, manifest/latest/events JSO
 For the fixed 60000/1001fps NLE Slice 2 fixture, use the narrow verifier before broad QA:
 
 ```bash
-QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" --output-dir output/manual_verification/latest/nle_slice2_source_fps_scout_20260627
+AI_SUBTITLE_STUDIO_CUT_BOUNDARY_FIXTURE="/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+AI_SUBTITLE_STUDIO_CUT_BOUNDARY_EXPECT="2766,2677" \
+AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" \
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py
+
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --pairs 2765:2766,2676:2677 \
+  --pipe-max-fps 60 \
+  --fps-override 60000/1001 \
+  --allow-metadata-only \
+  --probe-timeout-sec 5 \
+  --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_YYYYMMDD
 ```
 
-This verifier records whether target frames `2766` and `2677` are newly detected or at least preserved on the exact source-fps frame grid. If `candidate_detected=false`, report that as a remaining false-negative tuning risk even when `frame_preserved=true`.
+This verifier records whether target frames `2766` and `2677` are newly detected or at least preserved on the exact source-fps frame grid. If `candidate_detected=false`, report that as a remaining false-negative tuning risk even when `frame_preserved=true`. The `--allow-metadata-only` path is allowed only when decoder access to the fixed fixture stalls; it proves frame-grid preservation and split/snap guardability, not visual cut detection.
 
 ## Preview frame cache validation
 

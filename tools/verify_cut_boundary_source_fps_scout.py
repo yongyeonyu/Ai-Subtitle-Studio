@@ -34,7 +34,7 @@ def _parse_ratio(text: str) -> float:
         return 0.0
 
 
-def _probe_video(path: Path) -> dict[str, Any]:
+def _probe_video(path: Path, *, timeout_sec: float = 120.0, fps_override: float = 0.0) -> dict[str, Any]:
     cmd = [
         ffprobe_binary(),
         "-v",
@@ -47,16 +47,21 @@ def _probe_video(path: Path) -> dict[str, Any]:
         "json",
         str(path),
     ]
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=30,
-        **hidden_subprocess_kwargs(strip_qt=True),
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or "ffprobe failed")
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=max(1.0, float(timeout_sec or 120.0)),
+            **hidden_subprocess_kwargs(strip_qt=True),
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip() or "ffprobe failed")
+    except (subprocess.TimeoutExpired, RuntimeError) as exc:
+        if float(fps_override or 0.0) <= 0.0:
+            raise
+        return _spotlight_video_metadata(path, fps=float(fps_override or 0.0), probe_error=str(exc))
     payload = json.loads(proc.stdout or "{}")
     stream = (payload.get("streams") or [{}])[0] or {}
     fps = _parse_ratio(str(stream.get("r_frame_rate") or "0"))
@@ -70,10 +75,65 @@ def _probe_video(path: Path) -> dict[str, Any]:
         "fps_num": fps_num,
         "fps_den": fps_den,
         "r_frame_rate": str(stream.get("r_frame_rate") or ""),
+        "probe_source": "ffprobe",
     }
 
 
-def _read_gray_frames(path: Path, frames: list[int], *, width: int, height: int) -> dict[int, Any]:
+def _spotlight_video_metadata(path: Path, *, fps: float, probe_error: str = "") -> dict[str, Any]:
+    width = 0
+    height = 0
+    duration = 0.0
+    try:
+        proc = subprocess.run(
+            [
+                "mdls",
+                "-name",
+                "kMDItemDurationSeconds",
+                "-name",
+                "kMDItemPixelWidth",
+                "-name",
+                "kMDItemPixelHeight",
+                str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        text = proc.stdout or ""
+        for line in text.splitlines():
+            if "kMDItemDurationSeconds" in line:
+                duration = float(line.split("=", 1)[1].strip())
+            elif "kMDItemPixelWidth" in line:
+                width = int(float(line.split("=", 1)[1].strip()))
+            elif "kMDItemPixelHeight" in line:
+                height = int(float(line.split("=", 1)[1].strip()))
+    except Exception:
+        pass
+    fps_num, fps_den = source_fps_parts(fps)
+    frame_count = int(round(duration * fps)) if duration > 0.0 and fps > 0.0 else 0
+    return {
+        "width": width,
+        "height": height,
+        "frame_count": frame_count,
+        "duration_sec": duration,
+        "fps": fps,
+        "fps_num": fps_num,
+        "fps_den": fps_den,
+        "r_frame_rate": f"{fps_num}/{fps_den}" if fps_num and fps_den else "",
+        "probe_source": "spotlight_fps_override",
+        "probe_error": probe_error[:500],
+    }
+
+
+def _read_gray_frames(
+    path: Path,
+    frames: list[int],
+    *,
+    width: int,
+    height: int,
+    timeout_sec: float = 180.0,
+) -> dict[int, Any]:
     import numpy as np
 
     ordered = sorted(set(int(frame) for frame in frames))
@@ -130,7 +190,7 @@ def _read_gray_frames(path: Path, frames: list[int], *, width: int, height: int)
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=120,
+        timeout=max(30.0, float(timeout_sec or 180.0)),
         **hidden_subprocess_kwargs(strip_qt=True),
     )
     if proc.returncode != 0:
@@ -165,15 +225,20 @@ def verify_source_fps_scout(
     width: int,
     height: int,
     output_dir: Path,
+    pipe_max_fps: float = 60.0,
+    probe_timeout_sec: float = 120.0,
+    frame_extract_timeout_sec: float = 180.0,
+    fps_override: float = 0.0,
+    allow_metadata_only: bool = False,
 ) -> dict[str, Any]:
     import cv2
 
     started = time.time()
-    info = _probe_video(media_path)
+    info = _probe_video(media_path, timeout_sec=probe_timeout_sec, fps_override=fps_override)
     fps = float(info["fps"] or 0.0)
     settings = {
         "scan_cut_pioneer_pipe_source_fps_enabled": True,
-        "scan_cut_pioneer_pipe_source_max_fps": 60.0,
+        "scan_cut_pioneer_pipe_source_max_fps": float(pipe_max_fps or 60.0),
         "scan_cut_pioneer_pipe_score_threshold": 40.0,
         "scan_cut_pioneer_pipe_region_threshold": 18.0,
         "scan_cut_pioneer_pipe_regions_required": 2,
@@ -182,18 +247,36 @@ def verify_source_fps_scout(
     }
     pipe_fps = resolve_pioneer_pipe_fps(settings, source_fps=fps, fallback_fps=1.0)
     all_frames = [frame for pair in pairs for frame in pair]
-    frame_map = _read_gray_frames(media_path, all_frames, width=width, height=height)
+    frame_map = {}
+    frame_extract_error = ""
+    if not allow_metadata_only:
+        try:
+            frame_map = _read_gray_frames(
+                media_path,
+                all_frames,
+                width=width,
+                height=height,
+                timeout_sec=frame_extract_timeout_sec,
+            )
+        except Exception as exc:
+            frame_extract_error = str(exc)[:500]
     rows = []
     for left_frame, right_frame in pairs:
         left = frame_map.get(left_frame)
         right = frame_map.get(right_frame)
         if left is None or right is None:
+            timing = precise_cut_boundary_timing(right_frame / fps, 0.0, fps, sec_to_frame) if fps > 0.0 else {}
+            frame_preserved = int(timing.get("timeline_frame") or -1) == int(right_frame)
             rows.append({
                 "left_frame": left_frame,
                 "right_frame": right_frame,
+                "candidate_frame": int(timing.get("timeline_frame") or 0),
+                "candidate_sec": float(timing.get("timeline_sec") or 0.0),
                 "candidate_detected": False,
-                "frame_preserved": False,
-                "reason": "frame_extract_missing",
+                "frame_preserved": bool(frame_preserved),
+                "pair_passed": bool(allow_metadata_only and frame_preserved),
+                "acceptance_basis": "metadata_frame_grid_preserved" if allow_metadata_only and frame_preserved else "missing",
+                "reason": "metadata_only" if allow_metadata_only else "frame_extract_missing",
             })
             continue
         left_sample = build_visual_cut_sample(left, cv2, mode="fast4", width=width, settings=settings)
@@ -237,6 +320,13 @@ def verify_source_fps_scout(
         "pipe_fps_num": source_fps_parts(pipe_fps)[0],
         "pipe_fps_den": source_fps_parts(pipe_fps)[1],
         "scale": {"width": width, "height": height},
+        "timeouts": {
+            "probe_timeout_sec": max(1.0, float(probe_timeout_sec or 120.0)),
+            "frame_extract_timeout_sec": max(30.0, float(frame_extract_timeout_sec or 180.0)),
+        },
+        "allow_metadata_only": bool(allow_metadata_only),
+        "frame_extract_status": "metadata_only" if allow_metadata_only else "ok" if not frame_extract_error else "failed",
+        "frame_extract_error": frame_extract_error,
         "pairs": rows,
         "passed": passed,
         "elapsed_sec": round(time.time() - started, 3),
@@ -244,7 +334,46 @@ def verify_source_fps_scout(
     out_path = output_dir / "source_fps_scout.json"
     out_path.write_bytes(dumps_json_bytes(manifest, indent=2, sort_keys=True, append_newline=True))
     manifest["artifact_path"] = str(out_path)
+    _write_markdown_report(output_dir / "source_fps_scout.md", manifest)
     return manifest
+
+
+def _write_markdown_report(path: Path, manifest: dict[str, Any]) -> None:
+    pairs = manifest.get("pairs") if isinstance(manifest.get("pairs"), list) else []
+    lines = [
+        "# Cut Boundary Source-FPS Scout",
+        "",
+        f"- Passed: `{bool(manifest.get('passed'))}`",
+        f"- Media: `{manifest.get('media_path')}`",
+        f"- Pipe fps: `{manifest.get('pipe_fps')}` (`{manifest.get('pipe_fps_num')}/{manifest.get('pipe_fps_den')}`)",
+        f"- Scale: `{(manifest.get('scale') or {}).get('width')}x{(manifest.get('scale') or {}).get('height')}`",
+        f"- Probe source: `{(manifest.get('media') or {}).get('probe_source', '')}`",
+        f"- Frame extract status: `{manifest.get('frame_extract_status')}`",
+        f"- Metadata-only fallback: `{bool(manifest.get('allow_metadata_only'))}`",
+        f"- Elapsed: `{manifest.get('elapsed_sec')}`",
+        "",
+        "| Left frame | Boundary frame | Candidate frame | Detected | Frame preserved | Passed | Basis | Score | Pixel ratio | Motion jump |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in pairs:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            "| {left} | {right} | {candidate} | {detected} | {preserved} | {passed} | {basis} | {score} | {pixel} | {motion} |".format(
+                left=row.get("left_frame"),
+                right=row.get("right_frame"),
+                candidate=row.get("candidate_frame", ""),
+                detected=bool(row.get("candidate_detected")),
+                preserved=bool(row.get("frame_preserved")),
+                passed=bool(row.get("pair_passed")),
+                basis=row.get("acceptance_basis", ""),
+                score=row.get("score", ""),
+                pixel=row.get("pixel_ratio", ""),
+                motion=row.get("motion_jump", ""),
+            )
+        )
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> int:
@@ -253,6 +382,11 @@ def main() -> int:
     parser.add_argument("--pairs", default="2765:2766,2676:2677")
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=180)
+    parser.add_argument("--pipe-max-fps", type=float, default=60.0)
+    parser.add_argument("--fps-override", default="")
+    parser.add_argument("--allow-metadata-only", action="store_true")
+    parser.add_argument("--probe-timeout-sec", type=float, default=120.0)
+    parser.add_argument("--frame-extract-timeout-sec", type=float, default=180.0)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     manifest = verify_source_fps_scout(
@@ -261,6 +395,11 @@ def main() -> int:
         width=max(64, min(960, int(args.width or 320))),
         height=max(36, min(540, int(args.height or 180))),
         output_dir=args.output_dir,
+        pipe_max_fps=float(args.pipe_max_fps or 60.0),
+        probe_timeout_sec=float(args.probe_timeout_sec or 120.0),
+        frame_extract_timeout_sec=float(args.frame_extract_timeout_sec or 180.0),
+        fps_override=_parse_ratio(args.fps_override),
+        allow_metadata_only=bool(args.allow_metadata_only),
     )
     print(dumps_json_bytes(manifest, indent=2, sort_keys=True).decode("utf-8"))
     return 0 if manifest.get("passed") else 1

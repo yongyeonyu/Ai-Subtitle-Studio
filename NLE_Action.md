@@ -29,6 +29,7 @@ Current NLE status:
 - Latest preview/skimming cache contract audit: `output/manual_verification/latest/nle_preview_skimming_cache_audit_20260628/nle_preview_skimming_cache_audit.md`; preview cache files remain under the temp `Preview/FrameThumbnails` workspace, carry `user_preview_only` manifest provenance, are explicitly not cut-boundary evidence, and cache miss continues to schedule async preparation instead of sync UI-thread decode.
 - Latest preview/skimming trace-event audit: `output/manual_verification/latest/nle_preview_skimming_trace_audit_20260628/nle_preview_skimming_cache_audit.md`; preview cache hit/miss/schedule/ready events now flow through the async `TraceLogger` queue with `editor_preview_skimming`, `user_preview_only`, `cut_boundary_evidence=false`, exact `fps_num/fps_den`, and the existing preview seek throttle preserved.
 - Latest confirmed cut-boundary decision trace audit: `output/manual_verification/latest/nle_confirmed_cut_trace_audit_20260628/trace_log_bundle_audit.md`; confirmed visual-cut split/snap/drop decisions now emit async `confirmed_cut_split_snap` events with `event_type=cut_boundary_decision`, `decision`, `provisional_frame`, `drop_reason`, exact `fps_num/fps_den`, and no detector-threshold, UI, or persisted-NLE behavior change. NAS HeyDealer first-180s regression after this slice is accepted at `output/manual_verification/latest/nle_confirmed_cut_trace_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`.
+- Latest fixed cut-boundary fixture gate: `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_20260628/source_fps_scout.md`; the local 60000/1001fps fixture preserves target frames `2766` and `2677` on the exact frame grid using metadata-only mode, and `tests/test_cut_boundary_fixture_2766_2677.py` now guards the split/snap contract so final rows do not cross either frame. NAS HeyDealer first-180s regression after this slice is accepted at `output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_nas_heydealer_20260628/acceptance/reference_benchmark_acceptance.md`, but latency was dominated by WhisperKit worker timeout/fallback and must be treated as a separate STT runtime diagnostic.
 
 This plan does not approve native migration, Swift rewrite, QML migration, OpenGL/Metal UI-surface defaults, DMG work, release tag movement, App Store/TestFlight work, or UI/UX label/layout/color/shortcut/popup changes.
 
@@ -376,6 +377,21 @@ AI_SUBTITLE_STUDIO_CUT_BOUNDARY_PIPE_MAX_FPS="60" \
 QT_QPA_PLATFORM=offscreen \
 ./venv/bin/python -m pytest -q tests/test_cut_boundary_fixture_2766_2677.py
 ```
+
+When the local iCloud fixture is present but FFmpeg/OpenCV decoder access stalls, keep visual detection claims separate and run the metadata/frame-grid verifier explicitly:
+
+```bash
+QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/verify_cut_boundary_source_fps_scout.py \
+  "/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4" \
+  --pairs 2765:2766,2676:2677 \
+  --pipe-max-fps 60 \
+  --fps-override 60000/1001 \
+  --allow-metadata-only \
+  --probe-timeout-sec 5 \
+  --output-dir output/manual_verification/latest/nle_fixed_cut_boundary_fixture_gate_YYYYMMDD
+```
+
+This verifier proves exact frame-grid preservation and split/snap guardability only. If `candidate_detected=false`, do not call it visual cut detection proof.
 
 Trace:
 
