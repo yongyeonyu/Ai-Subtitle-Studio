@@ -688,6 +688,46 @@ def _project_raw_subtitle_segments(
     return raw_segments if isinstance(raw_segments, list) else []
 
 
+def _top_level_nle_canonical_subtitle_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        from core.project.nle_persistence_guard import (
+            approved_nle_snapshot_payload,
+            approved_top_level_nle_canonical_load_requested,
+            approved_top_level_nle_payload,
+        )
+        from core.project.nle_snapshot import editor_rows_from_top_level_nle_payload
+    except Exception:
+        return []
+    if not approved_top_level_nle_canonical_load_requested(project):
+        return []
+    nle_payload = project.get("nle")
+    snapshot_payload = project.get("nle_snapshot")
+    if not approved_top_level_nle_payload(nle_payload) or not approved_nle_snapshot_payload(snapshot_payload):
+        return []
+    rows = editor_rows_from_top_level_nle_payload(nle_payload)
+    snapshot_rows = editor_rows_from_top_level_nle_payload(snapshot_payload)
+    if _nle_canonical_load_signature(rows) != _nle_canonical_load_signature(snapshot_rows):
+        return []
+    return rows if rows else []
+
+
+def _nle_canonical_load_signature(rows: list[dict[str, Any]]) -> list[tuple[str, int, int, str, bool]]:
+    signature: list[tuple[str, int, int, str, bool]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        signature.append(
+            (
+                str(row.get("id") or ""),
+                _safe_int(row.get("start_frame", row.get("timeline_start_frame", 0))),
+                _safe_int(row.get("end_frame", row.get("timeline_end_frame", 0))),
+                str(row.get("text") or ""),
+                bool(row.get("is_gap")),
+            )
+        )
+    return signature
+
+
 def project_segments_to_editor(
     project: dict[str, Any],
     *,
@@ -697,12 +737,14 @@ def project_segments_to_editor(
     editor_subtitles = editor_state.get("subtitles", {}) or {}
     vector_canvas = ((editor_state.get("rendering", {}) or {}).get("subtitle_canvas", {}) or {})
     external_text_assets = project_uses_external_text_assets(project)
-    raw_segments = _project_raw_subtitle_segments(
-        project,
-        editor_subtitles,
-        vector_canvas,
-        external_text_assets=external_text_assets,
-    )
+    raw_segments = _top_level_nle_canonical_subtitle_segments(project)
+    if not raw_segments:
+        raw_segments = _project_raw_subtitle_segments(
+            project,
+            editor_subtitles,
+            vector_canvas,
+            external_text_assets=external_text_assets,
+        )
     if not raw_segments:
         return []
 

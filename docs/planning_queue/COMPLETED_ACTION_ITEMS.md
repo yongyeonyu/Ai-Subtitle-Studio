@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.26-source-app
+Document-Version: 04.01.27-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,25 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.27 G2 Top-Level NLE Canonical Load Opt-In Proof
+
+Source request: continue remaining action-item execution with Jammini plus three agents, transform into a video editor using the NLE structure, apply Taption UX scenarios where appropriate, record completed items separately, review/fix, keep worktree clean after one completed task, commit, and push main. Owner approval for persisted NLE/UI structure and App Store packaging/signing/upload/metadata execution was reconfirmed before this slice.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.27"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.27`.
+3. `core/project/nle_persistence_guard.py` now separates legacy top-level shadow metadata from explicit top-level `nle` canonical load opt-in policy.
+4. `core/project/nle_snapshot.py` now exposes top-level `nle` / `nle_snapshot` row projection helpers for caption and gap rows.
+5. `core/project/project_context.py` now lets explicitly approved top-level `nle` rows drive project load only when paired `nle_snapshot` rows agree; companion drift fails closed to legacy `editor_state`.
+6. `core/project/project_format.py` preserves legacy `editor_state` rows for rollback while writing approved top-level canonical-load metadata and matching `nle_snapshot` metadata.
+7. `tools/audit_nle_persistence_cutover.py` now includes the top-level `nle` canonical load opt-in proof and keeps the remaining cutover blockers explicit.
+8. Audit evidence was refreshed at `output/manual_verification/latest/nle_canonical_load_opt_in_v040127_20260629_1248/nle_persistence_cutover_audit.md`.
+9. Audit state: `status=blocked`, `app_version=04.01.27`, `prep_ready=true`, `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates `8/4`, current canonical owner `top_level_nle_shadow_metadata`, and `canonical_load_owner_change_allowed=ready`.
+10. Canonical opt-in proof: loaded/runtime/reloaded/storage `nle`/storage `nle_snapshot` first caption text all remain `nle canonical first`; legacy `editor_state` first caption text after resave remains `first`; paired `nle`/`nle_snapshot` drift rejects canonical load; runtime/readback/quarantine payloads do not persist.
+11. Remaining blocked gates are `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
+12. Three sub-agent reviews were used as architecture, QE, and editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+13. Focused verification passed: compile check for touched NLE/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `22 passed`; audit generation passed with blockers `4`; project/status guard passed; direct version assertion -> `APP_VERSION=04.01.27` / `PROJECT_SCHEMA_VERSION=04.01.27`; `git diff --check -- .` -> pass.
+14. This slice does not approve `nle_snapshot` as a standalone canonical source, persist `_nle_project_state`, replace legacy `editor_state`, declare final NLE disk-format cutover, perform per-pixel NLE writes, change UI/UX labels/layout/shortcuts/colors/popups, change STT/cache defaults, or provide App Store package/signing/upload/submission proof.
 
 ## v04.01.26 G0 Owner Metadata Values Preflight Guard
 

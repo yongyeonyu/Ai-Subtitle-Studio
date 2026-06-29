@@ -193,7 +193,7 @@ Focused guards:
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py
 ```
 
-## G2 NLE canonical load-owner gate matrix / rollback-boundary audit
+## G2 NLE canonical load opt-in / gate matrix audit
 
 For canonical load-owner preflight work, run the persistence cutover audit
 directly and require the gate matrix to stay explicit about what is still
@@ -201,26 +201,30 @@ blocked:
 
 ```bash
 ./venv/bin/python tools/audit_nle_persistence_cutover.py \
-  --output-dir output/manual_verification/latest/nle_load_owner_rollback_boundary_YYYYMMDD_HHMM
+  --output-dir output/manual_verification/latest/nle_canonical_load_opt_in_YYYYMMDD_HHMM
 ```
 
 The current expected state is audit evidence only: `status=blocked`,
 `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates
-`7/5`, current canonical owner `legacy_editor_state`, target candidate
-`top_level_nle_shadow_metadata`, `rollback_boundary_defined=ready`, and
+`8/4`, current canonical owner `top_level_nle_shadow_metadata` for explicit
+opt-in payloads only, target candidate `top_level_nle_shadow_metadata`,
+`canonical_load_owner_change_allowed=ready`, and
 `not_runtime_change`, `not_disk_format_cutover`, and `not_ui_change` all true.
-The rollback-boundary guard must prove candidate top-level `nle`,
-`nle_snapshot`, and `_nle_project_state` canonical/runtime-persistence claims
-are stripped before default load or resave can adopt them. Default load and
-resave must preserve legacy text, and resave may regenerate only approved
-legacy-owned `nle`/`nle_snapshot` shadow metadata.
+The canonical opt-in guard must prove paired top-level `nle` and `nle_snapshot`
+rows load and resave through `read_project_file()`,
+`project_segments_to_editor()`, and `write_project_file()` while legacy
+`editor_state` remains preserved for rollback. Companion drift must fail closed
+to legacy rows, and runtime/readback/quarantine payloads must not persist.
+Remaining blocked gates are `nle_snapshot_canonical_load_source_allowed`,
+`runtime_project_state_persistence_allowed`,
+`legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
 
 Focused guards:
 
 ```bash
-./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py
-QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py
-QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_snapshot.py tests/test_macos_bundle_runtime_paths.py
+./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/nle_snapshot.py core/project/project_context.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py core/runtime/config.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"
 ```
 
 ## G2 top-level NLE compatibility projection audit

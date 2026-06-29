@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.27 G2 Top-Level NLE Canonical Load Opt-In Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G2 owner-approved top-level `nle` canonical load opt-in proof, paired `nle`/`nle_snapshot` readback guard, legacy rollback preservation, and version/schema bump.
+- 결과: pass for the bounded NLE persistence/load proof. Full NLE disk-format cutover remains blocked because `nle_snapshot` standalone canonical sourcing, runtime-state persistence, legacy disk-shape replacement, and final cutover proof remain incomplete.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.27.md`
+  - Audit report: `output/manual_verification/latest/nle_canonical_load_opt_in_v040127_20260629_1248/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_canonical_load_opt_in_v040127_20260629_1248/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040127-g2-top-level-nle-canonical-load-opt-in-proof`
+- 실제 결과:
+  - App version updated to `04.01.27`.
+  - Project schema version updated to `04.01.27`.
+  - `core/project/nle_persistence_guard.py` separates legacy top-level shadow metadata from explicit top-level canonical load opt-in policy.
+  - `core/project/nle_snapshot.py` exposes top-level `nle` / `nle_snapshot` row projection helpers.
+  - `core/project/project_context.py` uses top-level `nle` rows only when explicit opt-in policy exists and paired `nle_snapshot` rows agree; companion drift falls back to legacy rows.
+  - `core/project/project_format.py` preserves legacy `editor_state` rows for rollback while writing approved top-level canonical-load metadata and matching `nle_snapshot` metadata.
+  - Audit state: `status=blocked`, `app_version=04.01.27`, `prep_ready=true`, `persistence_cutover_ready=false`, overall stoplight `red`, ready/blocked gates `8/4`.
+  - Current canonical owner for explicit opt-in payloads: `top_level_nle_shadow_metadata`; `canonical_load_owner_change_allowed=ready`.
+  - Canonical opt-in proof: loaded/runtime/reloaded/storage `nle`/storage `nle_snapshot` first caption text all remain `nle canonical first`; legacy `editor_state` first caption text after resave remains `first`.
+  - Blocked gates: `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
+  - This is explicit opt-in load proof only; it is not `nle_snapshot` standalone canonical sourcing, persisted `_nle_project_state`, legacy `editor_state` replacement, final NLE disk-format cutover, UI/UX change, STT/cache default change, or App Store package/signing/upload/submission proof.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/nle_snapshot.py core/project/project_context.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py core/runtime/config.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `22 passed`.
+  - `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_canonical_load_opt_in_v040127_20260629_1248` -> `status=blocked`, overall stoplight `red`, ready/blocked gates `8/4`, blockers `4`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.27`, `PROJECT_SCHEMA_VERSION=04.01.27`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.26 G0 Owner Metadata Values Preflight Guard - 2026-06-29 KST
 
 - 실행 모드: source-app G0 owner metadata values preflight/import guard, imported-copy forbidden-claim scan, exact proof-path binding, upload readiness hardening, and version/schema bump.

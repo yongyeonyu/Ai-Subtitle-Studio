@@ -8,6 +8,8 @@ NLE_PERSISTENCE_QUARANTINE_KEY = "_nle_persistence_quarantine"
 NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_snapshot_persistence_approval.v1"
 NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_top_level_persistence_approval.v1"
 NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID = "owner_approved_20260628"
+NLE_LEGACY_CANONICAL_LOAD_OWNER = "legacy_editor_state"
+NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER = "top_level_nle_shadow_metadata"
 UNAPPROVED_NLE_PERSISTENCE_KEYS = ("nle", "nle_snapshot", "_nle_project_state")
 
 
@@ -45,6 +47,26 @@ def approved_top_level_nle_persistence_requested(project: dict[str, Any] | None)
     )
 
 
+def approved_nle_snapshot_payload(value: Any) -> bool:
+    return _is_approved_nle_snapshot_payload(value)
+
+
+def approved_top_level_nle_payload(value: Any) -> bool:
+    return _is_approved_top_level_nle_payload(value)
+
+
+def approved_top_level_nle_canonical_load_requested(project: dict[str, Any] | None) -> bool:
+    if not approved_top_level_nle_persistence_requested(project):
+        return False
+    policy = project.get("nle_persistence")
+    if not isinstance(policy, dict):
+        return False
+    return (
+        str(policy.get("canonical_load_owner") or "") == NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER
+        and bool(policy.get("canonical_load_owner_change_allowed"))
+    )
+
+
 def nle_snapshot_persistence_approval_payload(*, source: str = "") -> dict[str, Any]:
     return {
         "schema": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
@@ -64,7 +86,21 @@ def nle_top_level_persistence_approval_payload(*, source: str = "") -> dict[str,
         "persist_top_level_nle": True,
         "legacy_editor_state_remains_canonical": True,
         "runtime_project_state_persisted": False,
-        "canonical_load_owner": "legacy_editor_state",
+        "canonical_load_owner": NLE_LEGACY_CANONICAL_LOAD_OWNER,
+    }
+
+
+def nle_top_level_canonical_load_approval_payload(*, source: str = "") -> dict[str, Any]:
+    return {
+        "schema": NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        "source": str(source or "project_storage"),
+        "persist_top_level_nle": True,
+        "legacy_editor_state_remains_canonical": False,
+        "legacy_editor_state_preserved_for_rollback": True,
+        "runtime_project_state_persisted": False,
+        "canonical_load_owner": NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+        "canonical_load_owner_change_allowed": True,
     }
 
 
@@ -90,22 +126,34 @@ def _is_approved_top_level_nle_payload(value: Any) -> bool:
         return False
     if str(value.get("schema") or "") != "ai_subtitle_studio.nle_shadow_project.v1":
         return False
-    if str(value.get("role") or "") != "shadow_metadata":
-        return False
-    if str(value.get("canonical_load_owner") or "") != "legacy_editor_state":
+    canonical_owner = str(value.get("canonical_load_owner") or "")
+    if canonical_owner not in {NLE_LEGACY_CANONICAL_LOAD_OWNER, NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER}:
         return False
     if bool(value.get("runtime_project_state_persisted")):
         return False
     approval = value.get("persistence")
     if not isinstance(approval, dict):
         return False
-    return (
+    base_ok = (
         str(approval.get("schema") or "") == NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA
         and str(approval.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
         and bool(approval.get("persist_top_level_nle"))
-        and bool(approval.get("legacy_editor_state_remains_canonical"))
         and not bool(approval.get("runtime_project_state_persisted"))
-        and str(approval.get("canonical_load_owner") or "") == "legacy_editor_state"
+        and str(approval.get("canonical_load_owner") or "") == canonical_owner
+    )
+    if not base_ok:
+        return False
+    if canonical_owner == NLE_LEGACY_CANONICAL_LOAD_OWNER:
+        return (
+            str(value.get("role") or "") == "shadow_metadata"
+            and bool(approval.get("legacy_editor_state_remains_canonical"))
+            and not bool(approval.get("canonical_load_owner_change_allowed"))
+        )
+    return (
+        str(value.get("role") or "") == "canonical_load_owner"
+        and not bool(approval.get("legacy_editor_state_remains_canonical"))
+        and bool(approval.get("legacy_editor_state_preserved_for_rollback"))
+        and bool(approval.get("canonical_load_owner_change_allowed"))
     )
 
 
@@ -203,14 +251,20 @@ def assert_no_unapproved_nle_persistence_fields(
 __all__ = [
     "NLE_PERSISTENCE_GUARD_SCHEMA",
     "NLE_PERSISTENCE_QUARANTINE_KEY",
+    "NLE_LEGACY_CANONICAL_LOAD_OWNER",
     "NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID",
     "NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA",
+    "NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER",
     "NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA",
     "UNAPPROVED_NLE_PERSISTENCE_KEYS",
     "approved_nle_snapshot_persistence_requested",
+    "approved_nle_snapshot_payload",
+    "approved_top_level_nle_payload",
+    "approved_top_level_nle_canonical_load_requested",
     "approved_top_level_nle_persistence_requested",
     "assert_no_unapproved_nle_persistence_fields",
     "nle_snapshot_persistence_approval_payload",
+    "nle_top_level_canonical_load_approval_payload",
     "nle_top_level_persistence_approval_payload",
     "strip_unapproved_nle_persistence_fields",
 ]

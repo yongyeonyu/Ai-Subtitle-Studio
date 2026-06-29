@@ -338,6 +338,13 @@ def _project_copy_with_editor_rows(
     return source
 
 
+def project_copy_with_editor_rows(
+    project: dict[str, Any],
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    return _project_copy_with_editor_rows(project, rows)
+
+
 def build_nle_snapshot_readback_parity_report_for_editor_rows(
     project: dict[str, Any] | None,
     rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
@@ -366,6 +373,68 @@ def attach_nle_snapshot_readback_parity(
     else:
         project.pop(NLE_SNAPSHOT_READBACK_PARITY_KEY, None)
     return project
+
+
+def editor_rows_from_top_level_nle_payload(nle_payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(nle_payload, dict):
+        return []
+    sequences = nle_payload.get("sequences") if isinstance(nle_payload.get("sequences"), list) else []
+    sequence = sequences[0] if sequences and isinstance(sequences[0], dict) else {}
+    fps = normalize_fps(sequence.get("fps") or 30.0)
+    rows: list[dict[str, Any]] = []
+
+    captions = sequence.get("captions") if isinstance(sequence.get("captions"), list) else []
+    for index, caption in enumerate(captions):
+        if not isinstance(caption, dict):
+            continue
+        start = _as_float(caption.get("sequence_start"), 0.0)
+        end = _as_float(caption.get("sequence_end"), start)
+        if end <= start:
+            continue
+        rows.append(
+            {
+                "id": str(caption.get("caption_id") or f"caption_{index + 1:04d}"),
+                "start": round(start, 6),
+                "end": round(end, 6),
+                "start_frame": int(round(start * fps)),
+                "end_frame": int(round(end * fps)),
+                "text": str(caption.get("text") or ""),
+                "speaker": str(caption.get("speaker") or ""),
+                "is_gap": False,
+                "_nle_canonical_load_source": "top_level_nle",
+            }
+        )
+
+    gaps = sequence.get("gaps") if isinstance(sequence.get("gaps"), list) else []
+    for index, gap in enumerate(gaps):
+        if not isinstance(gap, dict):
+            continue
+        start = _as_float(gap.get("sequence_start"), 0.0)
+        end = _as_float(gap.get("sequence_end"), start)
+        if end <= start:
+            continue
+        rows.append(
+            {
+                "id": str(gap.get("gap_id") or f"gap_{index + 1:04d}"),
+                "start": round(start, 6),
+                "end": round(end, 6),
+                "start_frame": int(round(start * fps)),
+                "end_frame": int(round(end * fps)),
+                "text": "",
+                "speaker": "",
+                "is_gap": True,
+                "_nle_canonical_load_source": "top_level_nle",
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            int(row.get("start_frame") or 0),
+            int(row.get("end_frame") or 0),
+            bool(row.get("is_gap")),
+        )
+    )
+    return rows
 
 
 def _optional_float(value: Any) -> float | None:
@@ -904,6 +973,8 @@ __all__ = [
     "attach_nle_snapshot_readback_parity",
     "build_project_nle_snapshot",
     "build_top_level_nle_shadow_payload",
+    "editor_rows_from_top_level_nle_payload",
+    "project_copy_with_editor_rows",
     "build_nle_snapshot_readback_parity_report",
     "build_nle_snapshot_readback_parity_report_for_editor_rows",
     "build_concat_render_plan_from_snapshot",

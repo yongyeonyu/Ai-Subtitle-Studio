@@ -5,10 +5,12 @@ import unittest
 from pathlib import Path
 
 from core.project.nle_persistence_guard import (
+    NLE_LEGACY_CANONICAL_LOAD_OWNER,
     NLE_PERSISTENCE_GUARD_SCHEMA,
     NLE_PERSISTENCE_QUARANTINE_KEY,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
+    NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
     NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA,
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
@@ -21,6 +23,7 @@ from core.project.nle_snapshot import (
 from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_format import build_storage_project_payload, hydrate_project_runtime_views
+from core.project import project_io
 from core.project.project_io import (
     clear_project_file_cache,
     read_project_file,
@@ -232,7 +235,7 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         self.assertIn("nle_snapshot", storage)
         self.assertEqual(nle_payload["schema"], NLE_TOP_LEVEL_SHADOW_SCHEMA)
         self.assertEqual(nle_payload["role"], "shadow_metadata")
-        self.assertEqual(nle_payload["canonical_load_owner"], "legacy_editor_state")
+        self.assertEqual(nle_payload["canonical_load_owner"], NLE_LEGACY_CANONICAL_LOAD_OWNER)
         self.assertFalse(nle_payload["runtime_project_state_persisted"])
         self.assertEqual(
             nle_payload["persistence"]["schema"],
@@ -269,6 +272,115 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         self.assertEqual(report["stripped_keys"], ["nle"])
         self.assertNotIn("nle", storage_without_snapshot)
         self.assertIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_without_snapshot)
+
+    def test_owner_approved_top_level_nle_canonical_load_opt_in_uses_top_level_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "canonical-top-level-nle.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "persist_top_level_nle": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            storage["nle"]["sequences"][0]["captions"][0]["text"] = "nle canonical first"
+            storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "nle canonical first"
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+            reloaded = read_project_file(str(project_path))
+            reloaded_rows = project_segments_to_editor(reloaded, include_analysis_candidates=False)
+
+        nle_payload = storage["nle"]
+        self.assertEqual(nle_payload["role"], "canonical_load_owner")
+        self.assertEqual(nle_payload["canonical_load_owner"], NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER)
+        self.assertTrue(nle_payload["persistence"]["canonical_load_owner_change_allowed"])
+        self.assertFalse(nle_payload["persistence"]["legacy_editor_state_remains_canonical"])
+        self.assertTrue(nle_payload["persistence"]["legacy_editor_state_preserved_for_rollback"])
+        self.assertEqual(project_segments_to_editor(project, include_analysis_candidates=False)[0]["text"], "first")
+        self.assertEqual(loaded_rows[0]["text"], "nle canonical first")
+        self.assertEqual(reloaded_rows[0]["text"], "nle canonical first")
+        self.assertEqual(storage_after["nle"]["role"], "canonical_load_owner")
+        self.assertEqual(storage_after["nle"]["canonical_load_owner"], NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER)
+        self.assertEqual(storage_after["nle"]["sequences"][0]["captions"][0]["text"], "nle canonical first")
+        self.assertEqual(
+            storage_after["editor_state"]["rendering"]["subtitle_canvas"]["segments"][0]["text"],
+            "first",
+        )
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+
+    def test_empty_top_level_nle_canonical_opt_in_falls_back_to_legacy_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "empty-canonical-top-level-nle.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "persist_top_level_nle": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            storage["nle"]["sequences"][0]["captions"] = []
+            storage["nle"]["sequences"][0]["gaps"] = []
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+
+        self.assertEqual(loaded_rows[0]["text"], "first")
+        self.assertFalse(any(row.get("_nle_canonical_load_source") for row in loaded_rows))
+
+    def test_top_level_nle_canonical_opt_in_rejects_snapshot_companion_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "drifted-canonical-top-level-nle.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "persist_top_level_nle": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            storage["nle"]["sequences"][0]["captions"][0]["text"] = "drifted top-level nle text"
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+
+        self.assertEqual(loaded_rows[0]["text"], "first")
+        self.assertFalse(any(row.get("_nle_canonical_load_source") for row in loaded_rows))
+
+    def test_top_level_nle_canonical_opt_in_rejects_direct_forged_payload_without_approvals(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_snapshot": True,
+            "persist_top_level_nle": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            "canonical_load_owner": NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+            "canonical_load_owner_change_allowed": True,
+        }
+        storage = build_storage_project_payload(copy.deepcopy(project))
+        storage["nle"]["sequences"][0]["captions"][0]["text"] = "forged canonical first"
+        storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "forged canonical first"
+        storage["nle"].pop("persistence", None)
+        storage["nle_snapshot"].pop("persistence", None)
+
+        rows = project_segments_to_editor(storage, include_analysis_candidates=False)
+
+        self.assertEqual(rows[0]["text"], "first")
+        self.assertFalse(any(row.get("_nle_canonical_load_source") for row in rows))
 
     def test_top_level_nle_shadow_requires_snapshot_persistence_gate(self):
         project = _legacy_project()
