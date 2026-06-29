@@ -6,7 +6,7 @@ AI Subtitle Studio can be treated as a Mac App Store submission candidate.
 ## Current Status
 
 - Status: blocked. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28, but distribution identities, signed `.pkg`, App Store validation, and owner metadata values are still incomplete.
-- Source app version: `04.01.15`.
+- Source app version: `04.01.16`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
 - Minimum macOS: `14.0`.
@@ -105,6 +105,17 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 - Review notes: owner input required.
 - Age rating and release-note copy: owner input required.
 
+## Latest Owner-Input Package
+
+- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
+
+Latest package state: `status=blocked`, `not_submission_proof=true`,
+`owner_input_complete=false`, `app_store_submission_ready=false`, pending
+owner-input metadata `8/8`, and forbidden-claim scan `pass` with `0` matches.
+This package is a collection/checklist artifact only; it does not replace signed
+package proof, sandbox smoke, App Store Connect validation, upload/submission,
+or owner-approved metadata values.
+
 ## Latest Audit Evidence
 
 - `output/manual_verification/latest/app_store_readiness_audit_20260627/app_store_readiness_audit.md`
@@ -116,6 +127,7 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 - `output/manual_verification/latest/app_store_owner_approval_identity_check_20260629_0026/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
 - `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`
 
 Latest known state: `status=blocked`, `local_packaging_ready=true`,

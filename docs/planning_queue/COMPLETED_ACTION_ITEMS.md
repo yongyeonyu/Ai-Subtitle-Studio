@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.15-source-app
+Document-Version: 04.01.16-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,21 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.16 G0 App Store Metadata Owner-Input Package
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.16"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.16`.
+3. `tools/generate_app_store_metadata_package.py` now builds a Mac App Store metadata owner-input package from the existing readiness audit constants and report surface.
+4. The generated package keeps this slice to owner-input collection evidence: `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner-input metadata `8/8`, and submission target `mac_app_store_pkg`.
+5. The package writes JSON/Markdown artifacts for the owner-input matrix, App Store Connect metadata-fill matrix, review notes draft, screenshots plan, copy guardrails, submission blockers, sanitized readiness snapshot, and forbidden-claim scan.
+6. `tests/test_app_store_metadata_package.py` covers the false-positive guard where signed app/pkg/sandbox/validation/auth prerequisites are faked green but missing owner metadata still keeps `app_store_submission_ready=false`.
+7. Metadata package evidence was written to `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`; forbidden-claim scan passed with `0` matches, and the readiness snapshot excludes raw keychain identity names.
+8. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+9. Focused verification passed: compile check for the touched metadata/audit/version modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_metadata_package.py tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `14 passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.16` / `PROJECT_SCHEMA_VERSION=04.01.16`; `git diff --check -- .` -> pass.
+10. This slice does not claim App Store readiness, Apple Distribution signed `.app`, signed App Store `.pkg`, `pkgutil --check-signature` pass, sandbox workflow smoke, App Store Connect validation, upload/submission completion, owner metadata completion, Developer ID DMG submission proof, UI/UX changes, subtitle-generation changes, or NLE behavior changes.
 
 ## v04.01.15 G0 App Store Identity And Metadata Blocker Refresh
 

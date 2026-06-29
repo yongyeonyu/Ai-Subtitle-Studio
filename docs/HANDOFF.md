@@ -33,7 +33,46 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.15 / G0 App Store Identity And Metadata Blocker Refresh
+## Current Handoff - 2026-06-29 v04.01.16 / G0 App Store Metadata Owner-Input Package
+
+### Scope
+
+- Completed the G0 App Store metadata owner-input package slice.
+- Bumped source-app version and project schema from `04.01.15` to `04.01.16`.
+- Added `tools/generate_app_store_metadata_package.py` and `tests/test_app_store_metadata_package.py`.
+- Updated current docs and active queue/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.16`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.16`.
+- Generated package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`.
+- Package state remains blocked by design: `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner-input metadata `8/8`, and forbidden-claim scan `pass` with `0` matches.
+- The package includes JSON/Markdown owner-input, App Store Connect metadata-fill, review-note, screenshot-plan, copy-guardrail, submission-blocker, and sanitized readiness snapshot artifacts.
+- No signed App Store `.pkg`, sandbox smoke, App Store Connect validation, upload, submission, owner metadata completion, UI/UX change, subtitle-generation change, or NLE behavior change was performed.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/generate_app_store_metadata_package.py tools/audit_app_store_readiness.py tests/test_app_store_metadata_package.py tests/test_app_store_readiness_audit.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- App Store metadata/readiness/bundle guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_metadata_package.py tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `14 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.16`, `PROJECT_SCHEMA_VERSION=04.01.16`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for release boundary, QE, and metadata/review-flow constraints. The current Jammini `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G0 remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, upload/submission, and owner-approved metadata values.
+- G1 collect-cache/default promotion remains owner-review gated.
+- Any additional active-worker final-surface proof remains a separate G3 gate if selected by the queue.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G0, provide or install the missing signing identities and owner metadata values, then rerun the readiness audit and metadata package generator before any package/upload attempt.
+- Keep source-app QA, readiness audits, signed-package proof, App Store Connect validation, owner metadata, and generated owner-input packages as separate evidence surfaces.
+
+## Previous Handoff - 2026-06-29 v04.01.15 / G0 App Store Identity And Metadata Blocker Refresh
 
 ### Scope
 

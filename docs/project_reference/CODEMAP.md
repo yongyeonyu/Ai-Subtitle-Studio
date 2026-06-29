@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.15-codemap
+Document-Version: 04.01.16-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -31,6 +31,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/subtitle_regression_pack.py`: repeatable subtitle regression-pack builder for X5, Macau, and Tinyping artifacts under `output/manual_verification/latest/`.
 - `tools/check_maintenance_budget.py`: changed-file guard for file/function length and broad silent-exception regressions.
 - `tools/verify_full_media_pipeline.py`: full-media verification runner with top-level performance/quality summary metrics.
+- `tools/audit_app_store_readiness.py`: non-destructive Mac App Store readiness blocker audit.
+- `tools/generate_app_store_metadata_package.py`: Mac App Store owner-input metadata package generator; writes checklist/matrix/guardrail artifacts without claiming submission proof.
 
 ## UI Areas
 

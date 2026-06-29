@@ -1,5 +1,26 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.16 G0 App Store Metadata Owner-Input Package - 2026-06-29 KST
+
+- 실행 모드: source-app G0 Mac App Store metadata owner-input package generator, false-positive guard tests, and version/schema bump.
+- 결과: pass for the bounded owner-input package slice. This is not App Store submission proof because the generated package remains `not_submission_proof=true`, `owner_input_complete=false`, and `app_store_submission_ready=false`.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.16.md`
+  - Metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040116-g0-app-store-metadata-owner-input-package`
+- 실제 결과:
+  - App version updated to `04.01.16`.
+  - Project schema version updated to `04.01.16`.
+  - `tools/generate_app_store_metadata_package.py` now writes JSON/Markdown owner-input artifacts from the existing App Store readiness audit constants and report surface.
+  - Generated package state: `status=blocked`, `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner-input metadata `8/8`, and forbidden-claim scan `pass` with `0` matches.
+  - The package includes a sanitized readiness snapshot without raw keychain identity names, plus separate audit owner-input and App Store Connect metadata-fill matrices.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/generate_app_store_metadata_package.py tools/audit_app_store_readiness.py tests/test_app_store_metadata_package.py tests/test_app_store_readiness_audit.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_metadata_package.py tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `14 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.16`, `PROJECT_SCHEMA_VERSION=04.01.16`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.15 G0 App Store Identity And Metadata Blocker Refresh - 2026-06-29 KST
 
 - 실행 모드: source-app G0 Mac App Store readiness blocker refresh, keychain identity audit hardening, and version/schema bump.
