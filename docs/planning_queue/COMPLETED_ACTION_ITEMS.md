@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.18-source-app
+Document-Version: 04.01.19-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,21 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.19 G2 NLE Canonical Load-Owner Review Packet
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.19"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.19`.
+3. `tools/generate_nle_canonical_load_owner_review_packet.py` now writes a G2 owner-review blocker map from the existing NLE persistence cutover audit.
+4. Review packet evidence was written to `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`; source audit evidence was written to `output/manual_verification/latest/nle_canonical_load_owner_audit_v040119_20260629_095907/nle_persistence_cutover_audit.md`.
+5. Packet state: `status=owner_review_required_blocked`, `not_runtime_change=true`, `canonical_load_owner_unchanged=true`, current canonical load owner `legacy_editor_state`, `canonical_load_owner_change_allowed=false`, and `disk_format_cutover_allowed=false`.
+6. Evidence preserved from the NLE audit: `prep_ready=true`, `persistence_cutover_ready=false`, `top_level_nle_shadow_ready=true`, operation roundtrip `11` families all passed, render/export parity passed, top-level `nle` schema `ai_subtitle_studio.nle_shadow_project.v1`, role `shadow_metadata`, runtime project state persisted `false`, final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`.
+7. Decision matrix keeps top-level `nle` as canonical load owner, `nle_snapshot` as canonical source, persisted `_nle_project_state`, and legacy `editor_state` removal all owner-approval-required with `canonical_change_allowed=false`.
+8. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+9. Focused verification passed: compile check for touched packet/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `15 passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.19` / `PROJECT_SCHEMA_VERSION=04.01.19`; `git diff --check -- .` -> pass.
+10. This slice does not change project load/save behavior, make `nle` or `nle_snapshot` canonical, persist `_nle_project_state`, remove legacy `editor_state`, perform per-pixel NLE writes, change UI/UX, change STT/cache defaults, or provide App Store packaging/signing/upload/submission proof.
 
 ## v04.01.18 G1 STT Cache Default Review Packet
 

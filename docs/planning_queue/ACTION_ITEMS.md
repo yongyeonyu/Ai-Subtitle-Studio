@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.18-source-app
+Document-Version: 04.01.19-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.18`.
+- App version: `04.01.19`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -161,6 +161,7 @@ Current baseline:
 - Persisted `_nle_project_state`, making `nle` or `nle_snapshot` the canonical load owner, and full NLE disk-format cutover remain gated.
 - Legacy save/reopen compatibility remains mandatory.
 - Latest top-level NLE shadow metadata proof: `output/manual_verification/latest/nle_top_level_shadow_metadata_20260629_0020/nle_persistence_cutover_audit.md`; `prep_ready=true`, `top_level_nle_shadow_ready=true`, storage has approved top-level `nle` plus `nle_snapshot`, `canonical_load_owner=legacy_editor_state`, legacy rows and read-back parity are stable, runtime report/runtime state/quarantine do not persist, operation roundtrip all passed across `11` families, render/export parity passed, and full cutover remains `persistence_cutover_ready=false`.
+- Latest canonical load-owner review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`; status `owner_review_required_blocked`, `canonical_load_owner_unchanged=true`, current canonical owner `legacy_editor_state`, `canonical_load_owner_change_allowed=false`, `disk_format_cutover_allowed=false`, top-level `nle` remains `shadow_metadata`, operation roundtrip `11` families passed, render/export final invalid/non-monotonic/overlap `0/0/0`, and full NLE disk-format cutover remains blocked.
 - Completed close/deferred-save blocker proof: `output/manual_verification/latest/nle_close_deferred_save_v040102_20260629/close_deferred_save_report.md`; raw vector `time.start_frame/end_frame` rows no longer collapse into `nle_save_export_invalid_duration`, close-triggered deferred-save failures no longer reschedule stale retry loops, and true final overlaps still raise `nle_save_export_final_overlap`.
 - Completed final-overlap deferred-save retry guard: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040109-g3g2-final-overlap-deferred-save-retry-guard`; `nle_save_export_final_overlap` remains a strict save/export failure, but deferred project save now treats it as nonretryable and clears stale pending snapshots instead of scheduling repeated retries. Ordinary writer failures still reschedule.
 - Completed final save/export micro-overlap repair: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040110-g2g3-final-save-export-micro-overlap-shared-boundary-repair`; final save/export rows now repair tiny SRT/frame-quantization overlaps up to the greater of one frame or `0.035s` to a shared boundary when the later row remains valid. Broader or collapse-risk final overlaps still raise `nle_save_export_final_overlap`.
@@ -266,8 +267,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.18"
-document_version: "04.01.18-source-app"
+app_version: "04.01.19"
+document_version: "04.01.19-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

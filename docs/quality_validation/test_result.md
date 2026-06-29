@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.19 G2 NLE Canonical Load-Owner Review Packet - 2026-06-29 KST
+
+- 실행 모드: source-app G2 NLE canonical load-owner owner-review packet generator, false-positive guard tests, and version/schema bump.
+- 결과: pass for the bounded owner-review packet slice. This is review evidence only; it does not switch project load ownership to NLE and does not enable full NLE disk-format cutover.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.19.md`
+  - Review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`
+  - Decision matrix: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/decision_matrix.json`
+  - Source audit: `output/manual_verification/latest/nle_canonical_load_owner_audit_v040119_20260629_095907/nle_persistence_cutover_audit.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040119-g2-nle-canonical-load-owner-review-packet`
+- 실제 결과:
+  - App version updated to `04.01.19`.
+  - Project schema version updated to `04.01.19`.
+  - `tools/generate_nle_canonical_load_owner_review_packet.py` now writes JSON/Markdown owner-review artifacts from the current NLE persistence cutover audit.
+  - Generated packet state: `status=owner_review_required_blocked`, `not_runtime_change=true`, `canonical_load_owner_unchanged=true`, current canonical owner `legacy_editor_state`, `canonical_load_owner_change_allowed=false`, `disk_format_cutover_allowed=false`.
+  - Evidence preserved: `prep_ready=true`, `persistence_cutover_ready=false`, `top_level_nle_shadow_ready=true`, top-level `nle` schema `ai_subtitle_studio.nle_shadow_project.v1`, role `shadow_metadata`, runtime project state persisted `false`, operation roundtrip `11` families all passed, render/export final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`.
+  - Decision matrix keeps top-level `nle` canonical load-owner switch, `nle_snapshot` canonical load-source switch, persisted `_nle_project_state`, and legacy `editor_state` compatibility removal owner-approved, rollback-boundary gated, and currently disallowed.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/generate_nle_canonical_load_owner_review_packet.py tests/test_nle_canonical_load_owner_review_packet.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `15 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.19`, `PROJECT_SCHEMA_VERSION=04.01.19`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.18 G1 STT Cache Default Review Packet - 2026-06-29 KST
 
 - 실행 모드: source-app G1 collect-cache owner-review packet generator, false-positive guard tests, and version/schema bump.

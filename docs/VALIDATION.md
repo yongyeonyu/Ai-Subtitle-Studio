@@ -135,6 +135,29 @@ QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_preview_
 
 For runtime regression evidence when NAS is available, use the HeyDealer first-180s reference path and require `evaluate_reference_benchmark_acceptance.py` accepted `true`, final invalid/non-monotonic/overlap `0/0/0`, and global max-active `1`. This contract must not approve persisted project relink schemas, UI relink flow changes, dynamic proxy mapping without source identity, or cut-boundary evidence reuse from preview thumbnails.
 
+## G2 NLE canonical load-owner review packet
+
+For NLE canonical load-owner cutover review work, generate a packet from the
+current NLE persistence audit without switching load ownership:
+
+```bash
+./venv/bin/python tools/generate_nle_canonical_load_owner_review_packet.py \
+  --audit-output-dir output/manual_verification/latest/nle_canonical_load_owner_audit_YYYYMMDD_HHMM \
+  --output-dir output/manual_verification/latest/nle_canonical_load_owner_review_packet_YYYYMMDD_HHMM
+```
+
+The packet must remain review-only: `owner_review_required_blocked`,
+`canonical_load_owner_unchanged=true`, current canonical owner
+`legacy_editor_state`, `canonical_load_owner_change_allowed=false`, and
+`disk_format_cutover_allowed=false`.
+
+Focused guards:
+
+```bash
+./venv/bin/python -m py_compile tools/generate_nle_canonical_load_owner_review_packet.py tests/test_nle_canonical_load_owner_review_packet.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py
+```
+
 ## Trace workspace validation
 
 Trace/temp-workspace changes should first prove syntax, focused trace behavior, then the startup/app-command diagnostic guard.

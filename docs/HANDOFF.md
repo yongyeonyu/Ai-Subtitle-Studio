@@ -33,7 +33,48 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.18 / G1 STT Cache Default Review Packet
+## Current Handoff - 2026-06-29 v04.01.19 / G2 NLE Canonical Load-Owner Review Packet
+
+### Scope
+
+- Completed the G2 NLE canonical load-owner review packet slice.
+- Bumped source-app version and project schema from `04.01.18` to `04.01.19`.
+- Added `tools/generate_nle_canonical_load_owner_review_packet.py` and `tests/test_nle_canonical_load_owner_review_packet.py`.
+- Generated a review-only owner blocker packet from the current NLE persistence cutover audit and updated current docs/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.19`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.19`.
+- Review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`.
+- Source audit: `output/manual_verification/latest/nle_canonical_load_owner_audit_v040119_20260629_095907/nle_persistence_cutover_audit.md`.
+- Packet state: `status=owner_review_required_blocked`, `not_runtime_change=true`, `canonical_load_owner_unchanged=true`, current canonical owner `legacy_editor_state`, `canonical_load_owner_change_allowed=false`, and `disk_format_cutover_allowed=false`.
+- Preserved audit evidence: `prep_ready=true`, `persistence_cutover_ready=false`, `top_level_nle_shadow_ready=true`, top-level `nle` role `shadow_metadata`, runtime project state persisted `false`, operation roundtrip `11` families all passed, render/export final invalid/non-monotonic/overlap `0/0/0`, and global max active `1`.
+- This is owner-review blocker evidence only. It is not a project load/save behavior change, top-level `nle` canonical load-owner switch, `nle_snapshot` canonical load-source switch, persisted `_nle_project_state`, legacy `editor_state` removal, visible UI/UX change, STT/cache default change, or App Store submission proof.
+
+### Evidence
+
+- Packet generation: `./venv/bin/python tools/generate_nle_canonical_load_owner_review_packet.py --audit-output-dir output/manual_verification/latest/nle_canonical_load_owner_audit_v040119_20260629_095907 --output-dir output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907` -> `status=owner_review_required_blocked`.
+- Compile check: `./venv/bin/python -m py_compile tools/generate_nle_canonical_load_owner_review_packet.py tests/test_nle_canonical_load_owner_review_packet.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- NLE canonical-load-owner and macOS bundle guards: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `15 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.19`, `PROJECT_SCHEMA_VERSION=04.01.19`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture boundary, QE false-positive guards, and editor-workflow wording constraints. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G2 full NLE disk-format cutover remains blocked until a separately approved exact canonical load-owner change is implemented with rollback boundaries and legacy compatibility proof.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+- G0 remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, upload/submission, and owner-approved metadata values.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G2, define the exact canonical load-owner change and rollback/quarantine boundary before touching load/save behavior.
+- If continuing G0, provide or install the missing signing identities and owner metadata values, then rerun the readiness audit before any package/upload attempt.
+
+## Previous Handoff - 2026-06-29 v04.01.18 / G1 STT Cache Default Review Packet
 
 ### Scope
 
