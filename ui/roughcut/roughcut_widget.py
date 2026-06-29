@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QSplitter,
     QSplitterHandle,
     QTabWidget,
@@ -31,7 +32,7 @@ from core.roughcut import build_title_suggestions, default_thumbnail_cache_dir, 
 from ui.settings.qml_panel import attach_qml_tab_bar
 from ui.roughcut.roughcut_bottom_panel import RoughcutBottomPanel
 from ui.roughcut.roughcut_export import RoughcutExportMixin
-from ui.roughcut.roughcut_format import TABLE_COLUMNS
+from ui.roughcut.roughcut_format import TABLE_COLUMNS, fmt_time
 from ui.roughcut.roughcut_detail import RoughcutDetailMixin
 from ui.roughcut.roughcut_log_panel import RoughcutLogPanel
 from ui.roughcut.roughcut_major_panel import RoughcutMajorPanel
@@ -147,6 +148,7 @@ class RoughcutWidget(
         self.uses_integrated_bottom_frame = True
         self._attached_video_editor = None
         self._attached_video_frame = None
+        self._attached_video_frame_minimum_size = None
         self._result = None
         self._source_signature = ""
         self._roughcut_candidates: list[dict] = []
@@ -167,6 +169,7 @@ class RoughcutWidget(
         self._preview_deadline_ms = 0
         self._preview_is_hover = False
         self._preview_loop_enabled = False
+        self._roughcut_updating_player_slider = False
         self._sequence_preview_active = False
         self._sequence_preview_rows: list[int] = []
         self._sequence_preview_index = -1
@@ -176,6 +179,7 @@ class RoughcutWidget(
         self._last_render_plan = None
         self._last_failed_render_plan = None
         self._roughcut_export_style = dict(DEFAULT_ROUGHCUT_EXPORT_STYLE)
+        self._roughcut_export_style_overridden = False
         self._render_log_lines: list[str] = []
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(120)
@@ -286,7 +290,8 @@ class RoughcutWidget(
         side_lay = QVBoxLayout(side)
         side_lay.setContentsMargins(6, 6, 6, 6)
         side_lay.setSpacing(6)
-        self.video_box = self._build_frame_only_box("video_box", "#FFD60A")
+        self.video_box = self._build_frame_only_box("video_box", "#2D3942")
+        self._build_roughcut_video_player_surface(self.video_box)
         self.settings_box = self._build_frame_only_box("settings_box", "#FF453A")
         self.right_frame_splitter = _RoughcutFrameSplitter(
             Qt.Orientation.Vertical,
@@ -314,19 +319,19 @@ class RoughcutWidget(
         self.video_bridge_title_lbl.setStyleSheet(label_style("text", 11, bold=True))
         self.video_bridge_hint_lbl = QLabel("러프컷 카드 순서에 맞춰 현재 에디터 플레이어를 그대로 확인합니다.")
         self.video_bridge_hint_lbl.setStyleSheet(label_style("muted", 9))
-        self.video_host = QFrame()
-        self.video_host.setStyleSheet("QFrame { background: #000000; border: 1px solid #1D2730; border-radius: 8px; }")
-        self.video_host_layout = QVBoxLayout(self.video_host)
-        self.video_host_layout.setContentsMargins(0, 0, 0, 0)
-        self.video_host_layout.setSpacing(0)
-        self.video_host_placeholder = QLabel("현재 에디터 비디오 플레이어를 여기에 유지합니다.")
-        self.video_host_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_host_placeholder.setMinimumHeight(188)
-        self.video_host_placeholder.setStyleSheet(label_style("muted", 10))
-        self.video_host_layout.addWidget(self.video_host_placeholder)
+        self._legacy_video_host = QFrame()
+        self._legacy_video_host.setStyleSheet("QFrame { background: #000000; border: 1px solid #1D2730; border-radius: 8px; }")
+        self._legacy_video_host_layout = QVBoxLayout(self._legacy_video_host)
+        self._legacy_video_host_layout.setContentsMargins(0, 0, 0, 0)
+        self._legacy_video_host_layout.setSpacing(0)
+        self._legacy_video_host_placeholder = QLabel("현재 에디터 비디오 플레이어를 여기에 유지합니다.")
+        self._legacy_video_host_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._legacy_video_host_placeholder.setMinimumHeight(188)
+        self._legacy_video_host_placeholder.setStyleSheet(label_style("muted", 10))
+        self._legacy_video_host_layout.addWidget(self._legacy_video_host_placeholder)
         self.video_bridge_layout.addWidget(self.video_bridge_title_lbl)
         self.video_bridge_layout.addWidget(self.video_bridge_hint_lbl)
-        self.video_bridge_layout.addWidget(self.video_host, stretch=1)
+        self.video_bridge_layout.addWidget(self._legacy_video_host, stretch=1)
         legacy_side_lay.addWidget(self.video_bridge_frame)
         self.player_menu_frame = self._build_player_menu_frame()
         legacy_side_lay.addWidget(self.player_menu_frame)
@@ -372,6 +377,91 @@ class RoughcutWidget(
         )
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         return frame
+
+    def _build_roughcut_video_player_surface(self, frame: QFrame) -> None:
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(10, 9, 10, 9)
+        lay.setSpacing(7)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(6)
+        self.roughcut_video_title_lbl = QLabel("비디오")
+        self.roughcut_video_title_lbl.setStyleSheet(label_style("text", 11, bold=True))
+        self.roughcut_video_state_lbl = QLabel("대기")
+        self.roughcut_video_state_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.roughcut_video_state_lbl.setStyleSheet(self._toolbar_badge_style("#A9B0B7", "#2D3942"))
+        top_row.addWidget(self.roughcut_video_title_lbl, stretch=1)
+        top_row.addWidget(self.roughcut_video_state_lbl, stretch=0)
+        lay.addLayout(top_row)
+
+        self.video_host = QFrame()
+        self.video_host.setObjectName("roughcutVideoHost")
+        self.video_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_host.setMinimumHeight(150)
+        self.video_host.setStyleSheet(
+            "QFrame#roughcutVideoHost { background: #000000; border: 1px solid #1D2730; border-radius: 6px; }"
+        )
+        self.video_host_layout = QVBoxLayout(self.video_host)
+        self.video_host_layout.setContentsMargins(0, 0, 0, 0)
+        self.video_host_layout.setSpacing(0)
+        self.video_host_placeholder = QLabel("비디오 대기")
+        self.video_host_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_host_placeholder.setStyleSheet(label_style("muted", 10))
+        self.video_host_layout.addWidget(self.video_host_placeholder)
+        lay.addWidget(self.video_host, stretch=1)
+
+        self.roughcut_subtitle_preview_lbl = QLabel("자막 대기")
+        self.roughcut_subtitle_preview_lbl.setObjectName("roughcutSubtitlePreview")
+        self.roughcut_subtitle_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.roughcut_subtitle_preview_lbl.setWordWrap(True)
+        self.roughcut_subtitle_preview_lbl.setMinimumHeight(44)
+        lay.addWidget(self.roughcut_subtitle_preview_lbl)
+
+        self.roughcut_player_seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.roughcut_player_seek_slider.setRange(0, 1000)
+        self.roughcut_player_seek_slider.setValue(0)
+        self.roughcut_player_seek_slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 4px; background: #243038; border-radius: 2px; }"
+            "QSlider::handle:horizontal { width: 12px; margin: -5px 0; border-radius: 6px; background: #00C8FF; }"
+            "QSlider::sub-page:horizontal { background: #007AFF; border-radius: 2px; }"
+        )
+        self.roughcut_player_seek_slider.sliderMoved.connect(self._on_roughcut_video_slider_moved)
+        lay.addWidget(self.roughcut_player_seek_slider)
+
+        control_row = QHBoxLayout()
+        control_row.setContentsMargins(0, 0, 0, 0)
+        control_row.setSpacing(6)
+        self.btn_roughcut_video_prev = self._panel_button("이전", "prev")
+        self.btn_roughcut_video_prev.clicked.connect(lambda: self._move_preview_row(-1, autoplay=True))
+        self.btn_roughcut_video_play = self._panel_button("재생", "play", kind="primary")
+        self.btn_roughcut_video_play.clicked.connect(self._start_roughcut_video_playback)
+        self.btn_roughcut_video_stop = self._panel_button("정지", "stop")
+        self.btn_roughcut_video_stop.clicked.connect(self._stop_preview)
+        self.btn_roughcut_video_next = self._panel_button("다음", "next")
+        self.btn_roughcut_video_next.clicked.connect(lambda: self._move_preview_row(1, autoplay=True))
+        for button in (
+            self.btn_roughcut_video_prev,
+            self.btn_roughcut_video_play,
+            self.btn_roughcut_video_stop,
+            self.btn_roughcut_video_next,
+        ):
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            control_row.addWidget(button)
+        lay.addLayout(control_row)
+
+        info_row = QHBoxLayout()
+        info_row.setContentsMargins(0, 0, 0, 0)
+        info_row.setSpacing(6)
+        self.roughcut_video_time_lbl = QLabel("00:00.000 / 00:00.000")
+        self.roughcut_video_time_lbl.setStyleSheet(label_style("muted", 9, bold=True))
+        self.roughcut_video_style_lbl = QLabel("Noto Sans KR · 42")
+        self.roughcut_video_style_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.roughcut_video_style_lbl.setStyleSheet(label_style("muted", 9, bold=True))
+        info_row.addWidget(self.roughcut_video_time_lbl, stretch=1)
+        info_row.addWidget(self.roughcut_video_style_lbl, stretch=1)
+        lay.addLayout(info_row)
+        self._apply_roughcut_video_subtitle_style()
 
     def _build_hidden_legacy_host(self, parent: QWidget) -> QWidget:
         host = QWidget(parent)
@@ -632,6 +722,12 @@ class RoughcutWidget(
         frame = detacher()
         if frame is None:
             return False
+        self._attached_video_frame_minimum_size = frame.minimumSize()
+        try:
+            frame.setMinimumHeight(120)
+            frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        except Exception:
+            pass
         self.video_host_layout.removeWidget(self.video_host_placeholder)
         self.video_host_placeholder.hide()
         self.video_host_layout.addWidget(frame)
@@ -645,6 +741,8 @@ class RoughcutWidget(
         restore_video = getattr(getattr(editor, "video_player", None), "restore_after_navigation", None)
         if callable(restore_video):
             restore_video()
+        self._apply_roughcut_video_subtitle_style()
+        self._refresh_roughcut_video_box()
         return True
 
     def release_editor_video_frame(self) -> None:
@@ -664,11 +762,206 @@ class RoughcutWidget(
                 frame.setParent(None)
             except Exception:
                 pass
+        original_minimum = getattr(self, "_attached_video_frame_minimum_size", None)
+        if original_minimum is not None:
+            try:
+                frame.setMinimumSize(original_minimum)
+            except Exception:
+                pass
         if self.video_host_layout.indexOf(self.video_host_placeholder) < 0:
             self.video_host_layout.addWidget(self.video_host_placeholder)
         self.video_host_placeholder.show()
         self._attached_video_editor = None
         self._attached_video_frame = None
+        self._attached_video_frame_minimum_size = None
+        self._refresh_roughcut_video_box()
+
+    def _start_roughcut_video_playback(self):
+        visible_rows = self._visible_preview_rows()
+        if not visible_rows:
+            self._set_roughcut_video_state("대기", "#A9B0B7", "#2D3942")
+            return False
+        row = self._preview_row if self._preview_row in visible_rows else self.table.currentRow()
+        if row not in visible_rows:
+            row = visible_rows[0]
+        self.table.selectRow(row)
+        self._preview_row_data(row)
+        self._play_preview(row, muted=False)
+        return True
+
+    def _set_roughcut_video_state(self, text: str, color: str = "#A9B0B7", border: str = "#2D3942") -> None:
+        label = getattr(self, "roughcut_video_state_lbl", None)
+        if label is None:
+            return
+        label.setText(str(text or "대기"))
+        label.setStyleSheet(self._toolbar_badge_style(color, border))
+
+    def _roughcut_preview_bounds_for_row(self, row: int) -> tuple[float, float]:
+        chapter = self._chapter_for_row(row)
+        if chapter is None:
+            return 0.0, 0.0
+        start = float(chapter.start)
+        end = float(chapter.end)
+        edl_segment = self._edl_for_row(row)
+        if edl_segment is not None:
+            start = float(edl_segment.timeline_start if edl_segment.timeline_start is not None else edl_segment.source_start)
+            end = float(edl_segment.timeline_end if edl_segment.timeline_end is not None else edl_segment.source_end)
+        return start, max(start, end)
+
+    def _roughcut_subtitle_text_for_row(self, row: int) -> str:
+        start, end = self._roughcut_preview_bounds_for_row(row)
+        if end <= start:
+            return ""
+        texts: list[str] = []
+        for segment in self._editor_segments():
+            try:
+                seg_start = float(segment.get("start", 0.0) or 0.0)
+                seg_end = float(segment.get("end", 0.0) or 0.0)
+            except Exception:
+                continue
+            if seg_end <= start or seg_start >= end:
+                continue
+            text = str(segment.get("text", "") or "").strip()
+            if text:
+                texts.append(text)
+        if texts:
+            return "\n".join(texts[:3])
+        chapter = self._chapter_for_row(row)
+        return str(getattr(chapter, "summary", "") or getattr(chapter, "title", "") or "")
+
+    def _apply_roughcut_video_subtitle_style(self) -> None:
+        if not bool(getattr(self, "_roughcut_export_style_overridden", False)):
+            adopted = self._current_editor_video_subtitle_style()
+            if adopted:
+                style = dict(DEFAULT_ROUGHCUT_EXPORT_STYLE)
+                style.update(adopted)
+                self._roughcut_export_style = style
+        style = dict(DEFAULT_ROUGHCUT_EXPORT_STYLE)
+        style.update(getattr(self, "_roughcut_export_style", {}) or {})
+        prefer_editor_style = not bool(getattr(self, "_roughcut_export_style_overridden", False)) and (
+            "font" in style or "size" in style
+        )
+        font_family = str(
+            (style.get("font") if prefer_editor_style else style.get("font_family"))
+            or style.get("font_family")
+            or style.get("font")
+            or "Noto Sans KR"
+        )
+        raw_font_size = int(
+            (style.get("size") if prefer_editor_style else style.get("font_size"))
+            or style.get("font_size")
+            or style.get("size")
+            or 42
+        )
+        font_size = max(12, min(30, raw_font_size // 2))
+        preview = getattr(self, "roughcut_subtitle_preview_lbl", None)
+        if preview is not None:
+            preview.setStyleSheet(
+                "QLabel#roughcutSubtitlePreview { "
+                "background: rgba(0, 0, 0, 190); color: #FFFFFF; "
+                "border: 1px solid #2D3942; border-radius: 6px; padding: 6px 8px; "
+                f"font-family: '{font_family}'; font-size: {font_size}px; font-weight: 800; "
+                "}"
+            )
+        style_label = getattr(self, "roughcut_video_style_lbl", None)
+        if style_label is not None:
+            position = (
+                (style.get("align") if prefer_editor_style else style.get("position"))
+                or style.get("position")
+                or style.get("align")
+                or "bottom_center"
+            )
+            style_label.setText(f"{font_family} · {raw_font_size} · {position}")
+        player = self._video_player()
+        apply_style = getattr(player, "apply_export_subtitle_style", None)
+        if callable(apply_style):
+            try:
+                apply_style(style)
+            except Exception:
+                pass
+
+    def _current_editor_video_subtitle_style(self) -> dict:
+        player = self._video_player()
+        if player is None:
+            return {}
+        for owner in (
+            getattr(player, "sub_label", None),
+            getattr(player, "quick_subtitle_overlay", None),
+            getattr(getattr(getattr(player, "video_widget", None), "subtitle_item", None), "_style", None),
+        ):
+            if isinstance(owner, dict):
+                style = dict(owner)
+            else:
+                style = dict(getattr(owner, "_export_style", {}) or {})
+                if not style:
+                    style = dict(getattr(owner, "_style", {}) or {})
+            if style:
+                return style
+        return {}
+
+    def _refresh_roughcut_video_box(self) -> None:
+        row = int(getattr(self, "_preview_row", -1) or -1)
+        if row < 0:
+            subtitle = "자막 대기"
+            start, end = 0.0, 0.0
+        else:
+            subtitle = self._roughcut_subtitle_text_for_row(row) or "자막 없음"
+            start, end = self._roughcut_preview_bounds_for_row(row)
+        preview = getattr(self, "roughcut_subtitle_preview_lbl", None)
+        if preview is not None:
+            preview.setText(subtitle)
+        self._update_roughcut_video_playbar(start, start=start, end=end)
+        if getattr(self, "_attached_video_frame", None) is None:
+            self._set_roughcut_video_state("대기", "#A9B0B7", "#2D3942")
+
+    def _update_roughcut_video_for_row(self, row: int, *, playing: bool = False, current_sec: float | None = None) -> None:
+        if row >= 0:
+            self._preview_row = row
+        subtitle = self._roughcut_subtitle_text_for_row(row) or "자막 없음"
+        preview = getattr(self, "roughcut_subtitle_preview_lbl", None)
+        if preview is not None:
+            preview.setText(subtitle)
+        start, end = self._roughcut_preview_bounds_for_row(row)
+        self._update_roughcut_video_playbar(start if current_sec is None else current_sec, start=start, end=end)
+        self._apply_roughcut_video_subtitle_style()
+        self._set_roughcut_video_state("재생 중" if playing else "준비", "#9AF0B0" if playing else "#D7EBFF", "#2B5A3A" if playing else "#24527A")
+
+    def _update_roughcut_video_playbar(self, current_sec: float, *, start: float | None = None, end: float | None = None) -> None:
+        row = int(getattr(self, "_preview_row", -1) or -1)
+        if start is None or end is None:
+            start, end = self._roughcut_preview_bounds_for_row(row)
+        duration = max(0.0, float(end or 0.0) - float(start or 0.0))
+        current = max(float(start or 0.0), min(float(end or 0.0), float(current_sec or 0.0)))
+        value = 0 if duration <= 0 else int(round(((current - float(start or 0.0)) / duration) * 1000.0))
+        slider = getattr(self, "roughcut_player_seek_slider", None)
+        if slider is not None:
+            self._roughcut_updating_player_slider = True
+            slider.setValue(max(0, min(1000, value)))
+            self._roughcut_updating_player_slider = False
+        time_label = getattr(self, "roughcut_video_time_lbl", None)
+        if time_label is not None:
+            time_label.setText(f"{fmt_time(max(0.0, current - float(start or 0.0)))} / {fmt_time(duration)}")
+
+    def _on_roughcut_video_slider_moved(self, value: int) -> None:
+        if bool(getattr(self, "_roughcut_updating_player_slider", False)):
+            return
+        row = int(getattr(self, "_preview_row", -1) or -1)
+        start, end = self._roughcut_preview_bounds_for_row(row)
+        if end <= start:
+            return
+        target = start + ((float(value) / 1000.0) * (end - start))
+        player = self._video_player()
+        if player is not None:
+            if hasattr(player, "seek_direct"):
+                player.seek_direct(target)
+            elif hasattr(player, "seek"):
+                player.seek(target)
+            elif hasattr(player, "media_player"):
+                try:
+                    player.media_player.setPosition(int(target * 1000.0))
+                except Exception:
+                    pass
+        self._update_roughcut_video_playbar(target, start=start, end=end)
 
     def _set_roughcut_status(self, text: str, progress: int | None = None) -> None:
         if hasattr(self, "render_status_lbl"):
@@ -812,6 +1105,10 @@ class RoughcutWidget(
             "chapter_order_state": list(getattr(self, "_chapter_order", []) or []),
             "video_host_attached": bool(getattr(self, "_attached_video_frame", None) is not None),
             "video_placeholder_visible": bool(getattr(self, "video_host_placeholder", None).isVisible() if hasattr(self, "video_host_placeholder") else False),
+            "video_box_visible": bool(getattr(self, "video_box", None).isVisible() if hasattr(self, "video_box") else False),
+            "video_box_status": str(getattr(getattr(self, "roughcut_video_state_lbl", None), "text", lambda: "")() or ""),
+            "video_box_subtitle_text": str(getattr(getattr(self, "roughcut_subtitle_preview_lbl", None), "text", lambda: "")() or ""),
+            "video_box_style": dict(getattr(self, "_roughcut_export_style", {}) or {}),
             "player_menu_visible": bool(getattr(self, "player_menu_frame", None).isVisible() if hasattr(self, "player_menu_frame") else False),
         }
 
@@ -944,6 +1241,8 @@ class RoughcutWidget(
     def _save_roughcut_export_style(self, payload: dict) -> None:
         self._roughcut_export_style = dict(DEFAULT_ROUGHCUT_EXPORT_STYLE)
         self._roughcut_export_style.update(payload or {})
+        self._roughcut_export_style_overridden = True
+        self._apply_roughcut_video_subtitle_style()
         self._append_roughcut_log("러프컷 export style을 프로젝트 상태에 저장했습니다.", "done")
         self._persist_roughcut_state()
 

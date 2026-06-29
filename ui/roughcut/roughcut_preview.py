@@ -61,6 +61,9 @@ class RoughcutPreviewMixin:
             player.media_player.setPosition(int(local_start * 1000.0))
         player.media_player.play()
         self._preview_timer.start()
+        update_video_box = getattr(self, "_update_roughcut_video_for_row", None)
+        if callable(update_video_box):
+            update_video_box(row, playing=True, current_sec=local_start)
 
     def _start_ordered_preview_sequence(self):
         visible_rows = self._visible_preview_rows()
@@ -101,6 +104,9 @@ class RoughcutPreviewMixin:
         current = float(getattr(player, "current_time", 0.0) or 0.0)
         if hasattr(player.media_player, "position"):
             current = max(current, player.media_player.position() / 1000.0)
+        update_playbar = getattr(self, "_update_roughcut_video_playbar", None)
+        if callable(update_playbar):
+            update_playbar(current)
         if self._preview_is_hover and self._preview_deadline_ms > 0 and current >= self._preview_end:
             self._play_preview(self._preview_row, muted=True, hover=True)
             return
@@ -139,3 +145,6 @@ class RoughcutPreviewMixin:
         if player is not None and hasattr(player, "media_player"):
             player.media_player.pause()
         self._restore_player_volume()
+        set_state = getattr(self, "_set_roughcut_video_state", None)
+        if callable(set_state):
+            set_state("정지", "#A9B0B7", "#2D3942")

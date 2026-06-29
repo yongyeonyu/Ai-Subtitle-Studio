@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -10,6 +11,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QListView, QWidget
 
 from core.project.nle_snapshot import build_concat_render_plan_from_snapshot
@@ -58,6 +61,11 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertTrue(hasattr(widget, "export_menu_btn"))
             self.assertIn("border: none", widget.roughcut_frame.styleSheet())
             self.assertIn("border: none", widget.roughcut_side_frame.styleSheet())
+            self.assertIn("#2D3942", widget.video_box.styleSheet())
+            self.assertNotIn("#FFD60A", widget.video_box.styleSheet())
+            self.assertTrue(widget.video_host.isVisible())
+            self.assertTrue(widget.roughcut_player_seek_slider.isVisible())
+            self.assertTrue(widget.btn_roughcut_video_play.isVisible())
 
             width_handle = widget.roughcut_frame_splitter.handle(1)
             height_handle = widget.right_frame_splitter.handle(1)
@@ -1345,6 +1353,204 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertIsNone(widget._attached_video_editor)
             self.assertIsNone(widget._attached_video_frame)
             self.assertGreaterEqual(widget.video_host_layout.indexOf(widget.video_host_placeholder), 0)
+        finally:
+            widget.close()
+
+    def test_video_box_shows_editor_subtitles_and_applies_style_to_attached_player(self):
+        widget = RoughcutWidget()
+        frame = QWidget()
+
+        class _FakeMediaPlayer:
+            def __init__(self):
+                self._position = 0
+                self.playing = False
+
+            def setPosition(self, value):
+                self._position = int(value)
+
+            def position(self):
+                return self._position
+
+            def play(self):
+                self.playing = True
+
+            def pause(self):
+                self.playing = False
+
+        class _FakeVideoPlayer:
+            def __init__(self):
+                self.media_player = _FakeMediaPlayer()
+                self.current_time = 0.0
+                self.applied_styles = []
+                self.seek_calls = []
+                self.sub_label = SimpleNamespace(_export_style={"font": "Editor Font", "size": 52, "align": "center"})
+
+            def restore_after_navigation(self):
+                return None
+
+            def apply_export_subtitle_style(self, style):
+                payload = dict(style or {})
+                self.sub_label._export_style = payload
+                self.applied_styles.append(payload)
+
+            def seek_direct(self, sec):
+                self.seek_calls.append(float(sec))
+                self.current_time = float(sec)
+                self.media_player.setPosition(int(float(sec) * 1000.0))
+
+        class _FakeEditor:
+            def __init__(self, owned_frame):
+                self._owned_frame = owned_frame
+                self.video_player = _FakeVideoPlayer()
+
+            def detach_video_frame_for_external_host(self):
+                return self._owned_frame
+
+            def restore_video_frame_from_external_host(self, restored_frame=None):
+                self._owned_frame = restored_frame or self._owned_frame
+
+        editor = _FakeEditor(frame)
+        widget.owner = SimpleNamespace(_active_editor=lambda: editor)
+        widget._editor_segments = lambda: [
+            {"start": 0.0, "end": 4.0, "text": "에디터 생성 자막", "speaker": "00"},
+        ]
+        try:
+            self.assertTrue(widget.attach_editor_video_frame(editor))
+            widget._result = RoughCutResult(
+                segments=(RoughCutSegment("major_A", 0.0, 4.0, title="첫 장면", major_id="A"),),
+                chapters=(ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),),
+                edit_decisions=(EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),),
+                edl_segments=(EDLSegment("/tmp/source.mov", "chapter_0001", 0.0, 4.0, 0.0, 4.0, chapter_id="chapter_0001"),),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+            widget._populate_result()
+
+            self.assertIn("에디터 생성 자막", widget.roughcut_subtitle_preview_lbl.text())
+            self.assertEqual(editor.video_player.applied_styles[-1]["font"], "Editor Font")
+            self.assertEqual(editor.video_player.applied_styles[-1]["size"], 52)
+            self.assertIn("Editor Font", widget.roughcut_video_style_lbl.text())
+            self.assertIn("52", widget.roughcut_video_style_lbl.text())
+            widget._save_roughcut_export_style(
+                {
+                    "font_family": "Apple SD Gothic Neo",
+                    "font_size": 64,
+                    "position": "top_center",
+                }
+            )
+
+            self.assertEqual(editor.video_player.applied_styles[-1]["font_size"], 64)
+            self.assertEqual(editor.video_player.applied_styles[-1]["font_family"], "Apple SD Gothic Neo")
+            self.assertIn("Apple SD Gothic Neo", widget.roughcut_video_style_lbl.text())
+            self.assertIn("64", widget.roughcut_video_style_lbl.text())
+        finally:
+            widget.close()
+
+    def test_video_box_playback_has_low_command_delay_and_height_handle_resizes_while_playing(self):
+        widget = RoughcutWidget()
+        frame = QWidget()
+
+        class _FakeMediaPlayer:
+            def __init__(self):
+                self._position = 0
+                self.playing = False
+
+            def setPosition(self, value):
+                self._position = int(value)
+
+            def position(self):
+                return self._position
+
+            def play(self):
+                self.playing = True
+
+            def pause(self):
+                self.playing = False
+
+        class _FakeVideoPlayer:
+            def __init__(self):
+                self.media_player = _FakeMediaPlayer()
+                self.current_time = 0.0
+
+            def restore_after_navigation(self):
+                return None
+
+            def apply_export_subtitle_style(self, _style):
+                return None
+
+            def seek_direct(self, sec):
+                self.current_time = float(sec)
+                self.media_player.setPosition(int(float(sec) * 1000.0))
+
+        class _FakeEditor:
+            def __init__(self, owned_frame):
+                self._owned_frame = owned_frame
+                self.video_player = _FakeVideoPlayer()
+
+            def detach_video_frame_for_external_host(self):
+                return self._owned_frame
+
+            def restore_video_frame_from_external_host(self, restored_frame=None):
+                self._owned_frame = restored_frame or self._owned_frame
+
+        editor = _FakeEditor(frame)
+        widget.owner = SimpleNamespace(_active_editor=lambda: editor)
+        widget._editor_segments = lambda: [
+            {"start": 0.0, "end": 4.0, "text": "첫 자막", "speaker": "00"},
+            {"start": 4.0, "end": 8.0, "text": "둘째 자막", "speaker": "00"},
+        ]
+        try:
+            widget.resize(1280, 760)
+            widget.show()
+            self.app.processEvents()
+            self.assertTrue(widget.attach_editor_video_frame(editor))
+            widget._result = RoughCutResult(
+                segments=(RoughCutSegment("major_A", 0.0, 8.0, title="첫 장면", major_id="A"),),
+                chapters=(
+                    ChapterMetadata("chapter_0001", "첫 장면", 0.0, 4.0, major_id="A", minor_code="A1"),
+                    ChapterMetadata("chapter_0002", "둘째 장면", 4.0, 8.0, major_id="A", minor_code="A2"),
+                ),
+                edit_decisions=(
+                    EditDecision("chapter_0001", "keep", source_start=0.0, source_end=4.0),
+                    EditDecision("chapter_0002", "keep", source_start=4.0, source_end=8.0),
+                ),
+                edl_segments=(
+                    EDLSegment("/tmp/source.mov", "chapter_0001", 0.0, 4.0, 0.0, 4.0, chapter_id="chapter_0001"),
+                    EDLSegment("/tmp/source.mov", "chapter_0002", 4.0, 8.0, 4.0, 8.0, chapter_id="chapter_0002"),
+                ),
+                guide_markdown="# guide",
+                schema_version="roughcut_result.v2",
+            )
+            widget._populate_result()
+
+            started = time.perf_counter()
+            self.assertTrue(widget._start_roughcut_video_playback())
+            playback_delay_ms = (time.perf_counter() - started) * 1000.0
+            self.assertLess(playback_delay_ms, 35.0)
+            self.assertTrue(editor.video_player.media_player.playing)
+            self.assertEqual(widget.roughcut_video_state_lbl.text(), "재생 중")
+
+            events = []
+            splitter = widget.right_frame_splitter
+            handle = splitter.handle(1)
+            before = list(splitter.sizes())
+
+            def _on_moved(pos, index):
+                events.append((int(pos), int(index), list(splitter.sizes())))
+
+            splitter.splitterMoved.connect(_on_moved)
+            center = handle.rect().center()
+            QTest.mousePress(handle, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
+            QTest.qWait(5)
+            QTest.mouseMove(handle, center + QPoint(0, 80), delay=1)
+            self.app.processEvents()
+            during = list(splitter.sizes())
+            QTest.mouseRelease(handle, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center + QPoint(0, 80))
+            splitter.splitterMoved.disconnect(_on_moved)
+
+            self.assertTrue(events)
+            self.assertNotEqual(during, before)
+            self.assertTrue(editor.video_player.media_player.playing)
         finally:
             widget.close()
 

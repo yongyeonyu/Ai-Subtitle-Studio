@@ -311,10 +311,9 @@ Owner-approved region contract:
    - Cards expose shot assembly metadata such as A-roll, B-roll, insert, reaction, alternate take, cut purpose, and director-note presence.
    - Cards expose compatibility badges and relationship connectors for high-fit, weak-fit, conflict, callback, continuation, and user-overridden links.
    - Lets middle-segment cards be added to the shortform candidate basket without changing final subtitle/export authority.
-3. Yellow region: `비디오박스`
-   - Playback area.
-   - Plays video according to `시나리오박스` order and plays matching subtitles in the same order.
-   - Provides the basic video playbar and core playback controls.
+3. Video region: `비디오박스`
+   - Remaining G4 planning after the completed first player slice.
+   - Future scenario-composer order changes must keep the implemented player synchronized with `시나리오박스` order and matching subtitle timing.
    - Previews recommended intro, outro, and highlight candidate ranges before the user inserts them into the scenario.
    - Previews the collected shortform clip sequence and shows total duration before handoff.
 4. Red region: `설정박스`
@@ -1324,7 +1323,7 @@ Acceptance gates:
 - Four visible regions exist with the owner-defined roles: `시나리오박스`, `재료박스`, `비디오박스`, and `설정박스`.
 - Existing roughcut controls are removed from the visible box interiors, but existing functions, state wiring, app commands, save/reopen, and export helpers remain callable.
 - Material cards support drag/drop, time-axis movement planning, vertical growth, wrapped subtitle text, and in-card preview without text overflow.
-- Video playback follows the scenario order and shows matching subtitles.
+- Future scenario-composer order changes preserve the implemented `비디오박스` playback, matching subtitles, and playbar behavior.
 - Scenario suggestions and details are visible only through `설정박스`.
 - Final subtitle authority, STT1/STT2/VAD runtime tracks, final save/export authority, project subtitle schema, and render/export core remain unchanged.
 - Original SRT files and original media files are preserved; scenario exports are separate derived artifacts and cannot overwrite or replace originals.

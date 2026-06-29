@@ -176,6 +176,9 @@ class RoughcutTableMixin:
         refresh_frames = getattr(self, "_refresh_candidate_preview_frames", None)
         if callable(refresh_frames):
             refresh_frames()
+        refresh_video = getattr(self, "_refresh_roughcut_video_box", None)
+        if callable(refresh_video):
+            refresh_video()
 
     def _activate_editor(self):
         owner = self.owner
@@ -303,6 +306,9 @@ class RoughcutTableMixin:
         self._update_detail_panel(row, chapter, decision, edl_segment)
         if hasattr(self, "major_panel"):
             self.major_panel.set_selected_chapter(chapter.chapter_id)
+        update_video = getattr(self, "_update_roughcut_video_for_row", None)
+        if callable(update_video):
+            update_video(row, playing=False)
 
     def _source_label_for_edl(self, edl_segment) -> str:
         if edl_segment is None:
