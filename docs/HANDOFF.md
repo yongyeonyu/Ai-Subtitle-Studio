@@ -33,7 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.21 / G2 Top-Level NLE Gap Projection Coverage Audit
+## Current Handoff - 2026-06-29 v04.01.22 / G0 App Store Readiness Blocker Matrix Audit
+
+### Scope
+
+- Completed the G0 App Store readiness blocker matrix audit slice.
+- Bumped source-app version and project schema from `04.01.21` to `04.01.22`.
+- Extended `tools/audit_app_store_readiness.py`, `tools/generate_app_store_metadata_package.py`, and focused App Store readiness tests.
+- Generated audit and metadata package evidence that keeps App Store submission blocked unless exact signed-artifact, validation, and owner-metadata proof exists.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.22`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.22`.
+- Audit report: `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`.
+- Metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`.
+- Audit state: `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `17`.
+- Blocker groups: `version_lock=0`, `packaging_template=0`, `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=8`, `unknown=0`.
+- Submission gates ready: version lock, packaging template, signed app bundle presence, and App Store Connect auth.
+- Submission gates not ready: signed App Store `.pkg`, strict `codesign`, `pkgutil --check-signature`, signed-artifacts group, sandbox smoke, App Store Connect validation, Apple Distribution identity, installer identity, owner metadata, and final submission.
+- This is audit/package metadata evidence only. It is not package creation, Apple Distribution signing, App Store Connect validation, upload, submission, owner metadata completion, UI/UX change, subtitle-generation change, STT/cache default change, or NLE persistence/load behavior change.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- App Store audit/metadata/bundle guards: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_macos_bundle_runtime_paths.py` -> `17 passed`.
+- Audit generation: `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100` -> `status=blocked`, overall stoplight `red`, blocker count `17`.
+- Metadata package generation: `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100` -> `not_submission_proof=true`, pending owner-input metadata `8/8`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.22`, `PROJECT_SCHEMA_VERSION=04.01.22`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture boundary, QE false-positive guards, and editor-workflow wording constraints. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G0 remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, upload/submission proof, and owner-approved metadata values.
+- G2 full NLE disk-format cutover remains blocked until exact canonical load-owner scope, rollback/quarantine behavior, and legacy/direct-SRT/roughcut/render-export proof are complete.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G0, provide or install Apple Distribution and 3rd Party Mac Developer Installer identities plus owner metadata values, then rerun the readiness audit before any package/upload attempt.
+- If continuing G2, define rollback-boundary/load-owner proof before any canonical load-owner change.
+
+## Previous Handoff - 2026-06-29 v04.01.21 / G2 Top-Level NLE Gap Projection Coverage Audit
 
 ### Scope
 

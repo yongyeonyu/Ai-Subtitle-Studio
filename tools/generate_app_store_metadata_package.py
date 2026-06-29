@@ -130,6 +130,8 @@ FORBIDDEN_COPY_CLAIMS = (
 SUBMISSION_BLOCKER_EXPLANATIONS = {
     "signed_app_bundle_missing": "No Apple Distribution signed .app candidate is available.",
     "signed_app_store_pkg_missing": "No signed Mac App Store .pkg exists.",
+    "strict_codesign_verification_missing": "No strict codesign verification output exists for the exact .app.",
+    "pkg_signature_verification_missing": "No pkgutil signature verification output exists for the exact .pkg.",
     "sandbox_smoke_missing": "Sandboxed workflow smoke proof is missing.",
     "app_store_connect_validation_missing": "No App Store Connect validation output exists for the exact .pkg.",
     "apple_distribution_codesign_identity_not_configured": "CODESIGN_IDENTITY is not configured for Apple Distribution signing.",
@@ -225,10 +227,13 @@ def _public_readiness_snapshot(readiness: dict[str, Any]) -> dict[str, Any]:
     submission_content = readiness.get("submission_content_audit") or {}
     return {
         "schema": readiness.get("schema"),
+        "app_version": readiness.get("app_version"),
         "submission_target": readiness.get("submission_target"),
         "local_packaging_ready": bool(readiness.get("local_packaging_ready")),
         "app_store_submission_ready": bool(readiness.get("app_store_submission_ready")),
         "status": readiness.get("status"),
+        "stoplight": readiness.get("stoplight"),
+        "blocker_group_counts": readiness.get("blocker_group_counts"),
         "blockers": list(readiness.get("blockers") or []),
         "blocker_count": len(readiness.get("blockers") or []),
         "submission_content_audit": {

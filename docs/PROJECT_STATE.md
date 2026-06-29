@@ -44,21 +44,22 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.21` from `core/runtime/config.py`
-- Project schema version: `04.01.21` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.21.md`
+- App version: `04.01.22` from `core/runtime/config.py`
+- Project schema version: `04.01.22` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.22.md`
 - Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929`
 - Latest top-level NLE gap projection coverage audit: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.md`
 - Latest NLE canonical load-owner review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`
 - Latest STT cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`
-- Latest App Store readiness audit: `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`
-- Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
+- Latest App Store readiness audit: `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`
+- Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
 
-`v04.01.21` is a G2 top-level NLE gap projection coverage audit checkpoint.
-It proves explicit top-level `nle` shadow projection for captions plus legacy
-gap rows as non-caption metadata while the default project load path remains
-legacy `editor_state`. It is not project load-owner cutover, NLE disk-format
-cutover, UI/UX change, or App Store submission proof.
+`v04.01.22` is a G0 App Store readiness blocker matrix audit checkpoint. It
+tightens stoplight and blocker-group reporting so a candidate cannot be treated
+as signed/submission-ready from file presence alone; strict `codesign` and
+`pkgutil --check-signature` proof are required. It is not package creation,
+validation, upload, submission, UI/UX change, subtitle-generation change, or NLE
+disk-format cutover proof.
 
 ## Active Groups
 
@@ -84,8 +85,9 @@ High-value completed evidence families include Taption subtitle segment parity,
 final/preview isolation, voice-silence magnet parity, neighbor-collision guard,
 NLE runtime/session mutation adoption, save/reopen compatibility, render/export
 parity, trace-bundle retention, `v04.01.19` NLE canonical load-owner review proof,
-`v04.01.20` top-level NLE compatibility projection proof, and `v04.01.21`
-top-level NLE gap projection coverage proof.
+`v04.01.20` top-level NLE compatibility projection proof, `v04.01.21`
+top-level NLE gap projection coverage proof, and `v04.01.22` App Store blocker
+matrix proof.
 
 ## Must Not Break
 
@@ -104,11 +106,16 @@ Current target: Mac App Store signed `.pkg` from a sandboxed signed `.app`.
 
 Current blockers:
 
-- Signed `.app`, signed `.pkg`, strict codesign output, package signature output.
+- Signed `.pkg`, strict App Store-candidate codesign output, package signature output.
 - Sandboxed workflow smoke.
 - App Store Connect validation.
 - Apple Distribution and installer signing identity proof.
 - Owner metadata: privacy answers, export compliance, screenshots, support URL, review notes, age rating, release-note copy.
+
+Latest G0 state: `local_packaging_ready=true`, `app_store_submission_ready=false`,
+overall stoplight `red`, blocker count `17`. Version lock and packaging template
+are green; signed-artifact proof, sandbox smoke, App Store Connect validation,
+signing identities, and owner metadata are still red.
 
 Developer ID beta `.dmg` remains a separate opt-in distribution track and must
 not be counted as Mac App Store submission proof.

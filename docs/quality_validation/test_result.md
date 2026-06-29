@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.22 G0 App Store Readiness Blocker Matrix Audit - 2026-06-29 KST
+
+- 실행 모드: non-destructive G0 App Store readiness blocker matrix audit, metadata owner-input package refresh, false-positive guard tests, and version/schema bump.
+- 결과: pass for the bounded audit/package slice. App Store submission remains blocked because signed `.pkg`, strict App Store-candidate `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, Apple Distribution/installer identities, and owner metadata values are still missing.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.22.md`
+  - Audit report: `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`
+  - Audit JSON: `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.json`
+  - Metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040122-g0-app-store-readiness-blocker-matrix-audit`
+- 실제 결과:
+  - App version updated to `04.01.22`.
+  - Project schema version updated to `04.01.22`.
+  - `tools/audit_app_store_readiness.py` now reports app version, blocker group counts, stoplight state, and submission gate summary.
+  - Strict `codesign` and `pkgutil --check-signature` proof artifacts are required before signed artifacts can be treated as ready.
+  - `tools/generate_app_store_metadata_package.py` now carries the refreshed readiness snapshot, app version, stoplight, and blocker group counts into the owner-input package.
+  - Current readiness state: `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `17`.
+  - Blocker groups: `version_lock=0`, `packaging_template=0`, `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=8`, `unknown=0`.
+  - Submission gates ready: version lock, packaging template, signed app bundle presence, and App Store Connect auth.
+  - Submission gates not ready: signed App Store `.pkg`, strict `codesign`, `pkgutil --check-signature`, signed-artifacts group, sandbox smoke, App Store Connect validation, Apple Distribution identity, installer identity, owner metadata, and final submission.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_macos_bundle_runtime_paths.py` -> `17 passed`.
+  - `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100` -> `status=blocked`, overall stoplight `red`, blocker count `17`.
+  - `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100` -> `not_submission_proof=true`, pending owner-input metadata `8/8`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.22`, `PROJECT_SCHEMA_VERSION=04.01.22`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.21 G2 Top-Level NLE Gap Projection Coverage Audit - 2026-06-29 KST
 
 - 실행 모드: source-app G2 NLE top-level shadow gap projection coverage audit, compatibility false-positive guards, and version/schema bump.

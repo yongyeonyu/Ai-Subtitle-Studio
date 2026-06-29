@@ -1,7 +1,8 @@
 from pathlib import Path
 
+from core.runtime.config import APP_VERSION
 from tools import audit_app_store_readiness
-from tools.audit_app_store_readiness import build_readiness_report
+from tools.audit_app_store_readiness import NON_CODE_SUBMISSION_ITEMS, build_readiness_report
 
 
 def test_app_store_readiness_audit_blocks_without_submission_artifacts(tmp_path):
@@ -16,9 +17,13 @@ def test_app_store_readiness_audit_blocks_without_submission_artifacts(tmp_path)
 
     assert report["local_packaging_ready"] is True
     assert report["app_store_submission_ready"] is False
+    assert report["app_version"] == APP_VERSION
     assert "signed_app_bundle_missing" in report["blockers"]
     assert "signed_app_store_pkg_missing" in report["blockers"]
+    assert "strict_codesign_verification_missing" in report["blockers"]
+    assert "pkg_signature_verification_missing" in report["blockers"]
     assert "app_store_connect_validation_missing" in report["blockers"]
+    assert report["stoplight"]["overall"] == "red"
     assert report["entitlements"]["temporary_exceptions"] == []
 
 
@@ -106,3 +111,169 @@ def test_app_store_readiness_audit_records_keychain_identity_blockers(monkeypatc
     assert identities["installer_distribution_present"] is False
     assert "apple_distribution_identity_missing_from_keychain" in report["blockers"]
     assert "installer_identity_missing_from_keychain" in report["blockers"]
+
+
+def test_app_store_readiness_audit_groups_blockers_and_submission_gates(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    for name in ("CODESIGN_IDENTITY", "INSTALLER_IDENTITY", "ASC_API_KEY", "ASC_API_ISSUER", "ASC_USERNAME", "ASC_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": ["Apple Development: owner@example.com (TEAMID)"],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=tmp_path / "missing" / "AI Subtitle Studio.app",
+        pkg_path=tmp_path / "missing" / "AI Subtitle Studio.pkg",
+        output_dir=tmp_path / "audit",
+    )
+    groups = report["blocker_group_summary"]["groups"]
+    gates = report["submission_gate_summary"]
+
+    assert report["app_version"] == APP_VERSION
+    counts = report["blocker_group_counts"]
+
+    assert sum(counts.values()) == len(report["blockers"])
+    assert counts["packaging_template"] == 0
+    assert counts["signed_artifacts"] == 4
+    assert counts["sandbox_smoke"] == 1
+    assert counts["app_store_connect"] == 2
+    assert counts["signing_identities"] == 4
+    assert counts["owner_metadata"] == len(NON_CODE_SUBMISSION_ITEMS)
+    assert groups["packaging_template"]["status"] == "ready"
+    assert groups["signed_artifacts"]["count"] == 4
+    assert groups["sandbox_smoke"]["count"] == 1
+    assert groups["app_store_connect"]["count"] == 2
+    assert groups["signing_identities"]["count"] == 4
+    assert groups["owner_metadata"]["count"] == len(NON_CODE_SUBMISSION_ITEMS)
+    assert report["stoplight"]["overall"] == "red"
+    assert report["stoplight"]["groups"]["packaging_template"] == "green"
+    assert report["stoplight"]["groups"]["signed_artifacts"] == "red"
+    assert gates["version_lock_ready"] is True
+    assert gates["packaging_template_ready"] is True
+    assert gates["signed_artifacts_ready"] is False
+    assert gates["sandbox_smoke_ready"] is False
+    assert gates["app_store_connect_validation_ready"] is False
+    assert gates["apple_distribution_identity_ready"] is False
+    assert gates["installer_identity_ready"] is False
+    assert gates["app_store_connect_auth_ready"] is False
+    assert gates["owner_metadata_ready"] is False
+    assert gates["app_store_submission_ready"] is False
+
+
+def test_app_store_readiness_audit_metadata_remains_final_gate_when_technical_gates_are_green(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    app_path = tmp_path / "AI Subtitle Studio.app"
+    pkg_path = tmp_path / "AI Subtitle Studio.pkg"
+    output_dir = tmp_path / "green_technical_gates"
+    app_path.mkdir()
+    pkg_path.write_text("pkg", encoding="utf-8")
+    output_dir.mkdir()
+    (output_dir / "app_codesign_verify.txt").write_text("codesign ok", encoding="utf-8")
+    (output_dir / "pkgutil_check_signature.txt").write_text("pkg signature ok", encoding="utf-8")
+    (output_dir / "sandbox_smoke_result.json").write_text("{}", encoding="utf-8")
+    (output_dir / "app_store_connect_validation.xml").write_text("<ok/>", encoding="utf-8")
+    monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")
+    monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Example (TEAMID)")
+    monkeypatch.setenv("ASC_API_KEY", "KEY")
+    monkeypatch.setenv("ASC_API_ISSUER", "ISSUER")
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": [
+                "Apple Distribution: Example (TEAMID)",
+                "3rd Party Mac Developer Installer: Example (TEAMID)",
+            ],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=app_path,
+        pkg_path=pkg_path,
+        output_dir=output_dir,
+    )
+    groups = report["blocker_group_summary"]["groups"]
+    gates = report["submission_gate_summary"]
+
+    assert report["local_packaging_ready"] is True
+    assert report["app_store_submission_ready"] is False
+    assert groups["signed_artifacts"]["count"] == 0
+    assert groups["sandbox_smoke"]["count"] == 0
+    assert groups["app_store_connect"]["count"] == 0
+    assert groups["signing_identities"]["count"] == 0
+    assert groups["owner_metadata"]["count"] == len(NON_CODE_SUBMISSION_ITEMS)
+    assert gates["signed_artifacts_ready"] is True
+    assert gates["strict_codesign_verification_ready"] is True
+    assert gates["pkg_signature_verification_ready"] is True
+    assert gates["sandbox_smoke_ready"] is True
+    assert gates["app_store_connect_validation_ready"] is True
+    assert gates["apple_distribution_identity_ready"] is True
+    assert gates["installer_identity_ready"] is True
+    assert gates["app_store_connect_auth_ready"] is True
+    assert gates["owner_metadata_ready"] is False
+    assert gates["app_store_submission_ready"] is False
+
+
+def test_app_store_readiness_stays_blocked_when_artifacts_exist_but_signature_proof_is_missing(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    app_path = tmp_path / "AI Subtitle Studio.app"
+    pkg_path = tmp_path / "AI Subtitle Studio.pkg"
+    output_dir = tmp_path / "artifact_only"
+    app_path.mkdir()
+    pkg_path.write_text("pkg", encoding="utf-8")
+    output_dir.mkdir()
+    (output_dir / "sandbox_smoke_result.json").write_text("{}", encoding="utf-8")
+    (output_dir / "app_store_connect_validation.xml").write_text("<ok/>", encoding="utf-8")
+    monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")
+    monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Example (TEAMID)")
+    monkeypatch.setenv("ASC_API_KEY", "KEY")
+    monkeypatch.setenv("ASC_API_ISSUER", "ISSUER")
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": [
+                "Apple Distribution: Example (TEAMID)",
+                "3rd Party Mac Developer Installer: Example (TEAMID)",
+            ],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=app_path,
+        pkg_path=pkg_path,
+        output_dir=output_dir,
+    )
+
+    assert report["status"] == "blocked"
+    assert report["app_store_submission_ready"] is False
+    assert "signed_app_bundle_missing" not in report["blockers"]
+    assert "signed_app_store_pkg_missing" not in report["blockers"]
+    assert "strict_codesign_verification_missing" in report["blockers"]
+    assert "pkg_signature_verification_missing" in report["blockers"]
+    assert report["blocker_group_counts"]["signed_artifacts"] == 2
+    assert report["submission_gate_summary"]["signed_app_bundle_ready"] is True
+    assert report["submission_gate_summary"]["signed_app_store_pkg_ready"] is True
+    assert report["submission_gate_summary"]["strict_codesign_verification_ready"] is False
+    assert report["submission_gate_summary"]["pkg_signature_verification_ready"] is False
+    assert report["submission_gate_summary"]["signed_artifacts_ready"] is False
+    assert report["stoplight"]["overall"] == "red"

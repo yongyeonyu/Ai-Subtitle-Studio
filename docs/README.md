@@ -28,7 +28,7 @@ G0 lane, but signed package, validation, upload, and metadata proof remain open.
 
 ## Current Snapshot
 
-- App checkpoint: `04.01.21` / `v04.01.21`
+- App checkpoint: `04.01.22` / `v04.01.22`
 - Active queue: `planning_queue/ACTION_ITEMS.md`
 - Completed archive: `planning_queue/COMPLETED_ACTION_ITEMS.md`
 - Handoff: `HANDOFF.md`

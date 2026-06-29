@@ -75,6 +75,35 @@ AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/path/to/audi
 ./venv/bin/python -m pytest -q tests/test_roughcut_*.py
 ```
 
+## G0 App Store blocker matrix audit
+
+For Mac App Store readiness work, keep the audit non-destructive unless the
+owner explicitly requests a packaging/signing/upload step. Current approval
+exists for the G0 App Store packaging/signing/upload/metadata lane, but
+submission readiness still requires exact signed-artifact and metadata proof.
+
+```bash
+./venv/bin/python tools/audit_app_store_readiness.py \
+  --output-dir output/manual_verification/latest/app_store_readiness_blocker_matrix_YYYYMMDD_HHMM
+
+./venv/bin/python tools/generate_app_store_metadata_package.py \
+  --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_YYYYMMDD_HHMM
+```
+
+The expected blocked state until the missing proof exists is:
+`local_packaging_ready=true`, `app_store_submission_ready=false`, overall
+stoplight `red`, blocker count nonzero, and blocker groups red for signed
+artifacts, sandbox smoke, App Store Connect validation, signing identities, and
+owner metadata. A `.app` or `.pkg` path alone must not count as signed proof
+without strict `codesign` and `pkgutil --check-signature` artifacts.
+
+Focused guards:
+
+```bash
+./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_macos_bundle_runtime_paths.py
+```
+
 ## G1 STT cache default review packet
 
 For collect-cache default review work, generate a packet from accepted evidence

@@ -5,8 +5,8 @@ AI Subtitle Studio can be treated as a Mac App Store submission candidate.
 
 ## Current Status
 
-- Status: blocked. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28, but distribution identities, signed `.pkg`, App Store validation, and owner metadata values are still incomplete.
-- Source app version: `04.01.21`.
+- Status: blocked. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28 and reconfirmed on 2026-06-29, but distribution identities, signed `.pkg`, strict signature proof, App Store validation, and owner metadata values are still incomplete.
+- Source app version: `04.01.22`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
 - Minimum macOS: `14.0`.
@@ -93,8 +93,8 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 
 - Signed `.app`: local Apple Development smoke exists; Apple Distribution submission signing is still missing.
 - Signed `.pkg`: missing.
-- Strict codesign output: local Apple Development strict verify exists; Apple Distribution strict verify is still missing.
-- Package signature output: missing.
+- Strict App Store-candidate codesign output: missing.
+- Package signature output from `pkgutil --check-signature`: missing.
 - Sandboxed workflow smoke: missing.
 - App Store Connect validation artifact: missing.
 - Apple Distribution signing identity: not configured in local proof.
@@ -108,11 +108,13 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 
 ## Latest Owner-Input Package
 
-- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
 
 Latest package state: `status=blocked`, `not_submission_proof=true`,
 `owner_input_complete=false`, `app_store_submission_ready=false`, pending
-owner-input metadata `8/8`, and forbidden-claim scan `pass` with `0` matches.
+owner-input metadata `8/8`, forbidden-claim scan `pass` with `0` matches,
+app version `04.01.22`, and sanitized source readiness snapshot with overall
+stoplight `red`.
 This package is a collection/checklist artifact only; it does not replace signed
 package proof, sandbox smoke, App Store Connect validation, upload/submission,
 or owner-approved metadata values.
@@ -140,12 +142,20 @@ real-media STT quality, or roughcut proof.
 - `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
 - `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`
+- `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
 
 Latest known state: `status=blocked`, `local_packaging_ready=true`,
-`app_store_submission_ready=false`, blocker count `15`. The latest local
-identity check found only an Apple Development signing identity; Apple
-Distribution and 3rd Party Mac Developer Installer identities are still missing,
-and all `8` non-code submission metadata items remain `owner_input_required`.
+`app_store_submission_ready=false`, overall stoplight `red`, blocker count
+`17`. Version lock and packaging template gates are green; signed-artifact
+proof, sandbox smoke, App Store Connect validation, signing identities, and
+owner metadata remain red. Current blocker groups are `signed_artifacts=3`,
+`sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, and
+`owner_metadata=8`. App Store Connect auth is configured in the local
+environment, but validation output is still missing. The latest local identity
+check still lacks Apple Distribution and 3rd Party Mac Developer Installer
+identities, and all `8` non-code submission metadata items remain
+`owner_input_required`.
 
 ## Owner-Approved Command Sequence
 

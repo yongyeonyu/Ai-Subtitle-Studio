@@ -128,6 +128,17 @@ NON_DESTRUCTIVE_NEXT_STEPS = (
     "Run this audit again after metadata or packaging-template changes.",
 )
 
+BLOCKER_GROUP_ORDER = (
+    "version_lock",
+    "packaging_template",
+    "signed_artifacts",
+    "sandbox_smoke",
+    "app_store_connect",
+    "signing_identities",
+    "owner_metadata",
+    "unknown",
+)
+
 OWNER_APPROVAL_REQUIRED_ACTIONS = (
     "packaging/macos/build_app_bundle.sh",
     "packaging/macos/sign_app_bundle.sh",
@@ -337,11 +348,15 @@ def _check_local_signing_identities() -> dict[str, Any]:
 def _check_artifacts(app_path: Path, pkg_path: Path, output_dir: Path) -> dict[str, Any]:
     app_status = _path_status(app_path)
     pkg_status = _path_status(pkg_path)
+    strict_codesign = output_dir / "app_codesign_verify.txt"
+    pkg_signature = output_dir / "pkgutil_check_signature.txt"
     sandbox_smoke = output_dir / "sandbox_smoke_result.json"
     asc_validation = output_dir / "app_store_connect_validation.xml"
     return {
         "app_bundle": app_status,
         "app_store_pkg": pkg_status,
+        "strict_codesign_verification": _path_status(strict_codesign),
+        "pkg_signature_verification": _path_status(pkg_signature),
         "sandbox_smoke": _path_status(sandbox_smoke),
         "app_store_connect_validation": _path_status(asc_validation),
     }
@@ -373,6 +388,113 @@ def _submission_content_summary(items: dict[str, dict[str, Any]]) -> dict[str, A
         "pending_owner_input_count": len(pending),
         "draft_available_count": sum(1 for item in items.values() if item.get("draft_available")),
         "pending_items": pending,
+    }
+
+
+def _blocker_group(blocker: str) -> str:
+    if blocker.startswith(
+        (
+            "bundle_version_template_not_linked_to_config",
+        )
+    ):
+        return "version_lock"
+    if blocker.startswith(
+        (
+            "packaging_file_missing:",
+            "packaging_script_not_executable:",
+            "entitlement_mismatch:",
+            "entitlements_parse_failed",
+            "info_value_mismatch:",
+            "info_key_missing:",
+            "info_plist_template_parse_failed",
+        )
+    ):
+        return "packaging_template"
+    if blocker in {
+        "signed_app_bundle_missing",
+        "signed_app_store_pkg_missing",
+        "strict_codesign_verification_missing",
+        "pkg_signature_verification_missing",
+    }:
+        return "signed_artifacts"
+    if blocker == "sandbox_smoke_missing":
+        return "sandbox_smoke"
+    if blocker in {"app_store_connect_validation_missing", "app_store_connect_auth_not_configured"}:
+        return "app_store_connect"
+    if blocker in {
+        "apple_distribution_codesign_identity_not_configured",
+        "installer_identity_not_configured",
+        "apple_distribution_identity_missing_from_keychain",
+        "installer_identity_missing_from_keychain",
+    }:
+        return "signing_identities"
+    if blocker.startswith("non_code_submission_item_pending:"):
+        return "owner_metadata"
+    return "unknown"
+
+
+def _summarize_blocker_groups(blockers: list[str]) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {
+        name: {"status": "ready", "count": 0, "blockers": []}
+        for name in BLOCKER_GROUP_ORDER
+    }
+    for blocker in blockers:
+        group = _blocker_group(str(blocker))
+        entry = groups[group]
+        entry["status"] = "blocked"
+        entry["count"] += 1
+        entry["blockers"].append(str(blocker))
+    return {
+        "status": "blocked" if blockers else "ready",
+        "group_order": list(BLOCKER_GROUP_ORDER),
+        "groups": groups,
+        "counts": {name: int(groups[name]["count"]) for name in BLOCKER_GROUP_ORDER},
+    }
+
+
+def _stoplight_from_counts(counts: dict[str, int]) -> dict[str, str]:
+    groups = {name: ("red" if int(count or 0) else "green") for name, count in counts.items()}
+    return {
+        "overall": "red" if any(color == "red" for color in groups.values()) else "green",
+        "groups": groups,
+    }
+
+
+def _submission_gate_summary(
+    *,
+    app_version: str,
+    info: dict[str, Any],
+    local_packaging_ready: bool,
+    artifacts: dict[str, Any],
+    environment: dict[str, Any],
+    signing_identities: dict[str, Any],
+    submission_content: dict[str, Any],
+    app_store_submission_ready: bool,
+) -> dict[str, Any]:
+    app_bundle_ready = bool((artifacts.get("app_bundle") or {}).get("is_dir"))
+    pkg_ready = bool((artifacts.get("app_store_pkg") or {}).get("is_file"))
+    strict_codesign_ready = bool((artifacts.get("strict_codesign_verification") or {}).get("is_file"))
+    pkg_signature_ready = bool((artifacts.get("pkg_signature_verification") or {}).get("is_file"))
+    return {
+        "app_version": app_version,
+        "version_lock_ready": bool(app_version) and bool(info.get("version_placeholders_ok")),
+        "packaging_template_ready": bool(local_packaging_ready),
+        "signed_app_bundle_ready": app_bundle_ready,
+        "signed_app_store_pkg_ready": pkg_ready,
+        "strict_codesign_verification_ready": strict_codesign_ready,
+        "pkg_signature_verification_ready": pkg_signature_ready,
+        "signed_artifacts_ready": app_bundle_ready and pkg_ready and strict_codesign_ready and pkg_signature_ready,
+        "sandbox_smoke_ready": bool((artifacts.get("sandbox_smoke") or {}).get("is_file")),
+        "app_store_connect_validation_ready": bool(
+            (artifacts.get("app_store_connect_validation") or {}).get("is_file")
+        ),
+        "apple_distribution_identity_ready": bool(environment.get("codesign_identity_configured"))
+        and bool(signing_identities.get("apple_distribution_present")),
+        "installer_identity_ready": bool(environment.get("installer_identity_configured"))
+        and bool(signing_identities.get("installer_distribution_present")),
+        "app_store_connect_auth_ready": bool(environment.get("app_store_connect_auth_configured")),
+        "owner_metadata_ready": int(submission_content.get("pending_owner_input_count") or 0) == 0,
+        "app_store_submission_ready": bool(app_store_submission_ready),
     }
 
 
@@ -422,6 +544,7 @@ def build_readiness_report(
     environment = _check_environment()
     signing_identities = _check_local_signing_identities()
     artifacts = _check_artifacts(app_path, pkg_path, output_dir)
+    app_version = _read_app_version(root)
 
     blockers: list[str] = []
     blockers.extend(packaging["blockers"])
@@ -432,6 +555,10 @@ def build_readiness_report(
         blockers.append("signed_app_bundle_missing")
     if not artifacts["app_store_pkg"]["is_file"]:
         blockers.append("signed_app_store_pkg_missing")
+    if not artifacts["strict_codesign_verification"]["is_file"]:
+        blockers.append("strict_codesign_verification_missing")
+    if not artifacts["pkg_signature_verification"]["is_file"]:
+        blockers.append("pkg_signature_verification_missing")
     if not artifacts["sandbox_smoke"]["is_file"]:
         blockers.append("sandbox_smoke_missing")
     if not artifacts["app_store_connect_validation"]["is_file"]:
@@ -457,14 +584,32 @@ def build_readiness_report(
         or info["blockers"]
     )
     app_store_submission_ready = not blockers
+    blocker_groups = _summarize_blocker_groups(blockers)
+    blocker_group_counts = dict(blocker_groups["counts"])
+    stoplight = _stoplight_from_counts(blocker_group_counts)
+    submission_gates = _submission_gate_summary(
+        app_version=app_version,
+        info=info,
+        local_packaging_ready=local_packaging_ready,
+        artifacts=artifacts,
+        environment=environment,
+        signing_identities=signing_identities,
+        submission_content=submission_content,
+        app_store_submission_ready=app_store_submission_ready,
+    )
     return {
         "schema": "ai_subtitle_studio.app_store_readiness.v1",
         "root": str(root),
+        "app_version": app_version,
         "submission_target": SUBMISSION_TARGET,
         "local_packaging_ready": local_packaging_ready,
         "app_store_submission_ready": app_store_submission_ready,
         "status": "ready" if app_store_submission_ready else "blocked",
         "blockers": blockers,
+        "blocker_group_summary": blocker_groups,
+        "blocker_group_counts": blocker_group_counts,
+        "stoplight": stoplight,
+        "submission_gate_summary": submission_gates,
         "distribution_tracks": _distribution_tracks(
             app_store_submission_ready=app_store_submission_ready,
             pkg_path=pkg_path,
@@ -513,9 +658,11 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "# Mac App Store Readiness Audit",
         "",
         f"- Status: `{payload.get('status')}`",
+        f"- App version: `{payload.get('app_version')}`",
         f"- Submission target: `{payload.get('submission_target')}`",
         f"- Local packaging ready: `{bool(payload.get('local_packaging_ready'))}`",
         f"- App Store submission ready: `{bool(payload.get('app_store_submission_ready'))}`",
+        f"- Overall stoplight: `{((payload.get('stoplight') or {}).get('overall'))}`",
         f"- Blocker count: `{len(blockers)}`",
         "",
         "## Distribution Track Boundaries",
@@ -566,10 +713,33 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Submission Gate Summary",
+            "",
+        ]
+    )
+    for key, value in (payload.get("submission_gate_summary") or {}).items():
+        lines.append(f"- `{key}`: `{value}`")
+    lines.extend(
+        [
+            "",
+            "## Blocker Groups",
+            "",
+        ]
+    )
+    blocker_group_summary = payload.get("blocker_group_summary") or {}
+    groups = blocker_group_summary.get("groups") or {}
+    for name in blocker_group_summary.get("group_order") or []:
+        group = groups.get(name) or {}
+        lines.append(f"- `{name}`: status `{group.get('status')}`, count `{group.get('count')}`")
+    lines.extend(
+        [
+            "",
             "## Artifact Gate",
             "",
             f"- App bundle: `{(artifacts.get('app_bundle') or {}).get('path')}` / exists `{(artifacts.get('app_bundle') or {}).get('is_dir')}`",
             f"- App Store pkg: `{(artifacts.get('app_store_pkg') or {}).get('path')}` / exists `{(artifacts.get('app_store_pkg') or {}).get('is_file')}`",
+            f"- Strict codesign proof: `{(artifacts.get('strict_codesign_verification') or {}).get('path')}` / exists `{(artifacts.get('strict_codesign_verification') or {}).get('is_file')}`",
+            f"- Package signature proof: `{(artifacts.get('pkg_signature_verification') or {}).get('path')}` / exists `{(artifacts.get('pkg_signature_verification') or {}).get('is_file')}`",
             f"- Sandbox smoke: exists `{(artifacts.get('sandbox_smoke') or {}).get('is_file')}`",
             f"- App Store Connect validation: exists `{(artifacts.get('app_store_connect_validation') or {}).get('is_file')}`",
             "",
@@ -619,7 +789,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
             "",
             "These commands are intentionally not executed by this audit.",
             "",
-            "Owner approval is required before these actions:",
+            "Owner approval exists for the G0 App Store lane, but these actions are not executed by this audit and still require exact signing, package, validation, and metadata prerequisites:",
             "",
         ]
     )

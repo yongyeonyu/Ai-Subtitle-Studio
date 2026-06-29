@@ -5,7 +5,7 @@ metadata. Generated package artifacts live under `output/manual_verification/lat
 
 Latest generated package:
 
-- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
 
 Current gate:
 

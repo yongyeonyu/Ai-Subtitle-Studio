@@ -41,6 +41,8 @@ def test_metadata_package_stays_blocked_when_technical_gates_are_green(tmp_path,
     app_path.mkdir()
     pkg_path.write_text("pkg", encoding="utf-8")
     output_dir.mkdir()
+    (output_dir / "app_codesign_verify.txt").write_text("codesign ok", encoding="utf-8")
+    (output_dir / "pkgutil_check_signature.txt").write_text("pkg signature ok", encoding="utf-8")
     (output_dir / "sandbox_smoke_result.json").write_text("{}", encoding="utf-8")
     (output_dir / "app_store_connect_validation.xml").write_text("<ok/>", encoding="utf-8")
     monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")

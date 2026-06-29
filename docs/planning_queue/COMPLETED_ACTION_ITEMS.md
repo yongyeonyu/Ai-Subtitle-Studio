@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.21-source-app
+Document-Version: 04.01.22-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,23 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.22 G0 App Store Readiness Blocker Matrix Audit
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item. Owner approval for App Store packaging/signing/upload/metadata execution and persisted NLE/UI structure scope was reconfirmed before this slice.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.22"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.22`.
+3. `tools/audit_app_store_readiness.py` now reports `app_version`, ordered blocker groups, stoplight state, and a submission gate summary.
+4. The audit now requires strict proof artifacts for App Store-candidate `codesign` and `pkgutil --check-signature`; existing `.app`/`.pkg` paths alone do not count as signed submission proof.
+5. `tools/generate_app_store_metadata_package.py` now carries the refreshed readiness snapshot, app version, stoplight, and blocker group counts into the owner-input package while keeping raw keychain identity names out of the public snapshot.
+6. Audit evidence was written to `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`.
+7. Metadata owner-input package evidence was written to `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`.
+8. Current G0 state remains blocked: `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `17`, blocker groups `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, and `owner_metadata=8`.
+9. Version lock, packaging template, signed app bundle presence, and local App Store Connect auth are green; signed App Store `.pkg`, strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, Apple Distribution identity, installer identity, owner metadata, upload, and final submission remain not ready.
+10. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+11. Focused verification passed: compile check for touched App Store audit/metadata/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_macos_bundle_runtime_paths.py` -> `17 passed`; audit generation and metadata package generation passed; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.22` / `PROJECT_SCHEMA_VERSION=04.01.22`; `git diff --check -- .` -> pass.
+12. This slice does not build a new package, sign with Apple Distribution, run App Store Connect validation, upload, submit, complete owner metadata, change UI/UX, change subtitle generation, change STT/cache defaults, or change NLE persistence/load behavior.
 
 ## v04.01.21 G2 Top-Level NLE Gap Projection Coverage Audit
 
