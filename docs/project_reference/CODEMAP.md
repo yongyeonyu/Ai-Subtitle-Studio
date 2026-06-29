@@ -32,8 +32,8 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/check_maintenance_budget.py`: changed-file guard for file/function length and broad silent-exception regressions.
 - `tools/verify_full_media_pipeline.py`: full-media verification runner with top-level performance/quality summary metrics.
 - `tools/audit_app_store_readiness.py`: non-destructive Mac App Store readiness blocker audit with version lock, stoplight, blocker-group, strict codesign, and package-signature gates.
-- `tools/generate_app_store_metadata_package.py`: Mac App Store owner-input metadata package generator; writes checklist/matrix/guardrail artifacts without claiming submission proof.
-- `tools/check_app_store_owner_metadata_values.py`: Mac App Store owner metadata values preflight helper; validates explicit owner values JSON, approval evidence, URL ownership, signed-candidate screenshot binding, App Store Connect metadata, and forbidden-copy claims.
+- `tools/generate_app_store_metadata_package.py`: Mac App Store owner-input metadata package generator; writes checklist/matrix/guardrail artifacts plus a fill-in owner metadata values template without claiming submission proof.
+- `tools/check_app_store_owner_metadata_values.py`: Mac App Store owner metadata values preflight helper; validates explicit owner values JSON, approval evidence, URL ownership, signed-candidate screenshot binding, App Store Connect metadata, and forbidden-copy claims; can also write a template that remains blocked until owner values are filled.
 - `tools/check_app_store_upload_preflight.py`: Mac App Store upload preflight helper; requires exact readiness JSON, exact `.pkg` binding, no blockers, and all submission gates true before upload mode can run.
 - `tools/generate_stt_cache_default_review_packet.py`: G1 STT collect-cache owner-review packet generator; summarizes existing NAS cache write/hit evidence without enabling production cache defaults.
 - `tools/generate_nle_canonical_load_owner_review_packet.py`: G2 NLE canonical load-owner owner-review packet generator; summarizes NLE persistence cutover audit evidence without changing project load ownership.

@@ -33,7 +33,52 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / G0/G1/G2/G3 Blocker Recheck And Active-Queue Metadata Sync
+## Current Handoff - 2026-06-29 v04.01.31 / G0 Owner Metadata Values Template Support
+
+### Scope
+
+- Added a fill-in owner metadata values template path for the G0 App Store lane.
+- Updated the owner metadata validator to write the template without weakening validation.
+- Updated the metadata package generator to include `owner_metadata_values_template.json`.
+- Updated App Store readiness, validation, CODEMAP, active queue pointers, completed archive, validation result, and this handoff.
+- Production app behavior and UI were unchanged.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.31`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.31`.
+- Template artifact: `output/manual_verification/latest/app_store_owner_metadata_values_template_v040131_20260629_1625/owner_metadata_values_template.json`.
+- Metadata package artifact: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`.
+- Package output now includes `owner_metadata_values_template.json`.
+- Generated template schema: `ai_subtitle_studio.app_store_owner_metadata_values.v1`.
+- Generated template is explicitly `template_only_not_submission_proof=true`.
+- Empty generated template remains blocked: `exit_code=65`, `ready=False`, issue count `58`, owner-input ready `0/8`, App Store Connect metadata ready `0/8`.
+- G0 still requires Apple Distribution and 3rd Party Mac Developer Installer identities, signed `.pkg`, strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, upload/submission proof, and owner-approved metadata values.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/check_app_store_owner_metadata_values.py tools/generate_app_store_metadata_package.py tests/test_app_store_metadata_values_preflight.py tests/test_app_store_metadata_package.py` -> pass.
+- Focused G0 template/package guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_metadata_package.py` -> `13 passed`.
+- Expanded App Store focused guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `39 passed`.
+- Template generation: `./venv/bin/python tools/check_app_store_owner_metadata_values.py --write-template output/manual_verification/latest/app_store_owner_metadata_values_template_v040131_20260629_1625/owner_metadata_values_template.json` -> wrote schema `ai_subtitle_studio.app_store_owner_metadata_values.v1`.
+- Package generation: `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625` -> `file_count=16`, `has_template=True`.
+- Empty template validation: `./venv/bin/python tools/check_app_store_owner_metadata_values.py --values-json output/manual_verification/latest/app_store_owner_metadata_values_template_v040131_20260629_1625/owner_metadata_values_template.json` -> `exit_code=65`, `ready=False`, owner metadata not ready.
+
+### Remaining Risks
+
+- Do not treat the template as owner approval or App Store metadata completion.
+- Do not claim App Store readiness, upload/submission readiness, signed package readiness, sandbox smoke, App Store Connect validation, or owner metadata completion from this slice.
+- The template still must be filled with explicit owner values/evidence, URL ownership confirmation, screenshot candidate binding, and App Store Connect metadata before `owner_metadata_values_preflight.ready=true`.
+- G1 cache defaults remain off until the owner chooses exactly one cache and post-change same-fixture proof passes.
+- G2/G3 wider editor/NLE work still needs a fresh bounded owner-selected gate.
+
+### Next Recommended Action
+
+- For G0 metadata, preserve the generated template artifact, copy either `output/manual_verification/latest/app_store_owner_metadata_values_template_v040131_20260629_1625/owner_metadata_values_template.json` or the package-internal identical template to a new filled file such as `output/manual_verification/latest/app_store_owner_metadata_values_filled_YYYYMMDD_HHMM/owner_metadata_values.json`, fill owner-approved values/evidence there, then run `tools/check_app_store_owner_metadata_values.py --values-json <filled-json>`.
+- After metadata values pass, rerun `tools/audit_app_store_readiness.py` and `tools/generate_app_store_metadata_package.py` with `--owner-values-json <filled-json>`.
+- For G0 packaging/upload, configure Apple Distribution and 3rd Party Mac Developer Installer identities before signed package validation.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / G0/G1/G2/G3 Blocker Recheck And Active-Queue Metadata Sync
 
 ### Scope
 

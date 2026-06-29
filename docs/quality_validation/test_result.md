@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.31 G0 Owner Metadata Values Template Support - 2026-06-29 KST
+
+- 실행 모드: non-destructive App Store owner metadata values template support.
+- 결과: pass for template generation and guard behavior. The generated template is a fill-in aid only and does not clear owner metadata.
+- 저장 위치:
+  - Template artifact: `output/manual_verification/latest/app_store_owner_metadata_values_template_v040131_20260629_1625/owner_metadata_values_template.json`
+  - Metadata package with template: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040131-g0-owner-metadata-values-template-support`
+- 실제 결과:
+  - `tools/check_app_store_owner_metadata_values.py --write-template` writes schema `ai_subtitle_studio.app_store_owner_metadata_values.v1`.
+  - `tools/generate_app_store_metadata_package.py` now emits `owner_metadata_values_template.json`; generated package returned `file_count=16` and `has_template=True`.
+  - Empty generated template remains blocked: `exit_code=65`, `ready=False`, issue count `58`, owner-input ready `0/8`, App Store Connect metadata ready `0/8`.
+  - This preserves the rule that owner metadata requires explicit values, owner approval evidence, URL ownership, screenshot signed-candidate binding, App Store Connect metadata, and forbidden-copy scan pass.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/check_app_store_owner_metadata_values.py tools/generate_app_store_metadata_package.py tests/test_app_store_metadata_values_preflight.py tests/test_app_store_metadata_package.py` -> pass.
+  - `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_metadata_package.py` -> `13 passed`.
+  - `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `39 passed`.
+  - Template generation command -> wrote `owner_metadata_values_template.json`.
+  - Metadata package generation command -> `file_count=16`, `has_template=True`.
+  - Empty template validation -> `exit_code=65`, `ready=False`, owner metadata not ready.
+  - This recheck does not prove App Store readiness, signed package readiness, upload/submission, sandbox smoke, App Store Connect validation, or owner metadata completion.
+
 ## v04.01.31 G0/G1/G2/G3 Blocker Recheck And Active-Queue Metadata Sync - 2026-06-29 KST
 
 - 실행 모드: non-destructive active-group blocker recheck and documentation sync.

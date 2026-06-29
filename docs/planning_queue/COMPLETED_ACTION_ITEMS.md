@@ -19,6 +19,18 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.31 G0 Owner Metadata Values Template Support
+
+Source request: continue remaining action items, make concrete progress toward blocked App Store metadata work, keep completed work separate, and keep the worktree clean after each completed task.
+
+1. Added `build_owner_metadata_values_template(...)` to `tools/check_app_store_owner_metadata_values.py`.
+2. Added `--write-template` to `tools/check_app_store_owner_metadata_values.py`, producing a fill-in JSON template with schema `ai_subtitle_studio.app_store_owner_metadata_values.v1`, current app version, owner-input keys, App Store Connect metadata keys, approval/evidence fields, URL ownership fields, and screenshot candidate-binding fields.
+3. Kept `--values-json` validation strict: the generated empty template exits `65`, reports `ready=false`, owner-input ready `0/8`, App Store Connect metadata ready `0/8`, and does not clear owner metadata.
+4. Updated `tools/generate_app_store_metadata_package.py` so owner-input packages now include `owner_metadata_values_template.json` beside the existing checklist/matrix/guardrail artifacts.
+5. Generated evidence at `output/manual_verification/latest/app_store_owner_metadata_values_template_v040131_20260629_1625/owner_metadata_values_template.json` and `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`.
+6. Focused verification passed: compile check for the touched tools/tests, `tests/test_app_store_metadata_values_preflight.py tests/test_app_store_metadata_package.py` -> `13 passed`, expanded App Store focused guard -> `39 passed`, template generation succeeded, metadata package generation returned `file_count=16` and `has_template=True`, and validating the empty template returned `exit_code=65 ready=False issue_count=58 owner_ready=0/8 metadata_ready=0/8`.
+7. This slice does not claim owner metadata completion, App Store readiness, signed package readiness, upload/submission readiness, sandbox smoke, App Store Connect validation, or owner approval values.
+
 ## v04.01.31 G0/G1/G2/G3 Blocker Recheck And Active-Queue Metadata Sync
 
 Source request: continue remaining action items, verify Jammini/agents, keep completed work separate, and keep the worktree clean after each completed task.

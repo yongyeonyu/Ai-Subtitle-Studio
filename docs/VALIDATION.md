@@ -90,6 +90,9 @@ submission readiness still requires exact signed-artifact and metadata proof.
   --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_YYYYMMDD_HHMM
 
 ./venv/bin/python tools/check_app_store_owner_metadata_values.py \
+  --write-template output/manual_verification/latest/app_store_owner_metadata_values_template_YYYYMMDD_HHMM/owner_metadata_values_template.json
+
+./venv/bin/python tools/check_app_store_owner_metadata_values.py \
   --values-json path/to/owner_metadata_values.json
 ```
 
@@ -101,7 +104,9 @@ owner metadata. A `.app` or `.pkg` path alone must not count as signed proof
 without strict `codesign` and `pkgutil --check-signature` artifacts. Owner
 metadata must not become ready from approval text or generated drafts alone; it
 requires explicit owner values JSON and `tools/check_app_store_owner_metadata_values.py`
-passing.
+passing. The generated template JSON is only a fill-in aid and must still fail
+the preflight until owner-approved values, evidence, URL ownership, screenshot
+candidate binding, and App Store Connect metadata are supplied.
 
 Focused guards:
 

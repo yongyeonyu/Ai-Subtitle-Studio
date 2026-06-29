@@ -110,7 +110,8 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 
 ## Latest Owner-Input Package
 
-- `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
+- Template values JSON: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/owner_metadata_values_template.json`
 
 Latest package state: `status=blocked`, `not_submission_proof=true`,
 `owner_input_complete=false`, `app_store_submission_ready=false`, pending
@@ -120,7 +121,12 @@ version `04.01.31` from the current blocker recheck, upload confirmation guard p
 readiness snapshot with overall stoplight `red`.
 This package is a collection/checklist artifact only; it does not replace signed
 package proof, sandbox smoke, App Store Connect validation, upload/submission,
-or owner-approved metadata values JSON.
+or owner-approved metadata values JSON. The included `owner_metadata_values_template.json`
+is a fill-in template and remains `ready=false` until all owner-approved values
+and evidence are supplied.
+Preserve the template artifact as evidence; create a separate filled values file
+such as `output/manual_verification/latest/app_store_owner_metadata_values_filled_YYYYMMDD_HHMM/owner_metadata_values.json`
+before running the values preflight.
 
 ## Owner Metadata Values Preflight
 
@@ -161,6 +167,8 @@ real-media STT quality, or roughcut proof.
 - `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`
 - `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/owner_metadata_values_template.json`
 
 Latest known state: `status=blocked`, `local_packaging_ready=true`,
 `app_store_submission_ready=false`, overall stoplight `red`, blocker count

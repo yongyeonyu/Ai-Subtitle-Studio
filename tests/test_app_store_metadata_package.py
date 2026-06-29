@@ -108,6 +108,8 @@ def test_metadata_package_tracks_owner_inputs_without_submission_claim(tmp_path)
         "apple_distribution_present",
         "installer_distribution_present",
     }
+    assert package["owner_metadata_values_template"]["schema"] == OWNER_VALUES_SCHEMA
+    assert package["owner_metadata_values_template"]["template_only_not_submission_proof"] is True
     assert "identity_names" not in package["source_readiness_snapshot"]
     assert "raw" not in package["source_readiness_snapshot"]
 
@@ -199,6 +201,7 @@ def test_metadata_package_writes_expected_artifacts(tmp_path):
     assert "owner_input_matrix.json" in written_names
     assert "app_store_connect_metadata_fill.json" in written_names
     assert "owner_values_preflight.json" in written_names
+    assert "owner_metadata_values_template.json" in written_names
     assert "source_readiness_snapshot.json" in written_names
 
     payload = json.loads((output_dir / "app_store_metadata_owner_input_package.json").read_text(encoding="utf-8"))
@@ -209,6 +212,7 @@ def test_metadata_package_writes_expected_artifacts(tmp_path):
     assert payload["owner_input_complete"] is False
     assert scan["status"] == "pass"
     assert "not packaging, upload, validation, or submission proof" in summary
+    assert "owner_metadata_values_template.json" in summary
     assert "Upload confirmation required" in summary
     assert "App Store ready" not in summary
     assert "Apple-approved" not in summary
@@ -238,3 +242,18 @@ def test_metadata_package_cli_writes_summary(tmp_path):
     assert payload["output_dir"] == str(output_dir)
     assert (output_dir / "app_store_metadata_owner_input_package.md").is_file()
     assert (output_dir / "forbidden_claim_scan.json").is_file()
+    assert (output_dir / "owner_metadata_values_template.json").is_file()
+    template = json.loads((output_dir / "owner_metadata_values_template.json").read_text(encoding="utf-8"))
+    assert template["schema"] == OWNER_VALUES_SCHEMA
+    assert template["template_only_not_submission_proof"] is True
+    assert set(template["owner_inputs"]) == set(NON_CODE_SUBMISSION_ITEMS)
+    assert set(template["app_store_connect_metadata"]) == {
+        "app_name",
+        "app_subtitle",
+        "keywords",
+        "description",
+        "promotional_text",
+        "marketing_url",
+        "app_store_connect_record",
+        "pricing_and_availability",
+    }

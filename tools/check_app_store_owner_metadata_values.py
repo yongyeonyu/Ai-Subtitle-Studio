@@ -60,6 +60,97 @@ FORBIDDEN_COPY_CLAIMS = (
 )
 
 
+def _template_entry(*, note: str = "", owner_controlled: bool = False, screenshot_binding: bool = False) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "value": "",
+        "approved": False,
+        "evidence": "",
+        "owner_controlled": bool(owner_controlled),
+        "not_applicable": False,
+        "note": note,
+    }
+    if screenshot_binding:
+        entry["signed_candidate_artifact"] = ""
+        entry["submitted_binary_match"] = False
+    return entry
+
+
+def build_owner_metadata_values_template(
+    *,
+    app_version: str = APP_VERSION,
+    bundle_id: str = EXPECTED_BUNDLE_ID,
+) -> dict[str, Any]:
+    return {
+        "schema": OWNER_VALUES_SCHEMA,
+        "app_version": str(app_version),
+        "bundle_id": str(bundle_id),
+        "template_only_not_submission_proof": True,
+        "instructions": [
+            "Fill every value from owner-approved App Store Connect decisions.",
+            "Keep approved=false until explicit owner approval evidence exists.",
+            "Set owner_controlled=true only for public URLs controlled by the owner.",
+            "Bind screenshots to the exact signed/sandboxed candidate before marking submitted_binary_match=true.",
+            "Run tools/check_app_store_owner_metadata_values.py --values-json <path> after editing.",
+        ],
+        "owner_inputs": {
+            "privacy_policy_url": _template_entry(
+                note="Final public https privacy policy URL.",
+                owner_controlled=False,
+            ),
+            "privacy_data_type_answers": _template_entry(
+                note="Owner-approved App Privacy answers for files, audio/STT, optional model/network paths, diagnostics, analytics, and crash collection."
+            ),
+            "export_compliance_answers": _template_entry(
+                note="Owner-approved Export Compliance answers for the shipped networking/encryption behavior."
+            ),
+            "mac_app_store_screenshots": _template_entry(
+                note="Owner-approved screenshot manifest captured from the exact signed/sandboxed App Store candidate.",
+                screenshot_binding=True,
+            ),
+            "support_url": _template_entry(
+                note="Final public https support URL.",
+                owner_controlled=False,
+            ),
+            "app_review_notes": _template_entry(
+                note="Owner-approved App Review notes matching the exact submitted build behavior."
+            ),
+            "age_rating_answers": _template_entry(
+                note="Owner-approved App Store age-rating questionnaire answers."
+            ),
+            "release_notes": _template_entry(
+                note="Owner-approved release notes for this submitted version."
+            ),
+        },
+        "app_store_connect_metadata": {
+            "app_name": _template_entry(
+                note=f"Must match {EXPECTED_APP_NAME!r} unless the app identity changes."
+            ),
+            "app_subtitle": _template_entry(
+                note="Final App Store subtitle; avoid unsupported speed/readiness claims."
+            ),
+            "keywords": _template_entry(
+                note="Owner-approved searchable keywords matching shipped behavior."
+            ),
+            "description": _template_entry(
+                note="Final product description; forbidden-copy scan must pass."
+            ),
+            "promotional_text": _template_entry(
+                note="Optional promotional text. If not used, set not_applicable=true and provide approval evidence."
+            ),
+            "marketing_url": _template_entry(
+                note="Optional public https marketing URL. If not used, set not_applicable=true and provide approval evidence.",
+                owner_controlled=False,
+            ),
+            "app_store_connect_record": _template_entry(
+                note=f"Include team/app record/SKU/primary locale and bundle ID {bundle_id}."
+            ),
+            "pricing_and_availability": _template_entry(
+                note="Owner-approved price tier, free/paid status, countries/regions, and release timing."
+            ),
+        },
+    }
+
+
 def _load_json(path: Path) -> tuple[dict[str, Any], str]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -270,10 +361,33 @@ def check_owner_metadata_values(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate owner-approved Mac App Store metadata values.")
-    parser.add_argument("--values-json", required=True)
+    parser.add_argument("--values-json", default="")
+    parser.add_argument("--write-template", default="")
     parser.add_argument("--app-version", default=APP_VERSION)
     parser.add_argument("--bundle-id", default=EXPECTED_BUNDLE_ID)
     args = parser.parse_args()
+
+    if args.write_template:
+        template_path = Path(args.write_template).expanduser()
+        template_path.parent.mkdir(parents=True, exist_ok=True)
+        template_path.write_text(
+            json.dumps(
+                build_owner_metadata_values_template(
+                    app_version=args.app_version,
+                    bundle_id=args.bundle_id,
+                ),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps({"template": str(template_path), "schema": OWNER_VALUES_SCHEMA}, ensure_ascii=False))
+        return 0
+
+    if not args.values_json:
+        parser.error("--values-json is required unless --write-template is used")
 
     result = check_owner_metadata_values(
         values_json=Path(args.values_json),

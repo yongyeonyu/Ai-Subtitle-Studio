@@ -61,7 +61,7 @@ The repository root intentionally keeps no active development docs other than
 - Latest G3 active-worker export final-surface regression guard: `tests/test_app_command_bridge.py::AppCommandBridgeTests::test_active_worker_export_subtitles_keeps_runtime_reference_rows_off_final_surface`
 - Latest STT cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/stt_cache_default_review_packet.md`
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
-- Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`
+- Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
 
 `v04.01.31` is a G2 final source-app project persistence load-owner opt-in proof
 checkpoint. It allows the approved payload to declare
@@ -107,8 +107,9 @@ preflight guard proof, `v04.01.27` top-level NLE canonical load opt-in proof,
 `v04.01.30` legacy disk-shape replacement opt-in proof, `v04.01.31`
 final cutover-ready opt-in proof, the `v04.01.31` G0 App Store
 current-version readiness refresh, the `v04.01.31` G1 STT cache review
-packet evidence-binding refresh, and the `v04.01.31` G0/G1/G2/G3 blocker
-recheck plus active-queue metadata sync.
+packet evidence-binding refresh, the `v04.01.31` G0/G1/G2/G3 blocker
+recheck plus active-queue metadata sync, and the `v04.01.31` G0 owner metadata
+values template support.
 
 ## Must Not Break
 
@@ -134,7 +135,7 @@ Current blockers:
 - Owner metadata: privacy answers, export compliance, screenshots, support URL, review notes, age rating, release-note copy.
 
 Latest G0 audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`.
-Latest G0 owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`.
+Latest G0 owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`.
 Latest G0 state: `local_packaging_ready=true`, `app_store_submission_ready=false`,
 overall stoplight `red`, blocker count `25`. Version lock and packaging template
 are green; signed-artifact proof, sandbox smoke, App Store Connect validation,

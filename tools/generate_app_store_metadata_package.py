@@ -22,6 +22,7 @@ from tools.audit_app_store_readiness import (
 )
 from tools.check_app_store_owner_metadata_values import (
     FORBIDDEN_COPY_CLAIMS,
+    build_owner_metadata_values_template,
 )
 
 
@@ -388,6 +389,7 @@ def build_metadata_package(
         "submission_blockers": blockers,
         "official_references": OFFICIAL_REFERENCES,
         "source_readiness_snapshot": _public_readiness_snapshot(readiness),
+        "owner_metadata_values_template": build_owner_metadata_values_template(app_version=app_version),
     }
     package["forbidden_claim_scan"] = _forbidden_claim_scan(package)
     return package
@@ -552,6 +554,7 @@ def _package_summary_md(package: dict[str, Any]) -> str:
             f"- App Store Connect metadata pending: `{readiness['pending_app_store_connect_metadata_count']}`",
             f"- Forbidden claim scan: `{scan['status']}` with `{scan['match_count']}` matches",
             f"- Owner values preflight: `{(package.get('owner_values_preflight') or {}).get('ready')}` with `{(package.get('owner_values_preflight') or {}).get('issue_count')}` issues",
+            "- Owner values template: `owner_metadata_values_template.json`",
             f"- Upload confirmation required: `{bool((readiness.get('upload_execution_guard') or {}).get('upload_confirmation_required'))}`",
             f"- Upload confirmation env: `{(readiness.get('upload_execution_guard') or {}).get('upload_confirmation_env_var')}`",
             "",
@@ -576,6 +579,7 @@ def write_metadata_package(package: dict[str, Any], output_dir: Path | None = No
         "owner_input_matrix.json": package["owner_input_matrix"],
         "app_store_connect_metadata_fill.json": package["app_store_connect_metadata_fill"],
         "owner_values_preflight.json": package["owner_values_preflight"],
+        "owner_metadata_values_template.json": package["owner_metadata_values_template"],
         "forbidden_claim_scan.json": package["forbidden_claim_scan"],
         "source_readiness_snapshot.json": package["source_readiness_snapshot"],
     }
