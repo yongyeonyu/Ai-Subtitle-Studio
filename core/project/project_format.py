@@ -12,12 +12,14 @@ from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
     NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
     NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+    approved_legacy_disk_shape_replacement_requested,
     approved_nle_snapshot_canonical_load_requested,
     approved_runtime_nle_project_state_payload,
     approved_runtime_nle_project_state_persistence_requested,
     approved_top_level_nle_canonical_load_requested,
     approved_nle_snapshot_persistence_requested,
     approved_top_level_nle_persistence_requested,
+    nle_legacy_disk_shape_replacement_approval_payload,
     nle_runtime_state_persistence_approval_payload,
     nle_snapshot_canonical_load_approval_payload,
     nle_top_level_canonical_load_approval_payload,
@@ -26,7 +28,7 @@ from core.project.nle_persistence_guard import (
     strip_unapproved_nle_persistence_fields,
 )
 
-PROJECT_SCHEMA_VERSION = "04.01.29"
+PROJECT_SCHEMA_VERSION = "04.01.30"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 
@@ -256,7 +258,12 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     persist_top_level_nle = approved_top_level_nle_persistence_requested(payload)
     canonical_nle_snapshot = approved_nle_snapshot_canonical_load_requested(payload)
     canonical_top_level_nle = approved_top_level_nle_canonical_load_requested(payload)
-    persist_runtime_nle_state = approved_runtime_nle_project_state_persistence_requested(payload)
+    replace_legacy_disk_shape = approved_legacy_disk_shape_replacement_requested(payload)
+    legacy_replacement_rows: list[dict[str, Any]] | None = None
+    persist_runtime_nle_state = (
+        approved_runtime_nle_project_state_persistence_requested(payload)
+        or replace_legacy_disk_shape
+    )
     runtime_state_payload: dict[str, Any] | None = None
     if persist_runtime_nle_state:
         from core.project.nle_project_state import (
@@ -343,6 +350,17 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
                     source="project_format.storage"
                 )
             payload["nle"] = nle_payload
+        if replace_legacy_disk_shape:
+            from core.project.nle_snapshot import editor_rows_from_top_level_nle_payload
+
+            replacement_rows = editor_rows_from_top_level_nle_payload(
+                payload.get("nle_snapshot") if isinstance(payload.get("nle_snapshot"), dict) else {},
+                canonical_source=NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+            )
+            if replacement_rows:
+                legacy_replacement_rows = replacement_rows
+            else:
+                replace_legacy_disk_shape = False
         policy_payload = nle_snapshot_persistence_approval_payload(
             source="project_format.storage"
         )
@@ -366,8 +384,17 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
             policy_payload["runtime_project_state_persistence_allowed"] = True
             policy_payload["runtime_project_state_schema"] = runtime_policy["runtime_project_state_schema"]
             policy_payload["default_project_authority_unchanged"] = True
-            policy_payload["legacy_disk_shape_replacement_allowed"] = False
+            policy_payload["legacy_disk_shape_replacement_allowed"] = bool(replace_legacy_disk_shape)
             policy_payload["final_cutover_ready"] = False
+        if replace_legacy_disk_shape:
+            replacement_policy = nle_legacy_disk_shape_replacement_approval_payload(source="project_format.storage")
+            policy_payload["legacy_editor_state_preserved_for_rollback"] = True
+            policy_payload["legacy_editor_state_rows_replaced"] = True
+            policy_payload["legacy_editor_state_projection_source"] = replacement_policy[
+                "legacy_editor_state_projection_source"
+            ]
+            policy_payload["legacy_disk_shape_replacement_schema"] = replacement_policy["schema"]
+            policy_payload["default_project_authority"] = "legacy_compatible_editor_state_projection"
         payload["nle_persistence"] = policy_payload
     if persist_runtime_nle_state and runtime_state_payload is not None:
         payload["_nle_project_state"] = runtime_state_payload
@@ -375,6 +402,12 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     if isinstance(editor_state, dict):
         editor_state = dict(editor_state)
         editor_state.pop("frame_timebase", None)
+        if replace_legacy_disk_shape and legacy_replacement_rows is not None:
+            editor_state = _replace_legacy_editor_state_subtitle_rows(
+                payload,
+                editor_state,
+                legacy_replacement_rows,
+            )
         payload["editor_state"] = editor_state
     ordered: dict[str, Any] = {}
     priority = [
@@ -415,6 +448,47 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         if key not in ordered:
             ordered[key] = value
     return ordered
+
+
+def _replace_legacy_editor_state_subtitle_rows(
+    project: dict[str, Any],
+    editor_state: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    from core.project.project_context import build_editor_state
+
+    original = editor_state if isinstance(editor_state, dict) else {}
+    multiclip = original.get("multiclip") if isinstance(original.get("multiclip"), dict) else {}
+    analysis = original.get("analysis") if isinstance(original.get("analysis"), dict) else {}
+    stt_state = original.get("stt") if isinstance(original.get("stt"), dict) else {}
+    rebuilt = build_editor_state(
+        mode=str(original.get("mode") or project.get("mode") or "single"),
+        media_files=[str(path) for path in list(original.get("media_files") or []) if path],
+        segments=[dict(row) for row in list(rows or []) if isinstance(row, dict)],
+        workspace=original.get("workspace") if isinstance(original.get("workspace"), dict) else {},
+        clip_boundaries=multiclip.get("boundaries") if isinstance(multiclip.get("boundaries"), list) else [],
+        stt_preview_segments=stt_state.get("preview_segments") if isinstance(stt_state.get("preview_segments"), list) else [],
+        cut_boundaries=analysis.get("cut_boundaries") if isinstance(analysis.get("cut_boundaries"), list) else [],
+        provisional_cut_boundaries=(
+            analysis.get("cut_boundary_provisional_boundaries")
+            if isinstance(analysis.get("cut_boundary_provisional_boundaries"), list)
+            else []
+        ),
+        primary_fps=project_primary_fps(project),
+        preserve_segment_identity=True,
+    )
+    rebuilt["legacy_disk_shape_replacement"] = {
+        "schema": "ai_subtitle_studio.legacy_editor_state_projection.v1",
+        "source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "row_count": len([row for row in list(rows or []) if isinstance(row, dict)]),
+        "final_cutover_ready": False,
+    }
+    rebuilt.setdefault("subtitles", {})["legacy_disk_shape_replaced"] = True
+    rebuilt.setdefault("subtitles", {})["projection_source"] = NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+    canvas = rebuilt.setdefault("rendering", {}).setdefault("subtitle_canvas", {})
+    canvas["legacy_disk_shape_replaced"] = True
+    canvas["projection_source"] = NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+    return rebuilt
 
 
 __all__ = [

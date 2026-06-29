@@ -8,6 +8,9 @@ NLE_PERSISTENCE_QUARANTINE_KEY = "_nle_persistence_quarantine"
 NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_snapshot_persistence_approval.v1"
 NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_top_level_persistence_approval.v1"
 NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_runtime_state_persistence_approval.v1"
+NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA = (
+    "ai_subtitle_studio.nle_legacy_disk_shape_replacement_approval.v1"
+)
 NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID = "owner_approved_20260628"
 NLE_LEGACY_CANONICAL_LOAD_OWNER = "legacy_editor_state"
 NLE_SNAPSHOT_CANONICAL_LOAD_OWNER = "nle_snapshot"
@@ -93,6 +96,29 @@ def approved_runtime_nle_project_state_persistence_requested(project: dict[str, 
     )
 
 
+def approved_legacy_disk_shape_replacement_requested(project: dict[str, Any] | None) -> bool:
+    if not approved_nle_snapshot_canonical_load_requested(project):
+        return False
+    policy = project.get("nle_persistence")
+    if not isinstance(policy, dict):
+        return False
+    return (
+        bool(policy.get("persist_runtime_project_state"))
+        and bool(policy.get("runtime_project_state_persistence_allowed"))
+        and bool(policy.get("legacy_disk_shape_replacement_allowed"))
+        and bool(policy.get("legacy_editor_state_rows_replaced"))
+        and bool(policy.get("legacy_editor_state_preserved_for_rollback"))
+        and bool(policy.get("default_project_authority_unchanged"))
+        and not bool(policy.get("final_cutover_ready"))
+        and not bool(policy.get("persist_top_level_nle"))
+        and str(policy.get("canonical_load_owner") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and str(policy.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
+        and str(policy.get("legacy_disk_shape_replacement_schema") or "")
+        == NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA
+        and str(policy.get("legacy_editor_state_projection_source") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+    )
+
+
 def approved_top_level_nle_canonical_load_requested(project: dict[str, Any] | None) -> bool:
     if not approved_top_level_nle_persistence_requested(project):
         return False
@@ -143,6 +169,21 @@ def nle_runtime_state_persistence_approval_payload(*, source: str = "") -> dict[
         "legacy_editor_state_preserved_for_rollback": True,
         "default_project_authority_unchanged": True,
         "legacy_disk_shape_replacement_allowed": False,
+        "final_cutover_ready": False,
+    }
+
+
+def nle_legacy_disk_shape_replacement_approval_payload(*, source: str = "") -> dict[str, Any]:
+    return {
+        "schema": NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        "source": str(source or "project_storage"),
+        "legacy_disk_shape_replacement_allowed": True,
+        "legacy_editor_state_rows_replaced": True,
+        "legacy_editor_state_projection_source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "legacy_editor_state_preserved_for_rollback": True,
+        "default_project_authority_unchanged": True,
+        "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
         "final_cutover_ready": False,
     }
 
@@ -305,7 +346,10 @@ def _is_unapproved_nle_payload(key: str, value: Any, *, project: dict[str, Any] 
         return False
     if (
         key == "_nle_project_state"
-        and approved_runtime_nle_project_state_persistence_requested(project)
+        and (
+            approved_runtime_nle_project_state_persistence_requested(project)
+            or approved_legacy_disk_shape_replacement_requested(project)
+        )
         and _is_approved_runtime_nle_project_state_payload(value)
     ):
         return False
@@ -380,6 +424,7 @@ __all__ = [
     "NLE_PERSISTENCE_GUARD_SCHEMA",
     "NLE_PERSISTENCE_QUARANTINE_KEY",
     "NLE_LEGACY_CANONICAL_LOAD_OWNER",
+    "NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA",
     "NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA",
     "NLE_SNAPSHOT_CANONICAL_LOAD_OWNER",
     "NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID",
@@ -387,6 +432,7 @@ __all__ = [
     "NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER",
     "NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA",
     "UNAPPROVED_NLE_PERSISTENCE_KEYS",
+    "approved_legacy_disk_shape_replacement_requested",
     "approved_runtime_nle_project_state_payload",
     "approved_runtime_nle_project_state_persistence_requested",
     "approved_nle_snapshot_persistence_requested",
@@ -396,6 +442,7 @@ __all__ = [
     "approved_top_level_nle_canonical_load_requested",
     "approved_top_level_nle_persistence_requested",
     "assert_no_unapproved_nle_persistence_fields",
+    "nle_legacy_disk_shape_replacement_approval_payload",
     "nle_runtime_state_persistence_approval_payload",
     "nle_snapshot_canonical_load_approval_payload",
     "nle_snapshot_persistence_approval_payload",

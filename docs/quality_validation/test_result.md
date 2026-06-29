@@ -1,5 +1,35 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.30 G2 Legacy Disk Shape Replacement Opt-In Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G2 owner-approved legacy-compatible `editor_state` row replacement opt-in proof, forged-policy guard, cache-hit hydration guard, Direct SRT precedence guard, and version/schema bump.
+- 결과: pass for the bounded legacy disk-shape replacement proof. Full NLE disk-format cutover remains blocked because `final_cutover_ready` remains incomplete.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.30.md`
+  - Audit report: `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040130-g2-legacy-disk-shape-replacement-opt-in-proof`
+- 실제 결과:
+  - App version updated to `04.01.30`.
+  - Project schema version updated to `04.01.30`.
+  - Legacy-compatible `editor_state` rows regenerate from approved standalone `nle_snapshot` rows only when the distinct owner-approved replacement policy is present.
+  - The `editor_state` key remains present for compatibility; this is row projection proof, not key removal or final cutover.
+  - Cache-hit read/resave hydrates approved runtime state and preserves `_nle_project_state` only for the explicit approved payload.
+  - Forged replacement policy is blocked, Direct SRT precedence is preserved, and top-level/readback/quarantine payloads do not persist.
+  - Audit state: `status=blocked`, `app_version=04.01.30`, `prep_ready=true`, `persistence_cutover_ready=false`, overall stoplight `red`, ready/blocked gates `11/1`.
+  - Ready gates added/kept: `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, and `legacy_disk_shape_replacement_allowed`.
+  - Blocked gate: `final_cutover_ready`.
+  - This is explicit legacy-compatible row projection proof only; it is not final NLE disk-format cutover, UI/UX change, STT/cache default change, or App Store package/signing/upload/submission proof.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_snapshot.py core/project/nle_persistence_guard.py core/project/project_io.py core/project/project_format.py core/runtime/config.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py -k "legacy_disk_shape or runtime_nle_project_state"` -> `5 passed, 17 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py -k "cutover"` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_direct_srt_precedence_audit.py tests/test_macos_bundle_runtime_paths.py` -> `33 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522` -> `status=blocked`, overall stoplight `red`, ready/blocked gates `11/1`, blockers `1`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "direct_srt_rows_to_runtime_nle_state or direct_srt_readback_drift_without_overwriting_srt_rows" tests/test_editor_autosave_cleanup.py -k "direct_srt_mode or direct_srt_micro_overlap"` -> `2 passed, 140 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.30`, `PROJECT_SCHEMA_VERSION=04.01.30`.
+
 ## v04.01.29 G2 Runtime _nle_project_state Persistence Opt-In Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G2 owner-approved supplemental `_nle_project_state` persistence opt-in proof, cache-hit hydration guard, legacy rollback preservation, and version/schema bump.

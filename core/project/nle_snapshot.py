@@ -382,12 +382,14 @@ def editor_rows_from_top_level_nle_payload(
 ) -> list[dict[str, Any]]:
     if not isinstance(nle_payload, dict):
         return []
-    sequences = nle_payload.get("sequences") if isinstance(nle_payload.get("sequences"), list) else []
+    sequences_raw = nle_payload.get("sequences")
+    sequences = sequences_raw if isinstance(sequences_raw, (list, tuple)) else []
     sequence = sequences[0] if sequences and isinstance(sequences[0], dict) else {}
     fps = normalize_fps(sequence.get("fps") or 30.0)
     rows: list[dict[str, Any]] = []
 
-    captions = sequence.get("captions") if isinstance(sequence.get("captions"), list) else []
+    captions_raw = sequence.get("captions")
+    captions = captions_raw if isinstance(captions_raw, (list, tuple)) else []
     for index, caption in enumerate(captions):
         if not isinstance(caption, dict):
             continue
@@ -409,7 +411,8 @@ def editor_rows_from_top_level_nle_payload(
             }
         )
 
-    gaps = sequence.get("gaps") if isinstance(sequence.get("gaps"), list) else []
+    gaps_raw = sequence.get("gaps")
+    gaps = gaps_raw if isinstance(gaps_raw, (list, tuple)) else []
     for index, gap in enumerate(gaps):
         if not isinstance(gap, dict):
             continue

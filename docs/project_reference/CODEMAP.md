@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.29-codemap
+Document-Version: 04.01.30-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -37,7 +37,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/check_app_store_upload_preflight.py`: Mac App Store upload preflight helper; requires exact readiness JSON, exact `.pkg` binding, no blockers, and all submission gates true before upload mode can run.
 - `tools/generate_stt_cache_default_review_packet.py`: G1 STT collect-cache owner-review packet generator; summarizes existing NAS cache write/hit evidence without enabling production cache defaults.
 - `tools/generate_nle_canonical_load_owner_review_packet.py`: G2 NLE canonical load-owner owner-review packet generator; summarizes NLE persistence cutover audit evidence without changing project load ownership.
-- `tools/audit_nle_persistence_cutover.py`: G2 NLE persistence audit; includes explicit top-level `nle` caption plus gap compatibility projection, canonical load-owner gate matrix, rollback-boundary proof, owner-approved top-level canonical load opt-in proof, owner-approved standalone `nle_snapshot` load-source opt-in proof, and supplemental `_nle_project_state` persistence opt-in proof.
+- `tools/audit_nle_persistence_cutover.py`: G2 NLE persistence audit; includes explicit top-level `nle` caption plus gap compatibility projection, canonical load-owner gate matrix, rollback-boundary proof, owner-approved top-level canonical load opt-in proof, owner-approved standalone `nle_snapshot` load-source opt-in proof, supplemental `_nle_project_state` persistence opt-in proof, and legacy-compatible `editor_state` row replacement opt-in proof.
 
 ## UI Areas
 
@@ -84,11 +84,11 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `core/project/project_assets.py`: external text-asset/SRT persistence, row-copy helpers, and STT candidate-track cache shaping.
 - `core/project/project_runtime_capture.py`: editor auxiliary project-state copy helpers plus lightweight status-count snapshots.
 - `core/project/project_session_service.py`: project open/save/reopen/resume lifecycle service and serialization entry seam.
-- `core/project/nle_persistence_guard.py`: NLE persistence policy guard for legacy shadow metadata, explicit top-level canonical load opt-in, standalone `nle_snapshot` load-source opt-in, supplemental `_nle_project_state` persistence opt-in, and unapproved future payload quarantine.
+- `core/project/nle_persistence_guard.py`: NLE persistence policy guard for legacy shadow metadata, explicit top-level canonical load opt-in, standalone `nle_snapshot` load-source opt-in, supplemental `_nle_project_state` persistence opt-in, legacy disk-shape replacement opt-in, and unapproved future payload quarantine.
 - `core/project/nle_project_state.py`: runtime NLE sequence/project-state model plus approved supplemental persisted runtime-state payload serialization and hydration helpers.
 - `core/project/nle_snapshot.py`: NLE snapshot builders plus top-level `nle` / `nle_snapshot` row projection helpers.
 - `core/project/project_context.py`: project load-to-editor projection, including explicit top-level `nle` canonical opt-in with `nle_snapshot` companion drift fail-closed to legacy rows.
-- `core/project/project_format.py`: project storage payload builder, version/schema ownership, approved NLE snapshot/top-level/runtime-state metadata persistence, and legacy rollback row preservation.
+- `core/project/project_format.py`: project storage payload builder, version/schema ownership, approved NLE snapshot/top-level/runtime-state metadata persistence, legacy-compatible `editor_state` row projection, and rollback key preservation.
 - `core/mode_manager.py`: central Fast/Auto/High/STT mode ownership and user-selectable model snapshot policy.
 - `core/audio/stt_quality_presets.py`: benchmark-locked Fast/Auto/High defaults, VAD lock notes, and STT recommendation tags.
 - `core/mode_policy.py`: runtime mode enforcement layer that applies benchmark-locked mode settings on top of persisted user model routes.

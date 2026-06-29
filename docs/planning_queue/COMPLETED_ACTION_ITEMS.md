@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.29-source-app
+Document-Version: 04.01.30-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,27 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.30 G2 Legacy Disk Shape Replacement Opt-In Proof
+
+Source request: continue remaining action items, verify and use Jammini/agents, apply the NLE structure, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route (`active_conversation_id=075ebb10-b98a-43bd-b9ee-9046675d41d7`).
+2. `tools/jammini_watchdog.sh --handoff-probe` sent a probe, but no fresh physical handoff file was visible; Dex did not claim delivered Jammini proof from chat-only status.
+3. Jammini was assigned a bounded G2 legacy disk-shape replacement scout through `tools/jammini_delegate.sh`; no physical result file was consumed before implementation closed.
+4. Three sub-agent reviews were completed: 한결 architecture, 서린 strict QE, and 유진 workflow. Their feedback narrowed the slice to explicit opt-in legacy-compatible `editor_state` row projection, kept the `editor_state` key present, preserved Direct SRT/roughcut/default-authority boundaries, required forged-policy/cache-hit proof, and kept `final_cutover_ready=false`.
+5. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.30"`.
+6. `core/project/project_format.py` was bumped to project schema version `04.01.30`.
+7. `core/project/nle_persistence_guard.py` now requires a distinct owner-approved legacy disk-shape replacement schema and projection-source policy before accepting legacy-compatible row replacement.
+8. `core/project/project_format.py` now regenerates legacy-compatible `editor_state` rows from the approved standalone `nle_snapshot` canonical source only for the explicit replacement policy; the `editor_state` key remains present for compatibility and final cutover remains false.
+9. `core/project/nle_snapshot.py` now accepts tuple payloads produced before project packing when extracting NLE rows, preserving the same list behavior after disk roundtrip.
+10. `core/project/project_io.py` preserves `_nle_project_state` for the explicit legacy replacement policy only when the runtime payload itself remains approved.
+11. `tools/audit_nle_persistence_cutover.py` now includes `Legacy Disk Shape Replacement Opt-In` evidence and keeps the remaining full-cutover blocker explicit.
+12. Audit evidence was refreshed at `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.md`.
+13. Audit state: `status=blocked`, `app_version=04.01.30`, `prep_ready=true`, `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates `11/1`, current canonical owner `nle_snapshot`, and blocker `final_cutover_ready`.
+14. Legacy replacement proof: loaded/runtime/reloaded/storage snapshot/runtime/editor_state first caption text stays `legacy replacement canonical first`; cache-hit read/resave hydrates runtime state; forged replacement policy is blocked; Direct SRT precedence is preserved; top-level/readback/quarantine payloads do not persist; final cutover remains blocked.
+15. Focused verification passed: compile check for touched NLE/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py -k "legacy_disk_shape or runtime_nle_project_state"` -> `5 passed, 17 deselected`; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py -k "cutover"` -> `6 passed`; broad focused NLE guard -> `33 passed`; project/status guard -> `66 passed, 80 deselected`; Direct SRT focused guard -> `2 passed, 140 deselected`; audit generation passed with blocker `1`; direct version assertion -> `APP_VERSION=04.01.30` / `PROJECT_SCHEMA_VERSION=04.01.30`; `git diff --check -- .` -> pass.
+16. This slice does not make `nle_snapshot` the default authority for all projects, remove the legacy `editor_state` key, alter Direct SRT precedence, alter roughcut sidecars, declare final NLE disk-format cutover, perform per-pixel NLE writes, change UI/UX labels/layout/shortcuts/colors/popups, change STT/cache defaults, build/sign/upload an App Store package, or provide App Store submission proof.
 
 ## v04.01.29 G2 Runtime _nle_project_state Persistence Opt-In Proof
 

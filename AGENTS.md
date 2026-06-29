@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.29-source-app
+Document-Version: 04.01.30-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.29`
-- Latest release checkpoint: `v04.01.29`
+- App version in code: `04.01.30`
+- Latest release checkpoint: `v04.01.30`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -235,29 +235,30 @@ Completed item rule:
   - result: pass, `profile=quick`, `scenario_count=1`, `passed=1`, `failed_count=0`, scenario `editor_compact_macau`
   - scope note: source-app editor workflow baseline only; not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, or roughcut proof.
 - Latest release checkpoint scope:
-  - `v04.01.29` - G2 owner-approved runtime `_nle_project_state` persistence opt-in proof, tied only to explicit standalone `nle_snapshot` canonical load-source policy. This writes and reloads `_nle_project_state` as a supplemental approved runtime-state payload, preserves legacy `editor_state` rollback rows, keeps default project load/save/export authority unchanged, bumps version/schema to `04.01.29`, refreshes the NLE cutover audit, and leaves full disk-format cutover blocked. It does not replace legacy `editor_state`, change Direct SRT precedence, change roughcut sidecars, declare final NLE disk-format cutover, change UI/UX, or provide App Store submission proof.
+  - `v04.01.30` - G2 owner-approved legacy disk-shape replacement opt-in proof, tied only to the explicit standalone `nle_snapshot` canonical load-source policy. This regenerates legacy-compatible `editor_state` rows from the approved snapshot canonical source while keeping the `editor_state` key present, preserves supplemental `_nle_project_state` proof, blocks forged replacement policy, preserves Direct SRT precedence, bumps version/schema to `04.01.30`, refreshes the NLE cutover audit, and leaves full disk-format cutover blocked. It does not make snapshot authority default for all projects, remove legacy `editor_state`, change roughcut sidecars, declare final NLE disk-format cutover, change UI/UX, or provide App Store submission proof.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
-  - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths. Owner-approved top-level `nle` canonical load opt-in is available only when paired with matching `nle_snapshot`; owner-approved standalone `nle_snapshot` load-source opt-in is available only under the explicit snapshot policy payload; and owner-approved `_nle_project_state` persistence is available only as a supplemental runtime-state payload tied to that standalone snapshot policy. Legacy disk-shape replacement and final cutover remain gated.
+  - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths. Owner-approved top-level `nle` canonical load opt-in is available only when paired with matching `nle_snapshot`; owner-approved standalone `nle_snapshot` load-source opt-in is available only under the explicit snapshot policy payload; owner-approved `_nle_project_state` persistence is available only as a supplemental runtime-state payload tied to that standalone snapshot policy; and owner-approved legacy disk-shape replacement is available only as legacy-compatible `editor_state` row projection from the approved snapshot source. Final cutover remains gated.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.29`:
-  - G2 runtime-state persistence opt-in policy: `_nle_project_state` can persist only as an approved supplemental runtime-state payload when the explicit standalone `nle_snapshot` canonical-load policy is present. Compatibility-only, forged, empty, ambiguous, and policy-incomplete payloads still fail closed to legacy/snapshot-approved paths.
-  - G2 runtime-state persistence audit: `output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053/nle_persistence_cutover_audit.md` -> `status=blocked`, `app_version=04.01.29`, `prep_ready=true`, `persistence_cutover_ready=false`, matrix `overall_stoplight=red`, ready/blocked gates `10/2`, current canonical owner `nle_snapshot`, `nle_snapshot_canonical_load_source_allowed=ready`, and `runtime_project_state_persistence_allowed=ready`.
-  - Runtime-state opt-in proof: loaded/runtime/reloaded/storage snapshot/runtime first caption text stays `runtime persisted snapshot first`; cache-hit read/resave hydrates runtime state; legacy `editor_state` first caption text after resave remains `first` for rollback; storage after resave has `_nle_project_state` only for the explicit approved payload and no top-level `nle`, readback report, or quarantine.
-  - Remaining blocked gates: `legacy_disk_shape_replacement_allowed` and `final_cutover_ready`.
-  - Compile check: `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/nle_project_state.py core/project/project_io.py core/project/project_format.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py core/runtime/config.py` -> pass.
-  - Focused NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `30 passed`.
-  - Audit generation: `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053` -> `status=blocked`, ready/blocked gates `10/2`, blockers `legacy_disk_shape_replacement_allowed`, `final_cutover_ready`.
+- Latest focused guard set for `v04.01.30`:
+  - G2 legacy disk-shape replacement opt-in policy: legacy-compatible `editor_state` rows can be regenerated from approved standalone `nle_snapshot` rows only when the distinct owner-approved replacement schema, projection source, runtime-state permission, rollback preservation flag, default-authority flag, and `final_cutover_ready=false` are present.
+  - G2 legacy disk-shape replacement audit: `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.md` -> `status=blocked`, `app_version=04.01.30`, `prep_ready=true`, `persistence_cutover_ready=false`, matrix `overall_stoplight=red`, ready/blocked gates `11/1`, current canonical owner `nle_snapshot`, `nle_snapshot_canonical_load_source_allowed=ready`, `runtime_project_state_persistence_allowed=ready`, and `legacy_disk_shape_replacement_allowed=ready`.
+  - Legacy replacement opt-in proof: loaded/runtime/reloaded/storage snapshot/runtime/editor_state first caption text stays `legacy replacement canonical first`; cache-hit read/resave hydrates runtime state; forged replacement policy is blocked; Direct SRT precedence is preserved; storage after resave has `_nle_project_state` only for the explicit approved payload and no top-level `nle`, readback report, or quarantine.
+  - Remaining blocked gate: `final_cutover_ready`.
+  - Compile check: `./venv/bin/python -m py_compile core/project/nle_snapshot.py core/project/nle_persistence_guard.py core/project/project_io.py core/project/project_format.py core/runtime/config.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - Focused NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py -k "legacy_disk_shape or runtime_nle_project_state"` -> `5 passed, 17 deselected`; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py -k "cutover"` -> `6 passed`.
+  - Broad focused NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_direct_srt_precedence_audit.py tests/test_macos_bundle_runtime_paths.py` -> `33 passed`.
+  - Audit generation: `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522` -> `status=blocked`, ready/blocked gates `11/1`, blocker `final_cutover_ready`.
   - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`
   - cancel proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, status/guided-status command elapsed samples below `0.01s`, cancel returned `current_pipeline_cancel_requested`, and post-cancel status was `ST_IDLE/backend_active=false`
   - close proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json` -> `app-close-request` returned while active in `0.009954s`, then bridge became `app_unreachable` after app exit
   - quit proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json` -> `app-quit-request` returned while active in `0.001577s`, then bridge became `app_unreachable` after app exit
   - Direct SRT focused guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "direct_srt_rows_to_runtime_nle_state or direct_srt_readback_drift_without_overwriting_srt_rows" tests/test_editor_autosave_cleanup.py -k "direct_srt_mode or direct_srt_micro_overlap"` -> `2 passed, 140 deselected`
-  - direct version assertion: `APP_VERSION=04.01.29`, `PROJECT_SCHEMA_VERSION=04.01.29`
+  - direct version assertion: `APP_VERSION=04.01.30`, `PROJECT_SCHEMA_VERSION=04.01.30`
   - `git diff --check -- .` -> pass
   - active global-canvas proof: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, timeline zoom/fit/time-window/max plus zoom-max/play/pause/status/guided-status all `ok=true`, max command elapsed `0.267435s`, `19` nonzero snapshots, final track count stayed `0`, cancel returned to `backend_active=false`
   - prior physical Jammini probe remains `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`; current `--handoff-probe` packet did not produce a fresh physical handoff file, so do not overclaim a new physical route proof from it.
-  - three sub-agent reviews converged on keeping this G2 slice opt-in-only and non-cutover: `_nle_project_state` must remain supplemental to the explicit `nle_snapshot` policy, default project authority must remain unchanged, Direct SRT precedence and roughcut sidecars must not drift, and `legacy_disk_shape_replacement_allowed` / `final_cutover_ready` must remain blocked.
+  - three sub-agent reviews converged on keeping this G2 slice opt-in-only and non-cutover: legacy-compatible `editor_state` row replacement must keep the `editor_state` key present, default project authority and Direct SRT/roughcut boundaries must not drift, forged policies must stay blocked, and `final_cutover_ready` must remain blocked.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`
@@ -271,16 +272,17 @@ Completed item rule:
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
-- Latest completed action-item slice: `v04.01.29 G2 Runtime _nle_project_state Persistence Opt-In Proof`.
+- Latest completed action-item slice: `v04.01.30 G2 Legacy Disk Shape Replacement Opt-In Proof`.
 - Current G0 App Store evidence snapshot:
   - latest blocker matrix audit: `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.md`
   - latest metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228/app_store_metadata_owner_input_package.md`
   - current readiness state: `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`; version lock and packaging template gates are green, signed-artifact proof/sandbox/App Store Connect validation/signing identities/owner metadata are red, pending owner-input metadata remains `8/8`, and pending App Store Connect metadata remains `8`.
   - owner approval for App Store packaging/signing/upload/metadata execution exists, but exact signed `.pkg`, strict App Store-candidate `codesign`, `pkgutil --check-signature`, sandbox workflow smoke, App Store Connect validation, upload/submission proof, and owner metadata values JSON are still missing.
 - Current G2 NLE evidence snapshot:
-  - latest NLE runtime-state persistence opt-in audit: `output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053/nle_persistence_cutover_audit.md`
-  - gate matrix state: `status=blocked`, `overall_stoplight=red`, ready/blocked gates `10/2`, current canonical owner is `nle_snapshot` only under explicit opt-in policy, `nle_snapshot_canonical_load_source_allowed=ready`, `runtime_project_state_persistence_allowed=ready`, and legacy-shape/final-cutover gates remain blocked.
-  - opt-in state: loaded/runtime/reloaded/storage snapshot/runtime first caption text stays `runtime persisted snapshot first`; legacy `editor_state` first caption text after resave remains `first`; cache-hit read/resave hydrates runtime state; default project authority remains unchanged; no top-level/readback/quarantine payload persists.
+  - latest NLE legacy disk-shape replacement opt-in audit: `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.md`
+  - gate matrix state: `status=blocked`, `overall_stoplight=red`, ready/blocked gates `11/1`, current canonical owner is `nle_snapshot` only under explicit opt-in policy, `nle_snapshot_canonical_load_source_allowed=ready`, `runtime_project_state_persistence_allowed=ready`, `legacy_disk_shape_replacement_allowed=ready`, and `final_cutover_ready` remains blocked.
+  - opt-in state: loaded/runtime/reloaded/storage snapshot/runtime/editor_state first caption text stays `legacy replacement canonical first`; the `editor_state` key remains present for compatibility; cache-hit read/resave hydrates runtime state; forged replacement policy is blocked; Direct SRT precedence is preserved; no top-level/readback/quarantine payload persists.
+  - previous NLE runtime-state persistence opt-in audit: `output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053/nle_persistence_cutover_audit.md`
   - previous NLE snapshot standalone canonical load opt-in audit: `output/manual_verification/latest/nle_snapshot_canonical_load_source_v040128_20260629_1325/nle_persistence_cutover_audit.md`
   - previous canonical load-owner rollback-boundary audit: `output/manual_verification/latest/nle_load_owner_rollback_boundary_v040124_20260629_1138/nle_persistence_cutover_audit.md`
   - previous canonical load-owner gate matrix audit: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.md`

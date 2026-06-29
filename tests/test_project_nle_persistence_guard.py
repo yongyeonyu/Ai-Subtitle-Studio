@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core.project.nle_persistence_guard import (
     NLE_LEGACY_CANONICAL_LOAD_OWNER,
+    NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
     NLE_PERSISTENCE_GUARD_SCHEMA,
     NLE_PERSISTENCE_QUARANTINE_KEY,
     NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA,
@@ -14,6 +15,7 @@ from core.project.nle_persistence_guard import (
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
     NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
     NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA,
+    approved_legacy_disk_shape_replacement_requested,
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
 )
@@ -506,6 +508,103 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         self.assertIsInstance(cached_state, NLEProjectState)
         self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after_cache_hit)
         self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after_cache_hit)
+
+    def test_legacy_disk_shape_replacement_requires_distinct_owner_policy(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_snapshot": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+            "canonical_load_owner_change_allowed": True,
+            "nle_snapshot_canonical_load_source_allowed": True,
+            "legacy_editor_state_remains_canonical": False,
+            "legacy_editor_state_preserved_for_rollback": True,
+            "persist_runtime_project_state": True,
+            "runtime_project_state_persistence_allowed": True,
+            "default_project_authority_unchanged": True,
+            "legacy_disk_shape_replacement_allowed": True,
+            "legacy_editor_state_rows_replaced": True,
+            "final_cutover_ready": False,
+        }
+
+        storage = build_storage_project_payload(copy.deepcopy(project))
+
+        self.assertFalse(approved_legacy_disk_shape_replacement_requested(project))
+        self.assertNotEqual(
+            storage["nle_persistence"].get("legacy_disk_shape_replacement_schema"),
+            NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+        )
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertEqual(
+            storage["editor_state"]["rendering"]["subtitle_canvas"]["segments"][0]["text"],
+            "first",
+        )
+
+    def test_owner_approved_legacy_disk_shape_replacement_projects_snapshot_rows_to_editor_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "legacy-disk-shape-replacement-opt-in.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+                "nle_snapshot_canonical_load_source_allowed": True,
+                "legacy_editor_state_remains_canonical": False,
+                "legacy_editor_state_preserved_for_rollback": True,
+                "persist_runtime_project_state": True,
+                "runtime_project_state_persistence_allowed": True,
+                "default_project_authority_unchanged": True,
+                "legacy_disk_shape_replacement_allowed": True,
+                "legacy_editor_state_rows_replaced": True,
+                "legacy_editor_state_projection_source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "legacy_disk_shape_replacement_schema": NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+                "final_cutover_ready": False,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            expected_text = "legacy replacement canonical first"
+            storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = expected_text
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+            cached = read_project_file(str(project_path))
+            write_project_file(str(project_path), cached)
+            storage_after_cache_hit = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            reloaded = read_project_file(str(project_path))
+            reloaded_rows = project_segments_to_editor(reloaded, include_analysis_candidates=False)
+
+        editor_state_rows = project_segments_to_editor(
+            {"editor_state": storage_after.get("editor_state") or {}, "video": storage_after.get("video") or {}},
+            include_analysis_candidates=False,
+        )
+        self.assertTrue(approved_legacy_disk_shape_replacement_requested(storage_after))
+        self.assertEqual(loaded_rows[0]["text"], expected_text)
+        self.assertEqual(reloaded_rows[0]["text"], expected_text)
+        self.assertEqual(editor_state_rows[0]["text"], expected_text)
+        self.assertEqual(_row_signature(editor_state_rows), _row_signature(reloaded_rows))
+        self.assertTrue(storage_after["editor_state"]["subtitles"]["legacy_disk_shape_replaced"])
+        self.assertEqual(
+            storage_after["editor_state"]["legacy_disk_shape_replacement"]["source"],
+            NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        )
+        self.assertEqual(
+            storage_after["nle_persistence"]["legacy_disk_shape_replacement_schema"],
+            NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+        )
+        self.assertTrue(storage_after["nle_persistence"]["legacy_disk_shape_replacement_allowed"])
+        self.assertTrue(storage_after["nle_persistence"]["legacy_editor_state_preserved_for_rollback"])
+        self.assertTrue(storage_after["nle_persistence"]["default_project_authority_unchanged"])
+        self.assertFalse(storage_after["nle_persistence"]["final_cutover_ready"])
+        self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after_cache_hit)
+        self.assertNotIn("nle", storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
 
     def test_snapshot_canonical_opt_in_strips_unapproved_runtime_state_dict_on_resave(self):
         with tempfile.TemporaryDirectory() as tmp:

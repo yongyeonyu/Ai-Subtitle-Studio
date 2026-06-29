@@ -201,15 +201,16 @@ blocked:
 
 ```bash
 ./venv/bin/python tools/audit_nle_persistence_cutover.py \
-  --output-dir output/manual_verification/latest/nle_runtime_state_persistence_YYYYMMDD_HHMM
+  --output-dir output/manual_verification/latest/nle_legacy_disk_shape_replacement_YYYYMMDD_HHMM
 ```
 
 The current expected state is audit evidence only: `status=blocked`,
 `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates
-`10/2`, current canonical owner `nle_snapshot` for explicit standalone snapshot
+`11/1`, current canonical owner `nle_snapshot` for explicit standalone snapshot
 opt-in payloads only, target candidate `nle_snapshot`,
 `nle_snapshot_canonical_load_source_allowed=ready`,
-`runtime_project_state_persistence_allowed=ready`, and
+`runtime_project_state_persistence_allowed=ready`,
+`legacy_disk_shape_replacement_allowed=ready`, and
 `not_disk_format_cutover` plus `not_ui_change` true. The canonical opt-in guard
 must prove standalone `nle_snapshot` rows load and resave through
 `read_project_file()`, `project_segments_to_editor()`, and
@@ -218,13 +219,15 @@ rollback. The runtime-state guard must prove `_nle_project_state` persists only
 as an explicit owner-approved supplemental payload, hydrates on cache-hit read,
 and does not replace default project authority. Compatibility-only, forged,
 empty, and ambiguous dual-owner payloads must fail closed to legacy rows.
-Remaining blocked gates are `legacy_disk_shape_replacement_allowed` and
-`final_cutover_ready`.
+The legacy disk-shape replacement guard must prove legacy-compatible
+`editor_state` rows can be regenerated from approved `nle_snapshot` rows only
+under the distinct owner-approved replacement policy, while Direct SRT
+precedence is preserved. The remaining blocked gate is `final_cutover_ready`.
 
 Focused guards:
 
 ```bash
-./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/nle_snapshot.py core/project/project_context.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py core/runtime/config.py
+./venv/bin/python -m py_compile core/project/nle_snapshot.py core/project/nle_persistence_guard.py core/project/project_io.py core/project/project_format.py core/runtime/config.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"
 ```
