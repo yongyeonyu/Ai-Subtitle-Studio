@@ -6,7 +6,7 @@ AI Subtitle Studio can be treated as a Mac App Store submission candidate.
 ## Current Status
 
 - Status: blocked. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28 and reconfirmed on 2026-06-29, but distribution identities, signed `.pkg`, strict signature proof, App Store validation, and owner metadata values are still incomplete.
-- Source app version: `04.01.27`.
+- Source app version: `04.01.28`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
 - Minimum macOS: `14.0`.
@@ -121,7 +121,7 @@ readiness snapshot with overall stoplight `red`.
 This package is a collection/checklist artifact only; it does not replace signed
 package proof, sandbox smoke, App Store Connect validation, upload/submission,
 or owner-approved metadata values JSON. Because the source app is now
-`04.01.27`, the G0 owner-input package must be refreshed before any package or
+`04.01.28`, the G0 owner-input package must be refreshed before any package or
 upload readiness claim can bind to the current app version.
 
 ## Owner Metadata Values Preflight

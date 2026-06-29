@@ -1,5 +1,31 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.28 G2 NLE Snapshot Standalone Canonical Load Opt-In Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G2 owner-approved standalone `nle_snapshot` canonical load-source opt-in proof, fail-closed compatibility/forgery/empty/ambiguity guards, legacy rollback preservation, and version/schema bump.
+- 결과: pass for the bounded NLE snapshot load-source proof. Full NLE disk-format cutover remains blocked because runtime-state persistence, legacy disk-shape replacement, and final cutover proof remain incomplete.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.28.md`
+  - Audit report: `output/manual_verification/latest/nle_snapshot_canonical_load_source_v040128_20260629_1325/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_snapshot_canonical_load_source_v040128_20260629_1325/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040128-g2-nle-snapshot-standalone-canonical-load-opt-in-proof`
+- 실제 결과:
+  - App version updated to `04.01.28`.
+  - Project schema version updated to `04.01.28`.
+  - `core/project/nle_persistence_guard.py` separates compatibility-only snapshot persistence from explicit standalone snapshot load-source approval.
+  - `core/project/project_context.py` uses `nle_snapshot` rows only when explicit snapshot canonical-load policy and approved payload are present.
+  - `core/project/project_format.py` preserves approved snapshot rows on resave while keeping legacy `editor_state` rows for rollback.
+  - Audit state: `status=blocked`, `app_version=04.01.28`, `prep_ready=true`, `persistence_cutover_ready=false`, overall stoplight `red`, ready/blocked gates `9/3`.
+  - Current canonical owner for explicit opt-in payloads: `nle_snapshot`; `nle_snapshot_canonical_load_source_allowed=ready`.
+  - Snapshot opt-in proof: loaded/runtime/reloaded/storage `nle_snapshot` first caption text remains `snapshot canonical first`; legacy `editor_state` first caption text after resave remains `first`.
+  - Blocked gates: `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
+  - This is explicit opt-in load-source proof only; it is not persisted `_nle_project_state`, legacy `editor_state` replacement, final NLE disk-format cutover, UI/UX change, STT/cache default change, or App Store package/signing/upload/submission proof.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/nle_snapshot.py core/project/project_context.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py core/runtime/config.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `27 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_snapshot_canonical_load_source_v040128_20260629_1325` -> `status=blocked`, overall stoplight `red`, ready/blocked gates `9/3`, blockers `3`.
+  - Project/status guard and direct version assertion are recorded in the completed archive and release note for this checkpoint.
+
 ## v04.01.27 G2 Top-Level NLE Canonical Load Opt-In Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G2 owner-approved top-level `nle` canonical load opt-in proof, paired `nle`/`nle_snapshot` readback guard, legacy rollback preservation, and version/schema bump.

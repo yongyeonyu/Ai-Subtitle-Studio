@@ -10,17 +10,20 @@ from core.project.project_roughcut_store import (
 )
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
     NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+    approved_nle_snapshot_canonical_load_requested,
     approved_top_level_nle_canonical_load_requested,
     approved_nle_snapshot_persistence_requested,
     approved_top_level_nle_persistence_requested,
+    nle_snapshot_canonical_load_approval_payload,
     nle_top_level_canonical_load_approval_payload,
     nle_snapshot_persistence_approval_payload,
     nle_top_level_persistence_approval_payload,
     strip_unapproved_nle_persistence_fields,
 )
 
-PROJECT_SCHEMA_VERSION = "04.01.27"
+PROJECT_SCHEMA_VERSION = "04.01.28"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 
@@ -248,6 +251,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     strip_unapproved_nle_persistence_fields(payload, source="project_format.storage")
     persist_nle_snapshot = approved_nle_snapshot_persistence_requested(payload)
     persist_top_level_nle = approved_top_level_nle_persistence_requested(payload)
+    canonical_nle_snapshot = approved_nle_snapshot_canonical_load_requested(payload)
     canonical_top_level_nle = approved_top_level_nle_canonical_load_requested(payload)
     header = refresh_project_video_header(payload)
     payload["video"] = header
@@ -259,6 +263,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload.pop("project_path", None)
     payload.pop("_nle_project_state", None)
     payload.pop("_nle_snapshot_readback_parity", None)
+    existing_nle_snapshot = payload.get("nle_snapshot") if isinstance(payload.get("nle_snapshot"), dict) else {}
     existing_top_level_nle = payload.get("nle") if isinstance(payload.get("nle"), dict) else {}
     payload.pop("nle", None)
     payload.pop("nle_snapshot", None)
@@ -268,15 +273,29 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         from core.project.nle_snapshot import editor_rows_from_top_level_nle_payload, project_copy_with_editor_rows
 
         snapshot_source = payload
-        if canonical_top_level_nle:
+        if canonical_nle_snapshot:
+            canonical_rows = editor_rows_from_top_level_nle_payload(existing_nle_snapshot)
+            if canonical_rows:
+                snapshot_source = project_copy_with_editor_rows(payload, canonical_rows)
+        elif canonical_top_level_nle:
             canonical_rows = editor_rows_from_top_level_nle_payload(existing_top_level_nle)
             if canonical_rows:
                 snapshot_source = project_copy_with_editor_rows(payload, canonical_rows)
         snapshot_payload = build_project_nle_snapshot(snapshot_source, project_path="").to_dict()
         if persist_nle_snapshot:
-            snapshot_payload["persistence"] = nle_snapshot_persistence_approval_payload(
-                source="project_format.storage"
-            )
+            if canonical_nle_snapshot:
+                metadata = snapshot_payload.setdefault("metadata", {})
+                metadata["read_only"] = False
+                metadata["legacy_editor_state_remains_canonical"] = False
+                metadata["legacy_editor_state_preserved_for_rollback"] = True
+                metadata["owner_approved_canonical_load_opt_in"] = True
+                snapshot_payload["persistence"] = nle_snapshot_canonical_load_approval_payload(
+                    source="project_format.storage"
+                )
+            else:
+                snapshot_payload["persistence"] = nle_snapshot_persistence_approval_payload(
+                    source="project_format.storage"
+                )
             payload["nle_snapshot"] = snapshot_payload
         if persist_top_level_nle:
             nle_payload = build_top_level_nle_shadow_payload(
@@ -310,6 +329,12 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
             policy_payload["canonical_load_owner_change_allowed"] = True
             policy_payload["legacy_editor_state_remains_canonical"] = False
             policy_payload["legacy_editor_state_preserved_for_rollback"] = True
+        elif canonical_nle_snapshot:
+            policy_payload["canonical_load_owner"] = NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+            policy_payload["canonical_load_owner_change_allowed"] = True
+            policy_payload["legacy_editor_state_remains_canonical"] = False
+            policy_payload["legacy_editor_state_preserved_for_rollback"] = True
+            policy_payload["nle_snapshot_canonical_load_source_allowed"] = True
         payload["nle_persistence"] = policy_payload
     editor_state = payload.get("editor_state")
     if isinstance(editor_state, dict):

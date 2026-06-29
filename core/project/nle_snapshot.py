@@ -375,7 +375,11 @@ def attach_nle_snapshot_readback_parity(
     return project
 
 
-def editor_rows_from_top_level_nle_payload(nle_payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+def editor_rows_from_top_level_nle_payload(
+    nle_payload: dict[str, Any] | None,
+    *,
+    canonical_source: str = "top_level_nle",
+) -> list[dict[str, Any]]:
     if not isinstance(nle_payload, dict):
         return []
     sequences = nle_payload.get("sequences") if isinstance(nle_payload.get("sequences"), list) else []
@@ -401,7 +405,7 @@ def editor_rows_from_top_level_nle_payload(nle_payload: dict[str, Any] | None) -
                 "text": str(caption.get("text") or ""),
                 "speaker": str(caption.get("speaker") or ""),
                 "is_gap": False,
-                "_nle_canonical_load_source": "top_level_nle",
+                "_nle_canonical_load_source": str(canonical_source or "top_level_nle"),
             }
         )
 
@@ -423,7 +427,7 @@ def editor_rows_from_top_level_nle_payload(nle_payload: dict[str, Any] | None) -
                 "text": "",
                 "speaker": "",
                 "is_gap": True,
-                "_nle_canonical_load_source": "top_level_nle",
+                "_nle_canonical_load_source": str(canonical_source or "top_level_nle"),
             }
         )
 

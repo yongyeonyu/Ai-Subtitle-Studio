@@ -8,6 +8,7 @@ from core.project.nle_persistence_guard import (
     NLE_LEGACY_CANONICAL_LOAD_OWNER,
     NLE_PERSISTENCE_GUARD_SCHEMA,
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
     NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
@@ -376,6 +377,136 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "forged canonical first"
         storage["nle"].pop("persistence", None)
         storage["nle_snapshot"].pop("persistence", None)
+
+        rows = project_segments_to_editor(storage, include_analysis_candidates=False)
+
+        self.assertEqual(rows[0]["text"], "first")
+        self.assertFalse(any(row.get("_nle_canonical_load_source") for row in rows))
+
+    def test_owner_approved_nle_snapshot_canonical_load_opt_in_uses_snapshot_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "canonical-nle-snapshot.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+                "nle_snapshot_canonical_load_source_allowed": True,
+                "legacy_editor_state_remains_canonical": False,
+                "legacy_editor_state_preserved_for_rollback": True,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "snapshot canonical first"
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+            reloaded = read_project_file(str(project_path))
+            reloaded_rows = project_segments_to_editor(reloaded, include_analysis_candidates=False)
+
+        snapshot_payload = storage["nle_snapshot"]
+        self.assertEqual(snapshot_payload["persistence"]["canonical_load_owner"], NLE_SNAPSHOT_CANONICAL_LOAD_OWNER)
+        self.assertTrue(snapshot_payload["persistence"]["canonical_load_owner_change_allowed"])
+        self.assertTrue(snapshot_payload["persistence"]["nle_snapshot_canonical_load_source_allowed"])
+        self.assertFalse(snapshot_payload["persistence"]["legacy_editor_state_remains_canonical"])
+        self.assertTrue(snapshot_payload["persistence"]["legacy_editor_state_preserved_for_rollback"])
+        self.assertEqual(project_segments_to_editor(project, include_analysis_candidates=False)[0]["text"], "first")
+        self.assertEqual(loaded_rows[0]["text"], "snapshot canonical first")
+        self.assertEqual(reloaded_rows[0]["text"], "snapshot canonical first")
+        self.assertEqual(_row_signature(loaded_rows), _row_signature(reloaded_rows))
+        self.assertNotIn("nle", storage_after)
+        self.assertEqual(
+            storage_after["nle_snapshot"]["sequences"][0]["captions"][0]["text"],
+            "snapshot canonical first",
+        )
+        self.assertEqual(
+            storage_after["editor_state"]["rendering"]["subtitle_canvas"]["segments"][0]["text"],
+            "first",
+        )
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+
+    def test_compatibility_only_nle_snapshot_does_not_become_canonical_load_source(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_snapshot": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        }
+        storage = build_storage_project_payload(copy.deepcopy(project))
+        storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "compatibility snapshot first"
+
+        rows = project_segments_to_editor(storage, include_analysis_candidates=False)
+
+        self.assertEqual(rows[0]["text"], "first")
+        self.assertFalse(any(row.get("_nle_canonical_load_source") for row in rows))
+
+    def test_nle_snapshot_canonical_opt_in_rejects_direct_forged_payload_without_approval(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_snapshot": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+            "canonical_load_owner_change_allowed": True,
+            "nle_snapshot_canonical_load_source_allowed": True,
+            "legacy_editor_state_remains_canonical": False,
+            "legacy_editor_state_preserved_for_rollback": True,
+        }
+        storage = build_storage_project_payload(copy.deepcopy(project))
+        storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "forged snapshot first"
+        storage["nle_snapshot"].pop("persistence", None)
+
+        rows = project_segments_to_editor(storage, include_analysis_candidates=False)
+
+        self.assertEqual(rows[0]["text"], "first")
+        self.assertFalse(any(row.get("_nle_canonical_load_source") for row in rows))
+
+    def test_empty_nle_snapshot_canonical_opt_in_falls_back_to_legacy_rows(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_snapshot": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+            "canonical_load_owner_change_allowed": True,
+            "nle_snapshot_canonical_load_source_allowed": True,
+            "legacy_editor_state_remains_canonical": False,
+            "legacy_editor_state_preserved_for_rollback": True,
+        }
+        storage = build_storage_project_payload(copy.deepcopy(project))
+        storage["nle_snapshot"]["sequences"][0]["captions"] = []
+        storage["nle_snapshot"]["sequences"][0]["gaps"] = []
+
+        rows = project_segments_to_editor(storage, include_analysis_candidates=False)
+
+        self.assertEqual(rows[0]["text"], "first")
+        self.assertFalse(any(row.get("_nle_canonical_load_source") for row in rows))
+
+    def test_ambiguous_dual_canonical_owners_fall_back_to_legacy_rows(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_snapshot": True,
+            "persist_top_level_nle": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            "canonical_load_owner": NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+            "canonical_load_owner_change_allowed": True,
+            "nle_snapshot_canonical_load_source_allowed": True,
+            "legacy_editor_state_remains_canonical": False,
+            "legacy_editor_state_preserved_for_rollback": True,
+        }
+        storage = build_storage_project_payload(copy.deepcopy(project))
+        storage["nle"]["sequences"][0]["captions"][0]["text"] = "dual canonical first"
+        storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "dual canonical first"
+        storage["nle_snapshot"]["persistence"]["canonical_load_owner"] = NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        storage["nle_snapshot"]["persistence"]["canonical_load_owner_change_allowed"] = True
+        storage["nle_snapshot"]["persistence"]["nle_snapshot_canonical_load_source_allowed"] = True
+        storage["nle_snapshot"]["persistence"]["legacy_editor_state_remains_canonical"] = False
+        storage["nle_snapshot"]["persistence"]["legacy_editor_state_preserved_for_rollback"] = True
+        storage["nle_snapshot"]["metadata"]["read_only"] = False
+        storage["nle_snapshot"]["metadata"]["owner_approved_canonical_load_opt_in"] = True
 
         rows = project_segments_to_editor(storage, include_analysis_candidates=False)
 

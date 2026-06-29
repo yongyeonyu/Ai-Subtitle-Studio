@@ -22,7 +22,6 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert "top_level_nle_shadow_not_canonical_load_owner" not in report["blockers"]
     assert "top_level_nle_projection_gap_coverage_missing" not in report["blockers"]
     assert report["blockers"] == [
-        "nle_snapshot_canonical_load_source_allowed",
         "runtime_project_state_persistence_allowed",
         "legacy_disk_shape_replacement_allowed",
         "final_cutover_ready",
@@ -30,15 +29,14 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     gate_matrix = report["canonical_load_owner_gate_matrix"]
     assert gate_matrix["status"] == "blocked"
     assert gate_matrix["overall_stoplight"] == "red"
-    assert gate_matrix["current_canonical_load_owner"] == "top_level_nle_shadow_metadata"
-    assert gate_matrix["target_load_owner_candidate"] == "top_level_nle_shadow_metadata"
+    assert gate_matrix["current_canonical_load_owner"] == "nle_snapshot"
+    assert gate_matrix["target_load_owner_candidate"] == "nle_snapshot"
     assert gate_matrix["not_runtime_change"] is True
     assert gate_matrix["not_disk_format_cutover"] is True
     assert gate_matrix["not_ui_change"] is True
-    assert gate_matrix["ready_gate_count"] == 8
-    assert gate_matrix["blocked_gate_count"] == 4
+    assert gate_matrix["ready_gate_count"] == 9
+    assert gate_matrix["blocked_gate_count"] == 3
     assert gate_matrix["blocked_gate_ids"] == [
-        "nle_snapshot_canonical_load_source_allowed",
         "runtime_project_state_persistence_allowed",
         "legacy_disk_shape_replacement_allowed",
         "final_cutover_ready",
@@ -52,7 +50,7 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert gates["roughcut_sidecar_ready"]["status"] == "ready"
     assert gates["rollback_boundary_defined"]["status"] == "ready"
     assert gates["canonical_load_owner_change_allowed"]["status"] == "ready"
-    assert gates["nle_snapshot_canonical_load_source_allowed"]["status"] == "blocked"
+    assert gates["nle_snapshot_canonical_load_source_allowed"]["status"] == "ready"
     assert gates["runtime_project_state_persistence_allowed"]["status"] == "blocked"
     assert gates["legacy_disk_shape_replacement_allowed"]["status"] == "blocked"
     assert gates["final_cutover_ready"]["status"] == "blocked"
@@ -135,6 +133,26 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert canonical_opt_in["storage_after_has_runtime_nle_key"] is False
     assert canonical_opt_in["storage_after_has_readback_report"] is False
     assert canonical_opt_in["storage_after_has_quarantine"] is False
+    snapshot_canonical = report["checks"]["nle_snapshot_canonical_load_source"]
+    assert snapshot_canonical["ready"] is True
+    assert snapshot_canonical["status"] == "ready"
+    assert snapshot_canonical["explicit_opt_in"] is True
+    assert snapshot_canonical["canonical_load_owner"] == "nle_snapshot"
+    assert snapshot_canonical["canonical_load_owner_change_allowed"] is True
+    assert snapshot_canonical["nle_snapshot_canonical_load_source_allowed"] is True
+    assert snapshot_canonical["loaded_first_caption_text"] == "snapshot canonical first"
+    assert snapshot_canonical["runtime_first_caption_text"] == "snapshot canonical first"
+    assert snapshot_canonical["reloaded_first_caption_text"] == "snapshot canonical first"
+    assert snapshot_canonical["storage_snapshot_first_caption_text"] == "snapshot canonical first"
+    assert snapshot_canonical["legacy_editor_state_first_caption_text_after_resave"] == "first"
+    assert snapshot_canonical["loaded_signature_matches_runtime"] is True
+    assert snapshot_canonical["loaded_signature_matches_reloaded"] is True
+    assert snapshot_canonical["storage_snapshot_matches_loaded"] is True
+    assert snapshot_canonical["legacy_editor_state_preserved_for_rollback"] is True
+    assert snapshot_canonical["storage_after_has_top_level_nle"] is False
+    assert snapshot_canonical["storage_after_has_runtime_nle_key"] is False
+    assert snapshot_canonical["storage_after_has_readback_report"] is False
+    assert snapshot_canonical["storage_after_has_quarantine"] is False
     rollback = report["checks"]["canonical_load_owner_rollback_boundary"]
     assert rollback["ready"] is True
     assert rollback["status"] == "defined"
@@ -160,6 +178,7 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["top_level_nle_compatibility_projection_passed"] is True
     assert report["top_level_nle_canonical_projection_complete"] is True
     assert report["top_level_nle_canonical_load_opt_in_ready"] is True
+    assert report["nle_snapshot_canonical_load_source_ready"] is True
     corrupted = report["checks"]["corrupted_snapshot_readback"]
     assert corrupted["drift_detected"] is True
     assert corrupted["mismatch_count"] > 0
@@ -236,6 +255,7 @@ def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
         assert "- Overall stoplight: `red`" in markdown
         assert "| rollback_boundary_defined | ready |" in markdown
         assert "| canonical_load_owner_change_allowed | ready |" in markdown
+        assert "| nle_snapshot_canonical_load_source_allowed | ready |" in markdown
         assert "| final_cutover_ready | blocked |" in markdown
         assert "## Top-Level NLE Canonical Load Opt-In" in markdown
         assert "Explicit owner-approved opt-in evidence only." in markdown
@@ -247,6 +267,16 @@ def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
         assert "- Legacy editor_state first caption text after resave: `first`" in markdown
         assert "- Storage nle matches snapshot: `True`" in markdown
         assert "- Legacy editor_state preserved for rollback: `True`" in markdown
+        assert "## NLE Snapshot Standalone Canonical Load Opt-In" in markdown
+        assert "standalone nle_snapshot load-source routing" in markdown
+        assert "- Explicit opt-in: `True`" in markdown
+        assert "- Canonical load owner: `nle_snapshot`" in markdown
+        assert "- Snapshot load source allowed: `True`" in markdown
+        assert "- Loaded/runtime/reloaded first caption text: `snapshot canonical first` / `snapshot canonical first` / `snapshot canonical first`" in markdown
+        assert "- Storage snapshot first caption text: `snapshot canonical first`" in markdown
+        assert "- Legacy editor_state first caption text after resave: `first`" in markdown
+        assert "- Storage snapshot matches loaded: `True`" in markdown
+        assert "- Storage after has top-level/runtime/readback/quarantine: `False/False/False/False`" in markdown
         assert "## Canonical Load-Owner Rollback Boundary" in markdown
         assert "Rollback-boundary audit evidence only." in markdown
         assert "- Ready: `True`" in markdown
@@ -279,6 +309,7 @@ def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
             "disk-format cutover complete",
             "load owner switched",
             "nle_snapshot is canonical",
+            "snapshot is now canonical by default",
             "legacy editor_state replaced",
             "full NLE persistence enabled",
         ):

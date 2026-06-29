@@ -33,7 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.27 / G2 Top-Level NLE Canonical Load Opt-In Proof
+## Current Handoff - 2026-06-29 v04.01.28 / G2 NLE Snapshot Standalone Canonical Load Opt-In Proof
+
+### Scope
+
+- Completed the G2 standalone `nle_snapshot` canonical load-source opt-in proof slice.
+- Bumped source-app version and project schema from `04.01.27` to `04.01.28`.
+- Extended `core/project/nle_persistence_guard.py`, `core/project/project_format.py`, `core/project/nle_snapshot.py`, and `core/project/project_context.py`.
+- Extended `tools/audit_nle_persistence_cutover.py` and focused NLE persistence tests.
+- Generated refreshed NLE persistence cutover evidence for the current app version.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.28`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.28`.
+- NLE audit: `output/manual_verification/latest/nle_snapshot_canonical_load_source_v040128_20260629_1325/nle_persistence_cutover_audit.md`.
+- Current G2 state: `status=blocked`, `prep_ready=true`, `persistence_cutover_ready=false`, overall stoplight `red`, ready/blocked gates `9/3`.
+- `nle_snapshot_canonical_load_source_allowed` is now ready for explicit owner-approved standalone snapshot opt-in payloads only.
+- Loaded/runtime/reloaded/storage `nle_snapshot` first caption text remains `snapshot canonical first`; legacy `editor_state` first caption text after resave remains `first`.
+- Compatibility-only, forged, empty, and ambiguous dual-owner payloads fall back to legacy rows, and top-level/runtime/readback/quarantine payloads do not persist.
+- Remaining blocked gates: `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
+- This is an explicit opt-in load-source proof only. It is not persisted `_nle_project_state`, legacy disk-shape replacement, final NLE cutover, UI/UX change, or App Store submission proof.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/nle_snapshot.py core/project/project_context.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py core/runtime/config.py` -> pass.
+- Focused NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `27 passed`.
+- Audit generation: `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_snapshot_canonical_load_source_v040128_20260629_1325` -> `status=blocked`, ready/blocked gates `9/3`, blockers `3`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.28`, `PROJECT_SCHEMA_VERSION=04.01.28`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture boundary, QE false-positive guards, and editor-workflow wording. Jammini `--status` resolved the active route and Jammini received a bounded scout task, but no fresh physical Jammini result file arrived before this slice closed; `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G2 full NLE disk-format cutover remains blocked until runtime-state persistence policy, legacy disk-shape replacement policy, and final cutover proof are implemented and reproved.
+- G0 has owner approval to proceed, but remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, content-bound App Store Connect validation, upload/submission proof, and owner-approved metadata values JSON.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G2, pick one of the remaining blocked gates and prove save/reopen/render/export parity before widening behavior.
+- If continuing G0, collect owner-approved metadata values JSON or configure Apple Distribution / installer identities before package/upload execution.
+
+## Previous Handoff - 2026-06-29 v04.01.27 / G2 Top-Level NLE Canonical Load Opt-In Proof
 
 ### Scope
 

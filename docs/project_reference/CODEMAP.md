@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.27-codemap
+Document-Version: 04.01.28-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -37,7 +37,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/check_app_store_upload_preflight.py`: Mac App Store upload preflight helper; requires exact readiness JSON, exact `.pkg` binding, no blockers, and all submission gates true before upload mode can run.
 - `tools/generate_stt_cache_default_review_packet.py`: G1 STT collect-cache owner-review packet generator; summarizes existing NAS cache write/hit evidence without enabling production cache defaults.
 - `tools/generate_nle_canonical_load_owner_review_packet.py`: G2 NLE canonical load-owner owner-review packet generator; summarizes NLE persistence cutover audit evidence without changing project load ownership.
-- `tools/audit_nle_persistence_cutover.py`: G2 NLE persistence audit; includes explicit top-level `nle` caption plus gap compatibility projection, canonical load-owner gate matrix, rollback-boundary proof, and owner-approved top-level canonical load opt-in proof.
+- `tools/audit_nle_persistence_cutover.py`: G2 NLE persistence audit; includes explicit top-level `nle` caption plus gap compatibility projection, canonical load-owner gate matrix, rollback-boundary proof, owner-approved top-level canonical load opt-in proof, and owner-approved standalone `nle_snapshot` load-source opt-in proof.
 
 ## UI Areas
 

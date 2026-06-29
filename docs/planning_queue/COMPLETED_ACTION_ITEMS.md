@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.27-source-app
+Document-Version: 04.01.28-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,25 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.28 G2 NLE Snapshot Standalone Canonical Load Opt-In Proof
+
+Source request: Jammini was idle, so verify communication, assign bounded support work, continue one remaining action item with three agents, move the product toward the NLE structure, record completed items separately, review/fix, keep worktree clean after one completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route, but the fresh `--handoff-probe` did not create a physical handoff file; the broken probe pointer was removed and the current reliable physical route proof remains `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md`.
+2. Jammini was assigned a bounded G2 next-action scout task through `tools/jammini_delegate.sh`; no physical Jammini result file arrived before implementation closed, so Dex did not claim delivered Jammini proof from chat-only status.
+3. Three sub-agent reviews were completed: 한결 architecture, 서린 strict QE, and 유진 workflow. All converged on a narrow standalone `nle_snapshot` opt-in proof, fail-closed negative tests, legacy rollback preservation, no UI/UX changes, and no final cutover wording.
+4. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.28"`.
+5. `core/project/project_format.py` was bumped to project schema version `04.01.28`.
+6. `core/project/nle_persistence_guard.py` now separates compatibility-only snapshot persistence from explicit standalone `nle_snapshot` canonical load-source approval.
+7. `core/project/project_context.py` now lets `nle_snapshot` drive load only when the explicit snapshot policy and approved payload are present; compatibility-only, forged, empty, and ambiguous dual-owner payloads fall back to legacy `editor_state`.
+8. `core/project/project_format.py` preserves approved snapshot rows on resave while keeping legacy `editor_state` rows as rollback compatibility and preventing top-level/runtime/readback/quarantine persistence.
+9. `tools/audit_nle_persistence_cutover.py` now includes the `NLE Snapshot Standalone Canonical Load Opt-In` proof and keeps the remaining full-cutover blockers explicit.
+10. Audit evidence was refreshed at `output/manual_verification/latest/nle_snapshot_canonical_load_source_v040128_20260629_1325/nle_persistence_cutover_audit.md`.
+11. Audit state: `status=blocked`, `app_version=04.01.28`, `prep_ready=true`, `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates `9/3`, current canonical owner `nle_snapshot`, and blockers `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, `final_cutover_ready`.
+12. Snapshot opt-in proof: loaded/runtime/reloaded/storage `nle_snapshot` first caption text stays `snapshot canonical first`; legacy `editor_state` first caption text after resave remains `first`; compatibility-only/forged/empty/ambiguous payloads fall back to legacy; top-level/runtime/readback/quarantine payloads do not persist.
+13. Focused verification passed: compile check for touched NLE/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `27 passed`; audit generation passed with blockers `3`; project/status guard passed; direct version assertion -> `APP_VERSION=04.01.28` / `PROJECT_SCHEMA_VERSION=04.01.28`; `git diff --check -- .` -> pass.
+14. This slice does not persist `_nle_project_state`, replace legacy `editor_state`, declare final NLE disk-format cutover, perform per-pixel NLE writes, change UI/UX labels/layout/shortcuts/colors/popups, change STT/cache defaults, build/sign/upload an App Store package, or provide App Store submission proof.
 
 ## v04.01.27 G2 Top-Level NLE Canonical Load Opt-In Proof
 

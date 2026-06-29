@@ -691,7 +691,9 @@ def _project_raw_subtitle_segments(
 def _top_level_nle_canonical_subtitle_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         from core.project.nle_persistence_guard import (
+            NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
             approved_nle_snapshot_payload,
+            approved_nle_snapshot_canonical_load_requested,
             approved_top_level_nle_canonical_load_requested,
             approved_top_level_nle_payload,
         )
@@ -700,15 +702,60 @@ def _top_level_nle_canonical_subtitle_segments(project: dict[str, Any]) -> list[
         return []
     if not approved_top_level_nle_canonical_load_requested(project):
         return []
+    if approved_nle_snapshot_canonical_load_requested(project):
+        return []
     nle_payload = project.get("nle")
     snapshot_payload = project.get("nle_snapshot")
     if not approved_top_level_nle_payload(nle_payload) or not approved_nle_snapshot_payload(snapshot_payload):
+        return []
+    snapshot_persistence = (
+        snapshot_payload.get("persistence")
+        if isinstance(snapshot_payload, dict) and isinstance(snapshot_payload.get("persistence"), dict)
+        else {}
+    )
+    if str(snapshot_persistence.get("canonical_load_owner") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER:
         return []
     rows = editor_rows_from_top_level_nle_payload(nle_payload)
     snapshot_rows = editor_rows_from_top_level_nle_payload(snapshot_payload)
     if _nle_canonical_load_signature(rows) != _nle_canonical_load_signature(snapshot_rows):
         return []
     return rows if rows else []
+
+
+def _nle_snapshot_canonical_subtitle_segments(project: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        from core.project.nle_persistence_guard import (
+            approved_nle_snapshot_canonical_load_requested,
+            approved_nle_snapshot_payload,
+            approved_top_level_nle_canonical_load_requested,
+        )
+        from core.project.nle_snapshot import editor_rows_from_top_level_nle_payload, nle_snapshot_readback_signature
+    except Exception:
+        return []
+    if not approved_nle_snapshot_canonical_load_requested(project):
+        return []
+    if approved_top_level_nle_canonical_load_requested(project):
+        return []
+    snapshot_payload = project.get("nle_snapshot")
+    if not approved_nle_snapshot_payload(snapshot_payload):
+        return []
+    signature = nle_snapshot_readback_signature(snapshot_payload)
+    sequence_signatures = signature.get("sequences") if isinstance(signature.get("sequences"), list) else []
+    if not sequence_signatures:
+        return []
+    first_sequence = sequence_signatures[0] if isinstance(sequence_signatures[0], dict) else {}
+    caption_count = len(first_sequence.get("captions") or [])
+    gap_count = len(first_sequence.get("gaps") or [])
+    metadata = snapshot_payload.get("metadata") if isinstance(snapshot_payload, dict) else {}
+    if caption_count != int(metadata.get("caption_count") or 0):
+        return []
+    if gap_count != int(metadata.get("gap_count") or 0):
+        return []
+    rows = editor_rows_from_top_level_nle_payload(
+        snapshot_payload,
+        canonical_source="nle_snapshot",
+    )
+    return rows if rows and len(rows) == caption_count + gap_count else []
 
 
 def _nle_canonical_load_signature(rows: list[dict[str, Any]]) -> list[tuple[str, int, int, str, bool]]:
@@ -737,7 +784,9 @@ def project_segments_to_editor(
     editor_subtitles = editor_state.get("subtitles", {}) or {}
     vector_canvas = ((editor_state.get("rendering", {}) or {}).get("subtitle_canvas", {}) or {})
     external_text_assets = project_uses_external_text_assets(project)
-    raw_segments = _top_level_nle_canonical_subtitle_segments(project)
+    raw_segments = _nle_snapshot_canonical_subtitle_segments(project)
+    if not raw_segments:
+        raw_segments = _top_level_nle_canonical_subtitle_segments(project)
     if not raw_segments:
         raw_segments = _project_raw_subtitle_segments(
             project,
