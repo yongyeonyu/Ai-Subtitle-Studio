@@ -160,6 +160,26 @@ final-authority, and live projection budget contracts were preserved. It does
 not by itself approve subtitle quality, conversion-speed regression, App Store
 packaging, real-media visual proof, or persisted NLE disk-format cutover.
 
+For the selected stronger live active-final artifact gate, audit the existing
+representative live proof artifact instead of rerunning the app:
+
+```bash
+./venv/bin/python tools/audit_g3_active_final_surface.py \
+  --source-dir output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629 \
+  --output-dir output/manual_verification/latest/g3_active_final_surface_audit_YYYYMMDD_HHMM
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_g3_active_final_surface_audit.py
+```
+
+A pass means the saved source proof passed, active pre-final samples with
+`nle_runtime_track_counts.final > 0` were found, at least one nonzero snapshot
+matched an active-final sample by elapsed timestamp, final-only authority and
+zero-worker projection-budget contracts were preserved, and raw-leak status was
+clean by saved compact-contract flags plus source summary failure lists. This
+is an offline artifact audit; it does not rebind the source proof app version,
+rescan raw payloads that were not stored, prove active video export, or approve
+UI/UX, STT/cache defaults, App Store readiness, or persisted NLE disk-format
+cutover.
+
 ## NLE preview-cache relink validation
 
 Preview/skimming frame-cache relink or proxy-switch contract changes should prove same-media relink reuse, proxy/different-media blocking, and unchanged preview-cache worker behavior before any broader QA.

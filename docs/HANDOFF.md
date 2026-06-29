@@ -33,7 +33,53 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / G3 Active-Worker Export Final-Surface Regression Guard
+## Current Handoff - 2026-06-29 v04.01.31 / G3 Stronger Live Active-Final Artifact Audit
+
+### Scope
+
+- Completed a bounded G3 stronger live active-final artifact audit.
+- Added `tools/audit_g3_active_final_surface.py`.
+- Added `tests/test_g3_active_final_surface_audit.py`.
+- Production app code was unchanged.
+- Updated active G3 pointers, completed archive, project state, NLE action status, validation guide, validation result, and this handoff.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.31`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.31`.
+- Audit report: `output/manual_verification/latest/g3_active_final_surface_audit_v040131_20260629_1558/g3_active_final_surface_audit.md`.
+- Audit state: `status=passed`, source live proof status `passed`, source samples `206`, failed source samples `0`, generation completed `true`, issues `[]`.
+- Valid active-final observations: `12`, poll `193` through `204`, elapsed `99.882s` through `107.317s`, max active final count `47`.
+- Runtime reference tracks remained present during active-final samples: max STT1 `146`, STT2 `39`, subtitle-preview `8`.
+- Exact snapshot pair: `snapshots/live_nle_13_107317ms.png`, sample elapsed `107.317s`, snapshot elapsed `107.317s`, delta `0.0s`, bytes `176725`.
+- `audit_app_version=04.01.31` identifies the audit code only. `source_proof_app_version=unknown_not_reexecuted_by_this_audit`.
+- Raw-payload leakage was checked from derived compact-contract flags and source summary failure lists because raw status payloads were intentionally not stored.
+- This is an offline audit of an existing representative live proof artifact. It is not a new live run.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/audit_g3_active_final_surface.py tests/test_g3_active_final_surface_audit.py` -> pass.
+- Focused audit guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_g3_active_final_surface_audit.py` -> `3 passed`.
+- Audit generation: `./venv/bin/python tools/audit_g3_active_final_surface.py --output-dir output/manual_verification/latest/g3_active_final_surface_audit_v040131_20260629_1558` -> `status=passed valid_active_final_observations=12 snapshot_pairs=1`.
+- Three sub-agent reviews were collected for architecture, QE/evidence, and docs/workflow wording. Jammini `--status` resolved the active route, but the fresh `--handoff-probe` packet did not produce a physical handoff file; `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- Do not claim full G3 completion from this slice.
+- Do not reuse this artifact audit as App Store, STT default, UI/UX, full QA, or all-G3-complete proof; it is only the named live active-final runtime/status artifact gate.
+- Do not claim source proof app-version rebinding. The audit runs at current `APP_VERSION=04.01.31`, but the source proof app version is unknown from the saved JSON.
+- This audit does not prove active video export while generation is running, save/export artifact counts, subtitle quality/speed beyond the already named source artifacts, worker scheduler changes, or persisted NLE disk-format cutover.
+- G0 still requires Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, content-bound App Store Connect validation, upload/submission proof, and owner-approved metadata values JSON.
+- G1 cache defaults remain off until explicit owner approval chooses exactly one cache and reruns same-fixture proof after the default change.
+
+### Next Recommended Action
+
+- Continue remaining active groups from `docs/planning_queue/ACTION_ITEMS.md`.
+- G3 is now guard-only with no additional active-final gate selected. Future G3 work needs a fresh bounded owner-selected gate.
+- If continuing G0, first provide owner-approved metadata values JSON or configure Apple Distribution / 3rd Party Mac Developer Installer identities; do not upload from owner approval alone.
+- If continuing G1, ask the owner whether to promote exactly one cache default, then create a rollback boundary and rerun same-fixture proof after the default change.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / G3 Active-Worker Export Final-Surface Regression Guard
 
 ### Scope
 

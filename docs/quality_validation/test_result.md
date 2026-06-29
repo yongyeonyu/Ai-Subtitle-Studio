@@ -1,5 +1,28 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.31 G3 Stronger Live Active-Final Artifact Audit - 2026-06-29 KST
+
+- 실행 모드: source-app G3 offline audit of existing representative live-NLE runtime/status artifact for active pre-final `final > 0` observations.
+- 결과: pass for the bounded stronger live active-final artifact audit. This closes only the selected runtime/status artifact gate; it is not full G3 completion or a new live run.
+- 저장 위치:
+  - Audit report: `output/manual_verification/latest/g3_active_final_surface_audit_v040131_20260629_1558/g3_active_final_surface_audit.md`
+  - Audit JSON: `output/manual_verification/latest/g3_active_final_surface_audit_v040131_20260629_1558/g3_active_final_surface_audit.json`
+  - Source live proof: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/live_nle_runtime_proof.json`
+  - Source status samples: `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/status_samples.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040131-g3-stronger-live-active-final-artifact-audit`
+- 실제 결과:
+  - Audit state: `status=passed`, source live proof status `passed`, source sample count `206`, source failed sample count `0`, source generation completed `true`, issues `[]`.
+  - Active pre-final `final > 0` observations: `12`, spanning poll `193` through `204`, elapsed `99.882s` through `107.317s`, with active final count `47`.
+  - Runtime reference tracks remained present during the active-final samples: max STT1 `146`, STT2 `39`, subtitle-preview `8`.
+  - Exact snapshot pair: `snapshots/live_nle_13_107317ms.png`, sample elapsed `107.317s`, snapshot elapsed `107.317s`, delta `0.0s`, bytes `176725`.
+  - Final-only authority and projection budget stayed valid in the saved compact-contract fields; raw-leak evidence is derived from saved compact-contract flags and source summary failure lists because raw status payloads were intentionally not stored.
+  - `audit_app_version=04.01.31` identifies the audit code only; `source_proof_app_version=unknown_not_reexecuted_by_this_audit`.
+  - This audit does not prove new live execution, active video export while generation is running, save/export artifact counts, UI/UX change, STT/cache default promotion, worker fan-out/scheduler change, persisted NLE disk-format cutover, App Store readiness, upload, or submission.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_g3_active_final_surface.py tests/test_g3_active_final_surface_audit.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_g3_active_final_surface_audit.py` -> `3 passed`.
+  - `./venv/bin/python tools/audit_g3_active_final_surface.py --output-dir output/manual_verification/latest/g3_active_final_surface_audit_v040131_20260629_1558` -> `status=passed valid_active_final_observations=12 snapshot_pairs=1`.
+
 ## v04.01.31 G3 Active-Worker Export Final-Surface Regression Guard - 2026-06-29 KST
 
 - 실행 모드: source-app G3 app-command export final-surface regression guard for active-worker status.

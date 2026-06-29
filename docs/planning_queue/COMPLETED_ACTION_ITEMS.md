@@ -19,6 +19,22 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.31 G3 Stronger Live Active-Final Artifact Audit
+
+Source request: continue remaining action items, verify and use Jammini/agents, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route (`active_conversation_id=075ebb10-b98a-43bd-b9ee-9046675d41d7`).
+2. `tools/jammini_watchdog.sh --handoff-probe` sent probe `20260629-155058`, but no fresh physical handoff file was visible; Dex did not claim delivered Jammini proof from chat-only status.
+3. Three sub-agent reviews were completed for architecture, strict QE/evidence, and docs/workflow wording. All converged on an offline artifact audit that can close only the selected stronger live active-final runtime/status gate, with source-proof version binding and raw-payload limitations explicit.
+4. Added `tools/audit_g3_active_final_surface.py`, a read-only audit for the existing representative live proof artifact at `output/manual_verification/latest/g3_live_nle_real_media_observability_timeout20_20260629/`.
+5. Added `tests/test_g3_active_final_surface_audit.py` covering the positive active-final exact-snapshot path plus blocked completed-only, authority-drift, raw-leak, budget-drift, and missing-snapshot cases.
+6. Audit evidence was written at `output/manual_verification/latest/g3_active_final_surface_audit_v040131_20260629_1558/g3_active_final_surface_audit.md`.
+7. Audit result: `status=passed`, `source_live_proof_status=passed`, source samples `206`, failed source samples `0`, generation completed `true`, valid active-final observations `12`, max active final count `47`, exact snapshot pair `snapshots/live_nle_13_107317ms.png`, delta `0.0s`, bytes `176725`, and issues `[]`.
+8. The audit proves active pre-final samples where `nle_runtime_track_counts.final > 0` while STT1/STT2/subtitle-preview reference tracks remain present, compact final-authority checks stay `final=true` and non-final tracks `false`, projection budget stays zero-worker/non-shared, and raw-leak status is clean by derived compact-contract flags plus source summary failure lists.
+9. Limitation: this is an offline audit of an existing source proof. `audit_app_version=04.01.31` identifies the audit code; the source proof app version is `unknown_not_reexecuted_by_this_audit`. Raw payloads were intentionally not stored, so raw-leak evidence is derived from saved compact-contract flags and source failure lists rather than a fresh raw-payload rescan.
+10. Focused verification passed: `./venv/bin/python -m py_compile tools/audit_g3_active_final_surface.py tests/test_g3_active_final_surface_audit.py`; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_g3_active_final_surface_audit.py` -> `3 passed`; audit generation -> `status=passed valid_active_final_observations=12 snapshot_pairs=1`.
+11. This slice does not claim full G3 completion, new live execution, active video export while generation is running, save/export artifact counts, App Store readiness/upload/submission, STT/cache default promotion, model downgrade, STT2 skipping, UI/UX change, worker fan-out/scheduler change, production-code behavior change, persisted NLE disk-format cutover, or broader quality/speed proof beyond the named source artifacts.
+
 ## v04.01.31 G3 Active-Worker Export Final-Surface Regression Guard
 
 Source request: continue remaining action items, verify and use Jammini/agents, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
