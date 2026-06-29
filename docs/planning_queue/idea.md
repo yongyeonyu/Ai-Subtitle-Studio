@@ -192,3 +192,26 @@ Rules:
 - 다음 추천 조각:
   - 자동화 증빙은 확보됐으므로,
   - 같은 fixture로 `candidate 전환 -> safety filter 변경 -> chapter 선택 -> 저장 -> 재열기 -> 자동 roughcut 진입` 수동 smoke와 artifact를 묶어 남기기
+
+### 2026-06-29 - dex_sugestion: Roughcut Generation Baseline Audit
+
+- 상태:
+  - 토론용 제안입니다. 대표님 승인 전까지 `ACTION_ITEMS.md` 실행 항목으로 간주하지 않습니다.
+- `덱스` 의견:
+  - 러프컷 생성은 바로 새 알고리즘을 넣기보다 baseline audit부터 잡는 것이 안전합니다.
+  - 현재 러프컷 생성 품질을 `초안 생성`, `안전성 검증`, `후보화`, `저장/재열기/렌더 plan 안정성`으로 나눠 수치화해야 합니다.
+  - deterministic 후보 생성이 먼저이고, LLM은 전체 결정자가 아니라 병합/제목/요약/전환 판단 보조자로 제한하는 쪽이 안전합니다.
+  - 단일 결과보다 `conservative`, `balanced`, `highlight` 3종 후보를 두고 대표님이 선택하는 구조가 러프컷을 자동 편집이 아닌 편집 보조로 유지합니다.
+- 추천 baseline audit 항목:
+  - 입력 자막 row 수, VAD/침묵 row 수, 컷 경계 row 수
+  - 현재 roughcut major/chapter 결과와 각 경계의 근거
+  - LLM 호출 시간, chunk 수, timeout/fallback 여부
+  - risky boundary count와 위험 사유: 문장 중간, 발화 중간, 너무 짧은 구간, 영상 끝 초과, overlap 후보
+  - roughcut candidate 수, 선택 후보, safety filter 상태
+  - render plan / SRT export / save-reopen 동일성
+- hard gates:
+  - 최종 자막 row, STT1/STT2 후보 track, VAD track, final save/export authority는 변경하지 않습니다.
+  - 위험 컷은 자동 render/export 확정으로 넘기지 않고 후보/검토 상태로 둡니다.
+  - `invalid/non_monotonic/overlap = 0/0/0`, save/reopen stable, roughcut sidecar/render plan parity를 요구합니다.
+- 다음 선택지:
+  - 대표님이 승인하면 첫 실행 항목은 `roughcut_generation_baseline_audit`로 만들고, 새 기능 구현 없이 현재 결과와 약점을 artifact로 남기는 좁은 검증부터 시작합니다.

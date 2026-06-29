@@ -5,6 +5,7 @@ ui/main/main_file_ops.py
 FileOpsMixin — 파일/폴더 선택 · 배치 시작 · 멀티클립 진입 · 캐시 삭제 · 종료
 """
 import os
+import time
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QApplication
 from PyQt6.QtCore import QTimer
@@ -122,7 +123,7 @@ class FileOpsMixin:
         self._editor_exit_save_completed = True
         return True
 
-    def _prepare_dialog_state(self):
+    def _prepare_dialog_state(self, *, process_events: bool = False):
         pause_lora = getattr(self, "_pause_personalization_for_foreground_activity", None)
         if callable(pause_lora):
             run_nonfatal_ui_step("파일 작업", "file dialog foreground pause", lambda: pause_lora("file_dialog"), default=None)
@@ -133,7 +134,8 @@ class FileOpsMixin:
             call_nonfatal_ui_step("파일 작업", fw, "clearFocus", step="focus clear", default=None)
         call_nonfatal_ui_step("파일 작업", self, "unsetCursor", step="dialog state cursor unset", default=None)
         call_nonfatal_ui_step("파일 작업", self, "update", step="dialog state update", default=None)
-        run_nonfatal_ui_step("파일 작업", "dialog state processEvents", QApplication.processEvents, default=None)
+        if process_events:
+            run_nonfatal_ui_step("파일 작업", "dialog state processEvents", QApplication.processEvents, default=None)
 
     def _dialog_start_folder(self, folder):
         path = str(folder or "").strip() or os.path.expanduser("~")
@@ -189,6 +191,7 @@ class FileOpsMixin:
         QTimer.singleShot(delay_ms, _clear_priority)
 
     def _run_foreground_file_dialog(self, opener):
+        started = time.perf_counter()
         self._foreground_file_open_requested = True
         suspend_startup = getattr(self, "_suspend_startup_background_for_foreground_action", None)
         if callable(suspend_startup):
@@ -197,7 +200,35 @@ class FileOpsMixin:
         result = None
         try:
             self._prepare_dialog_state()
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log_perf(
+                    "file_dialog.open",
+                    event="prepared",
+                    elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                    stage="runtime",
+                    startup_quiet_ms=(
+                        self._startup_background_quiet_remaining_ms()
+                        if callable(getattr(self, "_startup_background_quiet_remaining_ms", None))
+                        else None
+                    ),
+                )
+            except Exception:
+                pass
             result = opener()
+            try:
+                from core.runtime.logger import get_logger
+
+                get_logger().log_perf(
+                    "file_dialog.open",
+                    event="returned",
+                    elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                    stage="runtime",
+                    selected=bool(self._dialog_result_has_selection(result)),
+                )
+            except Exception:
+                pass
             return result
         finally:
             self._finish_file_dialog_foreground(result)

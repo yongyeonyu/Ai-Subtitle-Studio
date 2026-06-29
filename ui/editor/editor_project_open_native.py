@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -30,6 +31,14 @@ from ui.project.project_session_runtime import (
     apply_project_multiclip_runtime,
     attach_project_session,
 )
+
+
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _srt_open_project_library_scan_enabled() -> bool:
+    value = os.environ.get("AI_SUBTITLE_STUDIO_SRT_OPEN_SCAN_PROJECT_LIBRARY", "")
+    return str(value).strip().lower() in _TRUE_ENV_VALUES
 
 
 def schedule_native_open_editor_media(
@@ -308,7 +317,12 @@ def normalized_open_path(path: str | None) -> str:
         return ""
 
 
-def project_sidecar_candidates_for_srt(srt_path: str, media_path: str | None = None) -> list[str]:
+def project_sidecar_candidates_for_srt(
+    srt_path: str,
+    media_path: str | None = None,
+    *,
+    include_project_library: bool | None = None,
+) -> list[str]:
     """Return likely project JSON files for a direct SRT open."""
     candidates: list[str] = []
 
@@ -341,13 +355,19 @@ def project_sidecar_candidates_for_srt(srt_path: str, media_path: str | None = N
         _add(project_file_path_for_name(media_stem))
         _add(os.path.join(PROJECTS_DIR, f"{media_stem}.json"))
 
-    try:
-        for name in os.listdir(PROJECTS_DIR):
-            if not is_project_file_path(name):
-                continue
-            _add(os.path.join(PROJECTS_DIR, name))
-    except Exception:
-        pass
+    scan_project_library = (
+        _srt_open_project_library_scan_enabled()
+        if include_project_library is None
+        else bool(include_project_library)
+    )
+    if scan_project_library:
+        try:
+            for name in os.listdir(PROJECTS_DIR):
+                if not is_project_file_path(name):
+                    continue
+                _add(os.path.join(PROJECTS_DIR, name))
+        except Exception:
+            pass
 
     return candidates
 
@@ -455,11 +475,23 @@ def project_matches_opened_srt(project: dict, srt_path: str, media_path: str | N
 
 
 def find_project_for_srt_open(srt_path: str, media_path: str | None = None) -> tuple[str, dict | None]:
-    for project_path in project_sidecar_candidates_for_srt(srt_path, media_path):
+    started = time.perf_counter()
+    candidates = project_sidecar_candidates_for_srt(srt_path, media_path)
+    loaded_count = 0
+    for project_path in candidates:
+        loaded_count += 1
         project = load_project(project_path, hydrate_text_assets=True)
         if not isinstance(project, dict):
             continue
         if project_matches_opened_srt(project, srt_path, media_path):
+            get_logger().log_perf(
+                "editor.open_srt.project_lookup",
+                event="matched",
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                candidates=len(candidates),
+                loaded=loaded_count,
+                project_basename=os.path.basename(project_path),
+            )
             return project_path, project
 
         srt_abs = normalized_open_path(srt_path)
@@ -476,7 +508,23 @@ def find_project_for_srt_open(srt_path: str, media_path: str | None = None) -> t
                 normalized_open_path(expected),
                 normalized_open_path(expected_json),
             }:
+                get_logger().log_perf(
+                    "editor.open_srt.project_lookup",
+                    event="asset_sidecar",
+                    elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                    candidates=len(candidates),
+                    loaded=loaded_count,
+                    project_basename=os.path.basename(project_path),
+                )
                 return project_path, project
+    get_logger().log_perf(
+        "editor.open_srt.project_lookup",
+        event="not_found",
+        elapsed_ms=(time.perf_counter() - started) * 1000.0,
+        candidates=len(candidates),
+        loaded=loaded_count,
+        project_library_scan=_srt_open_project_library_scan_enabled(),
+    )
     return "", None
 
 

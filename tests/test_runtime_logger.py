@@ -1,6 +1,7 @@
 import io
 import sys
 import unittest
+from unittest import mock
 
 from core.runtime.logger import get_logger
 
@@ -121,6 +122,30 @@ class RuntimeLoggerTests(unittest.TestCase):
         self.assertIn("842.3ms", printed_line)
         self.assertIn("home_deferred=True", printed_line)
         self.assertEqual(logger.recent_lines(10), [])
+
+    def test_terminal_perf_also_emits_trace_event_when_trace_is_active(self):
+        logger = get_logger()
+        logger._terminal_stdout = io.StringIO()
+        trace = mock.Mock()
+
+        with mock.patch("core.runtime.trace_logger.current_app_trace_logger", return_value=trace):
+            logger.log_perf(
+                "app.main",
+                event="window_shown",
+                elapsed_ms=123.4,
+                stage="runtime",
+                ready=True,
+            )
+
+        trace.log_event.assert_called_once_with(
+            "perf",
+            stage="runtime",
+            level="DEBUG",
+            label="app.main",
+            perf_event="window_shown",
+            elapsed_ms=123.4,
+            ready=True,
+        )
 
 
 if __name__ == "__main__":

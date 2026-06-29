@@ -312,6 +312,22 @@ class AppLogger:
                 continue
             parts.append(f"{key}={value_text}")
         self._emit_terminal(" · ".join(parts), level="DEBUG", stage=stage or "runtime")
+        try:
+            from core.runtime.trace_logger import current_app_trace_logger
+
+            trace = current_app_trace_logger()
+            if trace is not None:
+                trace.log_event(
+                    "perf",
+                    stage=stage or "runtime",
+                    level="DEBUG",
+                    label=str(label or "").strip(),
+                    perf_event=event_text,
+                    elapsed_ms=elapsed_ms,
+                    **fields,
+                )
+        except Exception:
+            pass
 
 
 def get_logger() -> AppLogger:

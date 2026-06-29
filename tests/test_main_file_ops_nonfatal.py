@@ -77,9 +77,14 @@ class MainFileOpsNonfatalTests(unittest.TestCase):
             mock.patch.object(window, "unsetCursor", side_effect=RuntimeError("cursor gone"), create=True),
             mock.patch.object(window, "update", side_effect=RuntimeError("update gone"), create=True),
         ):
-            window._prepare_dialog_state()
+            window._prepare_dialog_state(process_events=True)
 
         process_events.assert_called_once()
+
+    def test_prepare_dialog_state_skips_event_drain_by_default(self):
+        window = _FileOpsWindow()
+        with mock.patch.object(QApplication, "processEvents", side_effect=AssertionError("startup event drain should be opt-in")):
+            window._prepare_dialog_state()
 
     def test_file_dialog_replays_deferred_home_rebuild_after_cancel(self):
         window = _FileOpsWindow()
@@ -100,20 +105,15 @@ class MainFileOpsNonfatalTests(unittest.TestCase):
         self.app.processEvents()
         window._build_home_content.assert_called_once()
 
-    def test_file_dialog_marks_active_before_startup_events_are_processed(self):
+    def test_file_dialog_fast_path_skips_startup_event_drain_before_native_dialog(self):
         window = _FileOpsWindow()
-        seen = []
-
-        def _process_events():
-            seen.append(bool(getattr(window, "_file_dialog_active", False)))
 
         with (
-            mock.patch.object(QApplication, "processEvents", side_effect=_process_events),
+            mock.patch.object(QApplication, "processEvents", side_effect=AssertionError("startup event drain should not run")),
             mock.patch.object(QFileDialog, "getOpenFileNames", return_value=([], "")),
         ):
             window._safe_open_file_names("파일 선택", "/tmp", "Media")
 
-        self.assertEqual(seen, [True])
         self.assertFalse(window._file_dialog_active)
 
     def test_file_dialog_keeps_foreground_priority_until_selection_dispatches(self):

@@ -181,6 +181,39 @@ class EditorSrtOpenRefreshTests(unittest.TestCase):
             self.assertEqual(found_path, str(project_path))
             self.assertIsInstance(project, dict)
 
+    def test_direct_srt_open_does_not_scan_unrelated_project_library_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects_dir = root / "projects"
+            projects_dir.mkdir()
+            exact_project = projects_dir / "clip.aissproj"
+            unrelated_project = projects_dir / "unrelated.aissproj"
+            media_path = root / "clip.mp4"
+            srt_path = root / "clip.srt"
+            exact_project.write_text("{}", encoding="utf-8")
+            unrelated_project.write_text("{}", encoding="utf-8")
+            media_path.write_bytes(b"video")
+            srt_path.write_text("1\n00:00:01,000 --> 00:00:02,000\nSRT\n\n", encoding="utf-8")
+
+            def _load_project(path, **_kwargs):
+                if Path(path) == unrelated_project:
+                    raise AssertionError("unrelated project library file should not be loaded")
+                return {"app": "AI Subtitle Studio"}
+
+            def _project_file_path_for_name(name, *, folder=None):
+                return str((Path(folder) if folder else projects_dir) / f"{name}.aissproj")
+
+            with mock.patch("ui.editor.editor_project_open_native.PROJECTS_DIR", str(projects_dir)), \
+                 mock.patch("ui.editor.editor_project_open_native.project_file_path_for_name", side_effect=_project_file_path_for_name), \
+                 mock.patch("ui.editor.editor_project_open_native.load_project", side_effect=_load_project) as load_project, \
+                 mock.patch("ui.editor.editor_project_open_native.project_matches_opened_srt", return_value=False), \
+                 mock.patch.dict("os.environ", {"AI_SUBTITLE_STUDIO_SRT_OPEN_SCAN_PROJECT_LIBRARY": ""}, clear=False):
+                found_path, project = _Lifecycle()._find_project_for_srt_open(str(srt_path), str(media_path))
+
+            self.assertEqual(found_path, "")
+            self.assertIsNone(project)
+            self.assertEqual([Path(call.args[0]).name for call in load_project.call_args_list], ["clip.aissproj"])
+
     def test_direct_srt_metadata_merge_preserves_srt_text_and_restores_project_tags(self):
         lifecycle = _Lifecycle()
         srt_segments = [
