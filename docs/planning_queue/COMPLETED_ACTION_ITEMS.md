@@ -34,6 +34,20 @@ Source request: continue remaining action items, verify and use Jammini/agents, 
 9. Focused verification passed: compile check for App Store audit/package/preflight/test modules; `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `37 passed`.
 10. This slice does not build a package, sign with Apple Distribution, run sandbox smoke, run App Store Connect validation, upload, submit, complete owner metadata, change UI/UX, change subtitle generation, change STT/cache defaults, or change NLE behavior.
 
+## v04.01.31 G1 STT Cache Default Review Packet Evidence Binding Refresh
+
+Source request: continue remaining action items, verify and use Jammini/agents, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route (`active_conversation_id=075ebb10-b98a-43bd-b9ee-9046675d41d7`).
+2. `tools/jammini_watchdog.sh --handoff-probe` sent probe `20260629-152449`, but no fresh physical handoff file was visible; a broken probe index pointer was removed and Dex did not claim delivered Jammini proof from chat-only status.
+3. Three sub-agent reviews were completed: 한결 architecture, 서린 strict QE/evidence, and 유진 docs/workflow wording. All converged on keeping this slice owner-review-only/defaults-off and fixing the review packet run-id evidence binding.
+4. `tools/generate_stt_cache_default_review_packet.py` now selects the readiness run whose elapsed/quality/count summary matches the accepted write/hit evidence instead of blindly selecting the first strict real run.
+5. `tests/test_stt_cache_default_review_packet.py` now covers the real-world mismatch pattern where the first strict hit row is `20260628_105119` at `1.266s`, while the accepted cache-hit replay evidence is `20260628_220718` at `1.183s`.
+6. Review packet evidence was refreshed at `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/stt_cache_default_review_packet.md`.
+7. Refreshed packet state: `status=owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `false/false`, selected write run `20260628_220327` at `177.888s`, selected hit run `20260628_220718` at `1.183s`, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stable `true`, global max active `1`, and timeout detected `false`.
+8. Focused verification passed: `./venv/bin/python -m py_compile tools/generate_stt_cache_default_review_packet.py tests/test_stt_cache_default_review_packet.py core/runtime/config.py`; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py` -> `6 passed`; `git diff --check -- .` -> pass.
+9. This slice does not promote cache defaults, change `DEFAULT_ADV_SETTINGS`, skip STT2, disable word precision, downgrade models, relax quality gates, change UI/UX, build/sign/upload App Store artifacts, or change NLE behavior. The `1.183s` value remains same-fixture cache-hit replay evidence, not first-run production speed.
+
 ## v04.01.31 G2 Final Cutover Ready Opt-In Proof
 
 Source request: continue remaining action items, verify and use Jammini/agents, apply the NLE structure, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.

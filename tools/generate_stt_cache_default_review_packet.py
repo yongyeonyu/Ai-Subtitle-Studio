@@ -124,10 +124,33 @@ def _decision_matrix(
     return rows
 
 
-def _first_run(readiness: dict[str, Any], family: str, key: str) -> dict[str, Any]:
+def _numbers_match(left: Any, right: Any, *, tolerance: float = 0.001) -> bool:
+    if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+        return left == right
+    return abs(float(left) - float(right)) <= tolerance
+
+
+def _matching_run(
+    readiness: dict[str, Any],
+    family: str,
+    key: str,
+    acceptance: dict[str, Any],
+) -> dict[str, Any]:
     family_data = dict((readiness.get("families") or {}).get(family) or {})
-    rows = family_data.get(key) or []
-    return dict(rows[0]) if rows and isinstance(rows[0], dict) else {}
+    rows = [dict(row) for row in family_data.get(key) or [] if isinstance(row, dict)]
+    if not rows:
+        return {}
+    match_fields = (
+        "elapsed_sec",
+        "quality_score",
+        "raw_segments",
+        "final_segments",
+        "reference_segments",
+    )
+    for row in rows:
+        if all(_numbers_match(row.get(field), acceptance.get(field)) for field in match_fields):
+            return row
+    return rows[0]
 
 
 def build_review_packet(
@@ -161,8 +184,18 @@ def build_review_packet(
         and hit_summary["accepted"] is True
         and timeout_audit.get("timeout_detected") is False
     )
-    combined_write = _first_run(readiness, "combined_collect_cache", "strict_real_cache_write_runs")
-    combined_hit = _first_run(readiness, "combined_collect_cache", "strict_real_cache_hit_runs")
+    combined_write = _matching_run(
+        readiness,
+        "combined_collect_cache",
+        "strict_real_cache_write_runs",
+        write_summary,
+    )
+    combined_hit = _matching_run(
+        readiness,
+        "combined_collect_cache",
+        "strict_real_cache_hit_runs",
+        hit_summary,
+    )
     production_defaults_unchanged = not any(current_defaults.values())
     matrix = _decision_matrix(defaults=current_defaults, readiness=readiness, evidence_ready=evidence_ready)
     status = "owner_review_required" if evidence_ready and production_defaults_unchanged else "hold_default_off"
@@ -193,7 +226,11 @@ def build_review_packet(
                 "start_sec": 0,
                 "duration_sec": write_summary.get("duration_bound_sec") or hit_summary.get("duration_bound_sec"),
                 "write_run_id": combined_write.get("run_id"),
+                "write_run_path": combined_write.get("path"),
+                "write_elapsed_sec": combined_write.get("elapsed_sec"),
                 "hit_run_id": combined_hit.get("run_id"),
+                "hit_run_path": combined_hit.get("path"),
+                "hit_elapsed_sec": combined_hit.get("elapsed_sec"),
                 "same_media_and_reference": bool(
                     combined_write
                     and combined_hit
@@ -265,6 +302,8 @@ def render_markdown(packet: dict[str, Any]) -> str:
         f"- Fixture: `{fixture.get('media')}`",
         f"- Reference SRT: `{fixture.get('reference_srt')}`",
         f"- Same fixture cache-hit replay only: `{fixture.get('same_fixture_cache_hit_replay_only')}`",
+        f"- Write run: `{fixture.get('write_run_id')}` / `{fixture.get('write_run_path')}` / elapsed `{fixture.get('write_elapsed_sec')}`",
+        f"- Hit run: `{fixture.get('hit_run_id')}` / `{fixture.get('hit_run_path')}` / elapsed `{fixture.get('hit_elapsed_sec')}`",
         f"- Write accepted: `{write.get('accepted')}`, elapsed: `{write.get('elapsed_sec')}`",
         f"- Hit accepted: `{hit.get('accepted')}`, elapsed: `{hit.get('elapsed_sec')}`",
         f"- Cache-hit replay delta seconds: `{evidence.get('cache_hit_replay_delta_sec')}`",

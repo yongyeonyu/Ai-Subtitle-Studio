@@ -33,7 +33,50 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / G0 App Store Current-Version Readiness Refresh
+## Current Handoff - 2026-06-29 v04.01.31 / G1 STT Cache Default Review Packet Evidence Binding Refresh
+
+### Scope
+
+- Completed a bounded G1 owner-review packet evidence-binding refresh.
+- Fixed `tools/generate_stt_cache_default_review_packet.py` so selected readiness write/hit runs match the accepted evidence summary instead of blindly using the first strict real run.
+- Extended `tests/test_stt_cache_default_review_packet.py` for the real mismatch pattern where the accepted `1.183s` cache-hit replay belongs to run `20260628_220718`, not the older `20260628_105119` run at `1.266s`.
+- Regenerated the G1 review packet for the current source-app checkpoint.
+- Updated active G1 pointers, completed archive, project state, validation guide, validation result, and this handoff.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.31`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.31`.
+- G1 review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/stt_cache_default_review_packet.md`.
+- Refreshed packet state: `status=owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `false/false`.
+- Selected write run: `20260628_220327`, elapsed `177.888s`, path `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_220327/benchmark_results.json`.
+- Selected hit run: `20260628_220718`, elapsed `1.183s`, path `.codex_work/benchmarks/subtitle_pipeline_variants/20260628_220718/benchmark_results.json`.
+- NAS acceptance remains strict: raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, save/reopen stable `true`, global max active `1`, timeout detected `false`.
+- This is owner-review evidence only. The `1.183s` value is same-fixture cache-hit replay evidence, not first-run production speed.
+
+### Evidence
+
+- Packet generation: `./venv/bin/python tools/generate_stt_cache_default_review_packet.py --evidence-dir output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202 --output-dir output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527` -> `status=owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`.
+- Compile check: `./venv/bin/python -m py_compile tools/generate_stt_cache_default_review_packet.py tests/test_stt_cache_default_review_packet.py core/runtime/config.py` -> pass.
+- Focused G1 guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py` -> `6 passed`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture, QE/evidence, and docs/workflow wording. Jammini `--status` resolved the active route, but the fresh `--handoff-probe` packet did not produce a physical handoff file; a broken handoff index pointer was removed and `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G1 default promotion remains blocked until explicit owner approval chooses exactly one cache, with a rollback commit boundary and same-fixture write/hit proof after the change.
+- Keep `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false` until that approval exists.
+- Do not use this packet to claim production speed improvement, first-run speed, STT2 skipping, word precision removal, model downgrade, Fast-mode default promotion, App Store readiness, UI change, or NLE behavior change.
+- G0 still requires Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, content-bound App Store Connect validation, upload/submission proof, and owner-approved metadata values JSON.
+
+### Next Recommended Action
+
+- Continue remaining active groups from `docs/planning_queue/ACTION_ITEMS.md`.
+- If continuing G1, ask the owner whether to promote exactly one cache default, then create a rollback boundary and rerun same-fixture proof after the default change.
+- If continuing G0, first provide owner-approved metadata values JSON or configure Apple Distribution / 3rd Party Mac Developer Installer identities; do not upload from owner approval alone.
+- If continuing G2/G3, keep App Store, UI/UX, and cache-default proof surfaces separate from NLE/runtime proof.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / G0 App Store Current-Version Readiness Refresh
 
 ### Scope
 

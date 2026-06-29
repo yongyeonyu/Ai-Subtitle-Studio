@@ -57,7 +57,7 @@ The repository root intentionally keeps no active development docs other than
 - Previous NLE canonical load-owner gate matrix audit: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.md`
 - Latest top-level NLE gap projection coverage audit: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.md`
 - Latest NLE canonical load-owner review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`
-- Latest STT cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`
+- Latest STT cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/stt_cache_default_review_packet.md`
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.md`
 - Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`
 
@@ -103,8 +103,9 @@ preflight guard proof, `v04.01.27` top-level NLE canonical load opt-in proof,
 `v04.01.28` standalone NLE snapshot canonical load-source proof,
 `v04.01.29` runtime `_nle_project_state` persistence opt-in proof,
 `v04.01.30` legacy disk-shape replacement opt-in proof, `v04.01.31`
-final cutover-ready opt-in proof, and the `v04.01.31` G0 App Store
-current-version readiness refresh.
+final cutover-ready opt-in proof, the `v04.01.31` G0 App Store
+current-version readiness refresh, and the `v04.01.31` G1 STT cache review
+packet evidence-binding refresh.
 
 ## Must Not Break
 

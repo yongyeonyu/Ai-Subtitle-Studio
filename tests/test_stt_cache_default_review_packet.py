@@ -103,6 +103,14 @@ def _family(media: Path, reference: Path) -> dict:
     hit = dict(write)
     hit.update(
         {
+            "run_id": "20260628_105119",
+            "path": ".codex_work/benchmarks/subtitle_pipeline_variants/20260628_105119/benchmark_results.json",
+            "elapsed_sec": 1.266,
+        }
+    )
+    matching_hit = dict(hit)
+    matching_hit.update(
+        {
             "run_id": "20260628_220718",
             "path": ".codex_work/benchmarks/subtitle_pipeline_variants/20260628_220718/benchmark_results.json",
             "elapsed_sec": 1.183,
@@ -116,7 +124,7 @@ def _family(media: Path, reference: Path) -> dict:
         },
         "blockers": [],
         "strict_real_cache_write_runs": [write],
-        "strict_real_cache_hit_runs": [hit],
+        "strict_real_cache_hit_runs": [hit, matching_hit],
         "strict_generated_cache_hit_runs": [],
         "failed_cache_hit_runs": [],
     }
@@ -162,6 +170,16 @@ def test_review_packet_preserves_real_nas_acceptance_numbers(tmp_path: Path) -> 
     assert write["global_canvas_max_active_segments"] == 1
     assert evidence["representative_fixture"]["same_media_and_reference"] is True
     assert evidence["representative_fixture"]["same_fixture_cache_hit_replay_only"] is True
+    assert evidence["representative_fixture"]["write_run_id"] == "20260628_220327"
+    assert evidence["representative_fixture"]["write_run_path"].endswith(
+        "20260628_220327/benchmark_results.json"
+    )
+    assert evidence["representative_fixture"]["write_elapsed_sec"] == 177.888
+    assert evidence["representative_fixture"]["hit_run_id"] == "20260628_220718"
+    assert evidence["representative_fixture"]["hit_run_path"].endswith(
+        "20260628_220718/benchmark_results.json"
+    )
+    assert evidence["representative_fixture"]["hit_elapsed_sec"] == 1.183
     assert evidence["provider_calls"] == {
         "write_path": True,
         "cache_hit_replay": False,
@@ -208,6 +226,7 @@ def test_markdown_and_written_artifacts_avoid_misleading_claims(tmp_path: Path) 
     assert "owner-review packet" in markdown
     assert "Production defaults unchanged: `True`" in markdown
     assert "Default promotion allowed by this packet: `False`" in markdown
+    assert "Hit run: `20260628_220718`" in markdown
     assert "same-fixture cache-hit replay evidence, not first-run user speed" in markdown
     for forbidden in (
         "enabled by default",

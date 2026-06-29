@@ -1,5 +1,28 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.31 G1 STT Cache Default Review Packet Evidence Binding Refresh - 2026-06-29 KST
+
+- 실행 모드: source-app G1 owner-review packet evidence-binding refresh for NAS HeyDealer first-180s collect-cache write/hit evidence.
+- 결과: pass for the bounded review-packet refresh. G1 remains owner-review gated; runtime defaults remain off and default promotion is not allowed by this packet.
+- 저장 위치:
+  - Review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/stt_cache_default_review_packet.md`
+  - Packet JSON: `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/stt_cache_default_review_packet.json`
+  - Decision matrix: `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/decision_matrix.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040131-g1-stt-cache-default-review-packet-evidence-binding-refresh`
+- 실제 결과:
+  - `tools/generate_stt_cache_default_review_packet.py` now selects the readiness run matching accepted write/hit elapsed, quality, and segment-count evidence.
+  - Selected write run: `20260628_220327`, elapsed `177.888s`.
+  - Selected hit run: `20260628_220718`, elapsed `1.183s`.
+  - Packet state: `status=owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`.
+  - NAS acceptance remains strict: raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, save/reopen stable `true`, global max active `1`, timeout detected `false`.
+  - The `1.183s` value is same-fixture cache-hit replay evidence, not first-run production speed.
+  - This refresh does not promote cache defaults, change `DEFAULT_ADV_SETTINGS`, skip STT2, disable word precision, downgrade models, relax quality gates, change UI/UX, build/sign/upload App Store artifacts, or change NLE behavior.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/generate_stt_cache_default_review_packet.py tests/test_stt_cache_default_review_packet.py core/runtime/config.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py` -> `6 passed`.
+  - `./venv/bin/python tools/generate_stt_cache_default_review_packet.py --evidence-dir output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202 --output-dir output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527` -> `status=owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.31 G0 App Store Current-Version Readiness Refresh - 2026-06-29 KST
 
 - 실행 모드: source-app G0 non-destructive current-version App Store readiness audit and metadata owner-input package refresh.

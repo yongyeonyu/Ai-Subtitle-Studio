@@ -124,7 +124,10 @@ without enabling defaults or changing runtime behavior:
 The packet must remain review-only: `owner_review_required`,
 `production_defaults_unchanged=true`, `default_promotion_allowed=false`, and
 current defaults `stt_primary_collect_cache_enabled=false` plus
-`stt_recheck_collect_cache_enabled=false`.
+`stt_recheck_collect_cache_enabled=false`. The selected write/hit run IDs and
+paths must match the accepted evidence numbers; if multiple strict hit runs
+exist, do not let the packet bind the `1.183s` acceptance row to an older
+`1.266s` cache-hit run.
 
 Focused guards:
 
