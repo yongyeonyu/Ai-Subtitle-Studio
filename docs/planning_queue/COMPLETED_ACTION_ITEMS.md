@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.14-source-app
+Document-Version: 04.01.15-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,21 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.15 G0 App Store Identity And Metadata Blocker Refresh
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.15"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.15`.
+3. `tools/audit_app_store_readiness.py` now records local keychain identity evidence from `security find-identity`, including Apple Development, Apple Distribution, and 3rd Party Mac Developer Installer presence flags.
+4. The readiness audit now blocks explicitly on `apple_distribution_identity_missing_from_keychain` and `installer_identity_missing_from_keychain` in addition to the existing environment-variable, artifact, validation, and metadata gates.
+5. `tests/test_app_store_readiness_audit.py` covers the keychain blocker behavior with a fake Apple Development-only keychain result.
+6. G0 blocker-refresh evidence was written to `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`: `status=blocked`, `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `15`, Apple Development identity present, Apple Distribution identity missing, installer identity missing, and owner-input metadata pending `8/8`.
+7. The artifact also preserved keychain snapshots, version assertion, app codesign detail/verify output for the existing local app, missing `.pkg` signature output, audit JSON/stdout, and focused guard log.
+8. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+9. Focused verification passed: compile check for the touched audit/version modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `10 passed`; direct version assertion -> `APP_VERSION=04.01.15` / `PROJECT_SCHEMA_VERSION=04.01.15`; `git diff --check -- .` -> pass.
+10. This slice does not claim App Store readiness, Apple Distribution signed `.app`, signed App Store `.pkg`, `pkgutil --check-signature` pass, sandbox workflow smoke, App Store Connect validation, upload/submission completion, owner metadata completion, Developer ID DMG submission proof, UI/UX changes, subtitle-generation changes, or NLE behavior changes.
 
 ## v04.01.14 G3 Active Global-Canvas Responsiveness Proof
 

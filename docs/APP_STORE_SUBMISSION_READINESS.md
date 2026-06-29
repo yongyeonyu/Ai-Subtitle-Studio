@@ -6,7 +6,7 @@ AI Subtitle Studio can be treated as a Mac App Store submission candidate.
 ## Current Status
 
 - Status: blocked. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28, but distribution identities, signed `.pkg`, App Store validation, and owner metadata values are still incomplete.
-- Source app version: `04.01.14`.
+- Source app version: `04.01.15`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
 - Minimum macOS: `14.0`.
@@ -115,12 +115,14 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 - `output/manual_verification/latest/app_store_owner_approval_readiness_after_packaging_fix_20260628_2250/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_owner_approval_identity_check_20260629_0026/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`
 
 Latest known state: `status=blocked`, `local_packaging_ready=true`,
-`app_store_submission_ready=false`, blocker count `13`. The latest local
+`app_store_submission_ready=false`, blocker count `15`. The latest local
 identity check found only an Apple Development signing identity; Apple
-Distribution and 3rd Party Mac Developer Installer identities are still missing.
+Distribution and 3rd Party Mac Developer Installer identities are still missing,
+and all `8` non-code submission metadata items remain `owner_input_required`.
 
 ## Owner-Approved Command Sequence
 

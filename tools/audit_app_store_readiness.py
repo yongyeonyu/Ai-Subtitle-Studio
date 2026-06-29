@@ -6,6 +6,8 @@ import json
 import os
 import plistlib
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -265,6 +267,73 @@ def _check_environment() -> dict[str, Any]:
     }
 
 
+def _parse_security_identities(output: str) -> list[str]:
+    identities: list[str] = []
+    for line in output.splitlines():
+        match = re.search(r'^\s*\d+\)\s+[0-9A-Fa-f]+\s+"([^"]+)"', line)
+        if match:
+            identities.append(match.group(1))
+    return identities
+
+
+def _run_security_find_identity(args: list[str]) -> dict[str, Any]:
+    security = shutil.which("security")
+    if not security:
+        return {
+            "available": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "security command not found",
+            "identities": [],
+        }
+    try:
+        result = subprocess.run(
+            [security, "find-identity", "-v", *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        return {
+            "available": True,
+            "returncode": None,
+            "stdout": "",
+            "stderr": str(exc),
+            "identities": [],
+        }
+    return {
+        "available": True,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "identities": _parse_security_identities(result.stdout),
+    }
+
+
+def _check_local_signing_identities() -> dict[str, Any]:
+    codesigning = _run_security_find_identity(["-p", "codesigning"])
+    all_identities = _run_security_find_identity([])
+    identity_names = sorted(set(codesigning["identities"]) | set(all_identities["identities"]))
+
+    def _has(prefix: str) -> bool:
+        return any(name.startswith(prefix) for name in identity_names)
+
+    return {
+        "security_command_available": bool(codesigning["available"] or all_identities["available"]),
+        "codesigning_identities": codesigning["identities"],
+        "all_identities": all_identities["identities"],
+        "identity_names": identity_names,
+        "apple_development_present": _has("Apple Development:"),
+        "apple_distribution_present": _has("Apple Distribution:"),
+        "installer_distribution_present": _has("3rd Party Mac Developer Installer:"),
+        "raw": {
+            "codesigning": codesigning,
+            "all": all_identities,
+        },
+    }
+
+
 def _check_artifacts(app_path: Path, pkg_path: Path, output_dir: Path) -> dict[str, Any]:
     app_status = _path_status(app_path)
     pkg_status = _path_status(pkg_path)
@@ -351,6 +420,7 @@ def build_readiness_report(
     entitlements = _check_entitlements(root)
     info = _check_info_template(root)
     environment = _check_environment()
+    signing_identities = _check_local_signing_identities()
     artifacts = _check_artifacts(app_path, pkg_path, output_dir)
 
     blockers: list[str] = []
@@ -370,6 +440,10 @@ def build_readiness_report(
         blockers.append("apple_distribution_codesign_identity_not_configured")
     if not environment["installer_identity_configured"]:
         blockers.append("installer_identity_not_configured")
+    if not signing_identities["apple_distribution_present"]:
+        blockers.append("apple_distribution_identity_missing_from_keychain")
+    if not signing_identities["installer_distribution_present"]:
+        blockers.append("installer_identity_missing_from_keychain")
     if not environment["app_store_connect_auth_configured"]:
         blockers.append("app_store_connect_auth_not_configured")
 
@@ -399,6 +473,7 @@ def build_readiness_report(
         "entitlements": entitlements,
         "info_plist_template": info,
         "environment": environment,
+        "signing_identities": signing_identities,
         "artifacts": artifacts,
         "submission_content_audit": submission_content,
         "non_code_submission_items": non_code,
@@ -429,6 +504,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     blockers = list(payload.get("blockers") or [])
     artifacts = payload.get("artifacts") or {}
     environment = payload.get("environment") or {}
+    signing_identities = payload.get("signing_identities") or {}
     entitlements = payload.get("entitlements") or {}
     tracks = payload.get("distribution_tracks") or {}
     non_code = payload.get("non_code_submission_items") or {}
@@ -489,23 +565,39 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         )
     lines.extend(
         [
-        "",
-        "## Artifact Gate",
-        "",
-        f"- App bundle: `{(artifacts.get('app_bundle') or {}).get('path')}` / exists `{(artifacts.get('app_bundle') or {}).get('is_dir')}`",
-        f"- App Store pkg: `{(artifacts.get('app_store_pkg') or {}).get('path')}` / exists `{(artifacts.get('app_store_pkg') or {}).get('is_file')}`",
-        f"- Sandbox smoke: exists `{(artifacts.get('sandbox_smoke') or {}).get('is_file')}`",
-        f"- App Store Connect validation: exists `{(artifacts.get('app_store_connect_validation') or {}).get('is_file')}`",
-        "",
-        "## Signing And Auth Gate",
-        "",
-        f"- `CODESIGN_IDENTITY`: configured `{bool(environment.get('codesign_identity_configured'))}`",
-        f"- `INSTALLER_IDENTITY`: configured `{bool(environment.get('installer_identity_configured'))}`",
-        f"- App Store Connect auth: configured `{bool(environment.get('app_store_connect_auth_configured'))}`",
-        "",
-        "## Entitlements",
-        "",
-        f"- Temporary exception entitlements: `{', '.join(entitlements.get('temporary_exceptions') or []) or 'none'}`",
+            "",
+            "## Artifact Gate",
+            "",
+            f"- App bundle: `{(artifacts.get('app_bundle') or {}).get('path')}` / exists `{(artifacts.get('app_bundle') or {}).get('is_dir')}`",
+            f"- App Store pkg: `{(artifacts.get('app_store_pkg') or {}).get('path')}` / exists `{(artifacts.get('app_store_pkg') or {}).get('is_file')}`",
+            f"- Sandbox smoke: exists `{(artifacts.get('sandbox_smoke') or {}).get('is_file')}`",
+            f"- App Store Connect validation: exists `{(artifacts.get('app_store_connect_validation') or {}).get('is_file')}`",
+            "",
+            "## Signing And Auth Gate",
+            "",
+            f"- `CODESIGN_IDENTITY`: configured `{bool(environment.get('codesign_identity_configured'))}`",
+            f"- `INSTALLER_IDENTITY`: configured `{bool(environment.get('installer_identity_configured'))}`",
+            f"- App Store Connect auth: configured `{bool(environment.get('app_store_connect_auth_configured'))}`",
+            f"- Apple Development identity present: `{bool(signing_identities.get('apple_development_present'))}`",
+            f"- Apple Distribution identity present: `{bool(signing_identities.get('apple_distribution_present'))}`",
+            f"- Installer identity present: `{bool(signing_identities.get('installer_distribution_present'))}`",
+            "",
+            "### Local Keychain Identities",
+            "",
+            f"- security command available: `{bool(signing_identities.get('security_command_available'))}`",
+        ]
+    )
+    identity_names = list(signing_identities.get("identity_names") or [])
+    if identity_names:
+        lines.extend(f"- `{name}`" for name in identity_names)
+    else:
+        lines.append("- `none`")
+    lines.extend(
+        [
+            "",
+            "## Entitlements",
+            "",
+            f"- Temporary exception entitlements: `{', '.join(entitlements.get('temporary_exceptions') or []) or 'none'}`",
         ]
     )
     for key, item in sorted((entitlements.get("required") or {}).items()):

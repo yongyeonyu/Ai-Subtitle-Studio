@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from tools import audit_app_store_readiness
 from tools.audit_app_store_readiness import build_readiness_report
 
 
@@ -81,3 +82,27 @@ def test_app_store_readiness_audit_submission_content_drafts_match_runtime_scope
     assert "analytics" in privacy["owner_decision_required"]
     assert "app-scope bookmarks" in review_notes["draft"]
     assert "network entitlement purpose" in review_notes["draft"]
+
+
+def test_app_store_readiness_audit_records_keychain_identity_blockers(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": ["Apple Development: owner@example.com (TEAMID)"],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(root=root)
+    identities = report["signing_identities"]
+
+    assert identities["apple_development_present"] is True
+    assert identities["apple_distribution_present"] is False
+    assert identities["installer_distribution_present"] is False
+    assert "apple_distribution_identity_missing_from_keychain" in report["blockers"]
+    assert "installer_identity_missing_from_keychain" in report["blockers"]

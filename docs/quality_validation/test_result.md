@@ -1,5 +1,25 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.15 G0 App Store Identity And Metadata Blocker Refresh - 2026-06-29 KST
+
+- 실행 모드: source-app G0 Mac App Store readiness blocker refresh, keychain identity audit hardening, and version/schema bump.
+- 결과: pass for the bounded blocker-refresh slice. This is not App Store submission proof because the latest audit remains `status=blocked` and `app_store_submission_ready=false`.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.15.md`
+  - Blocker refresh audit: `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040115-g0-app-store-identity-and-metadata-blocker-refresh`
+- 실제 결과:
+  - App version updated to `04.01.15`.
+  - Project schema version updated to `04.01.15`.
+  - `tools/audit_app_store_readiness.py` now records local keychain identity presence for Apple Development, Apple Distribution, and 3rd Party Mac Developer Installer identities.
+  - The readiness audit now emits explicit blockers for `apple_distribution_identity_missing_from_keychain` and `installer_identity_missing_from_keychain`.
+  - Latest audit result: `status=blocked`, `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `15`, Apple Development identity present, Apple Distribution identity missing, installer identity missing, and owner-input metadata pending `8/8`.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tests/test_app_store_readiness_audit.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_macos_bundle_runtime_paths.py` -> `10 passed`.
+  - Direct version assertion -> `APP_VERSION=04.01.15`, `PROJECT_SCHEMA_VERSION=04.01.15`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.14 G3 Active Global-Canvas Responsiveness Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G3 same-media active global-canvas/timeline responsiveness proof and version/schema bump.

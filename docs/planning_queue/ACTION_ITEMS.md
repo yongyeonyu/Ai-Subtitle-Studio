@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.14-source-app
+Document-Version: 04.01.15-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,14 +38,14 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.14`.
+- App version: `04.01.15`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
 - Current readiness doc: `docs/APP_STORE_SUBMISSION_READINESS.md`.
-- Latest audit artifact: `output/manual_verification/latest/app_store_v040101_identity_check_20260629_0036/app_store_readiness_audit.md`.
+- Latest audit artifact: `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`.
 - Latest packaging evidence: `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`.
-- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `13`; local Apple Development `.app` signing smoke passed, but the keychain currently exposes only Apple Development signing, so App Store Distribution `.app`, signed `.pkg`, sandbox workflow smoke, App Store Connect validation, and owner metadata remain incomplete.
+- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `15`; local Apple Development `.app` signing smoke passed, but the keychain currently exposes only Apple Development signing, so Apple Distribution signing, 3rd Party Mac Developer Installer signing, signed `.pkg`, sandbox workflow smoke, App Store Connect validation, upload/submission, and owner metadata remain incomplete. Non-code owner-input metadata remains pending `8/8`.
 - Developer ID beta `.dmg` remains a separate opt-in track and is not App Store submission proof.
 
 Detailed plan:
@@ -263,8 +263,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.14"
-document_version: "04.01.14-source-app"
+app_version: "04.01.15"
+document_version: "04.01.15-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."
