@@ -48,6 +48,30 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert top_level["runtime_report_persisted"] is False
     assert top_level["runtime_state_persisted"] is False
     assert top_level["quarantine_persisted"] is False
+    compatibility = report["checks"]["top_level_nle_compatibility_projection"]
+    assert compatibility["status"] == "compatibility_projection_partial_blocked"
+    assert compatibility["not_runtime_change"] is True
+    assert compatibility["canonical_load_owner_unchanged"] is True
+    assert compatibility["current_canonical_load_owner"] == "legacy_editor_state"
+    assert compatibility["canonical_load_owner_change_allowed"] is False
+    assert compatibility["disk_format_cutover_allowed"] is False
+    assert compatibility["explicit_projection_uses_top_level_nle"] is True
+    assert compatibility["default_load_uses_legacy_rows"] is True
+    assert compatibility["explicit_projection_differs_from_default"] is True
+    assert compatibility["explicit_projection_caption_count"] == 2
+    assert compatibility["explicit_projection_gap_count"] == 0
+    assert compatibility["default_row_count"] == 3
+    assert compatibility["default_caption_count"] == 2
+    assert compatibility["default_gap_count"] == 1
+    assert compatibility["gap_coverage_ready"] is False
+    assert compatibility["runtime_state_hydrated_from_legacy"] is True
+    assert compatibility["runtime_report_persisted_after_resave"] is False
+    assert compatibility["runtime_state_persisted_after_resave"] is False
+    assert compatibility["quarantine_persisted_after_resave"] is False
+    assert compatibility["resave_rebuilt_shadow_from_legacy"] is True
+    assert "top_level_nle_projection_gap_coverage_missing" in report["blockers"]
+    assert report["top_level_nle_compatibility_projection_passed"] is True
+    assert report["top_level_nle_canonical_projection_complete"] is False
     corrupted = report["checks"]["corrupted_snapshot_readback"]
     assert corrupted["drift_detected"] is True
     assert corrupted["mismatch_count"] > 0
@@ -113,9 +137,29 @@ def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
 
         markdown = (output_dir / "nle_persistence_cutover_audit.md").read_text(encoding="utf-8")
 
-    assert "## Top-Level NLE Shadow" in markdown
-    assert "- Storage has top-level NLE: `True`" in markdown
-    assert "- Canonical load owner: `legacy_editor_state`" in markdown
+        assert "## Top-Level NLE Shadow" in markdown
+        assert "- Storage has top-level NLE: `True`" in markdown
+        assert "- Canonical load owner: `legacy_editor_state`" in markdown
+        assert "## Top-Level NLE Compatibility Projection" in markdown
+        assert "Compatibility audit evidence only." in markdown
+        assert "- Status: `compatibility_projection_partial_blocked`" in markdown
+        assert "- Default load source: `legacy_editor_state`" in markdown
+        assert "- Explicit projection uses top-level NLE: `True`" in markdown
+        assert "- Default load uses legacy rows: `True`" in markdown
+        assert "- Explicit projection caption/gap count: `2` / `0`" in markdown
+        assert "- Default row/caption/gap count: `3` / `2` / `1`" in markdown
+        assert "- Gap coverage ready: `False`" in markdown
+        for forbidden in (
+            "canonical load owner ready",
+            "cutover ready",
+            "disk-format cutover complete",
+            "load owner switched",
+            "project load now uses NLE",
+            "nle_snapshot is canonical",
+            "legacy editor_state replaced",
+            "full NLE persistence enabled",
+        ):
+            assert forbidden not in markdown
 
 
 def test_nle_persistence_cutover_audit_records_future_payload_quarantine():

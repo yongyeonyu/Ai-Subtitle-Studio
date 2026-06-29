@@ -53,6 +53,7 @@ from core.project.project_io import (
 SCHEMA = "ai_subtitle_studio.nle_persistence_cutover_readiness.v1"
 CUTOVER_BLOCKERS = (
     "top_level_nle_shadow_not_canonical_load_owner",
+    "top_level_nle_projection_gap_coverage_missing",
     "runtime_nle_project_state_must_remain_runtime_only",
     "legacy_disk_shape_required_for_full_cutover",
 )
@@ -322,6 +323,126 @@ def _row_signature(
             item["id"] = str(row.get("id") or "")
         signature.append(item)
     return signature
+
+
+def _caption_rows_from_top_level_nle_payload(nle_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    sequences = nle_payload.get("sequences") if isinstance(nle_payload.get("sequences"), list) else []
+    sequence = sequences[0] if sequences and isinstance(sequences[0], dict) else {}
+    try:
+        fps = float(sequence.get("fps") or 30.0)
+    except (TypeError, ValueError):
+        fps = 30.0
+    captions = sequence.get("captions") if isinstance(sequence.get("captions"), list) else []
+    rows: list[dict[str, Any]] = []
+    for index, caption in enumerate(captions):
+        if not isinstance(caption, dict):
+            continue
+        try:
+            start = float(caption.get("sequence_start") or 0.0)
+            end = max(start, float(caption.get("sequence_end") or start))
+        except (TypeError, ValueError):
+            start = 0.0
+            end = 0.0
+        rows.append(
+            {
+                "id": str(caption.get("caption_id") or f"caption_{index + 1:04d}"),
+                "start": round(start, 6),
+                "end": round(end, 6),
+                "start_frame": int(round(start * fps)),
+                "end_frame": int(round(end * fps)),
+                "text": str(caption.get("text") or ""),
+                "speaker": str(caption.get("speaker") or ""),
+                "is_gap": False,
+            }
+        )
+    return rows
+
+
+def _top_level_nle_compatibility_projection_check(work_dir: Path) -> dict[str, Any]:
+    project_path = work_dir / "top-level-nle-compatibility-projection.aissproj"
+    project = _legacy_project()
+    project["nle_persistence"] = {
+        "persist_snapshot": True,
+        "persist_top_level_nle": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    }
+    expected_default_rows = _row_signature(
+        project_segments_to_editor(project, include_analysis_candidates=False),
+        include_id=False,
+    )
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+    nle_payload = storage.get("nle") if isinstance(storage.get("nle"), dict) else {}
+    sequences = nle_payload.get("sequences") if isinstance(nle_payload.get("sequences"), list) else []
+    sequence = sequences[0] if sequences and isinstance(sequences[0], dict) else {}
+    captions = sequence.get("captions") if isinstance(sequence.get("captions"), list) else []
+    if captions and isinstance(captions[0], dict):
+        captions[0]["text"] = "nle shadow first"
+    project_path.write_text(json.dumps(storage, ensure_ascii=False), encoding="utf-8")
+    clear_project_file_cache(str(project_path))
+
+    storage_with_shadow_override = read_project_storage_payload(str(project_path))
+    shadow_payload = (
+        storage_with_shadow_override.get("nle")
+        if isinstance(storage_with_shadow_override.get("nle"), dict)
+        else {}
+    )
+    assert_no_unapproved_nle_persistence_fields(
+        storage_with_shadow_override,
+        surface="top_level_nle_compatibility_projection_storage",
+    )
+    explicit_rows = _caption_rows_from_top_level_nle_payload(shadow_payload)
+    explicit_signature = _row_signature(explicit_rows, include_id=False)
+    loaded = read_project_file(str(project_path))
+    default_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+    default_signature = _row_signature(default_rows, include_id=False)
+    default_caption_signature = _row_signature(
+        [row for row in default_rows if isinstance(row, dict) and not row.get("is_gap")],
+        include_id=False,
+    )
+    loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    write_project_file(str(project_path), loaded)
+    storage_after = read_project_storage_payload(str(project_path))
+    rebuilt_nle = storage_after.get("nle") if isinstance(storage_after.get("nle"), dict) else {}
+    rebuilt_signature = _row_signature(_caption_rows_from_top_level_nle_payload(rebuilt_nle), include_id=False)
+    default_gap_count = sum(1 for row in default_rows if isinstance(row, dict) and row.get("is_gap"))
+
+    return {
+        "status": "compatibility_projection_partial_blocked",
+        "not_runtime_change": True,
+        "canonical_load_owner_unchanged": True,
+        "current_canonical_load_owner": "legacy_editor_state",
+        "canonical_load_owner_change_allowed": False,
+        "disk_format_cutover_allowed": False,
+        "explicit_projection_source": "top_level_nle_shadow_metadata",
+        "default_load_source": "legacy_editor_state",
+        "explicit_projection_uses_top_level_nle": bool(explicit_rows),
+        "default_load_uses_legacy_rows": default_signature == expected_default_rows,
+        "explicit_projection_differs_from_default": explicit_signature != default_caption_signature,
+        "explicit_projection_caption_count": len(explicit_signature),
+        "explicit_projection_gap_count": 0,
+        "default_row_count": len(default_signature),
+        "default_caption_count": len(default_caption_signature),
+        "default_gap_count": default_gap_count,
+        "gap_coverage_ready": False,
+        "default_legacy_rows_stable": default_signature == expected_default_rows,
+        "runtime_state_hydrated_from_legacy": isinstance(loaded_state, NLEProjectState),
+        "shadow_role": str(shadow_payload.get("role") or ""),
+        "shadow_schema": str(shadow_payload.get("schema") or ""),
+        "shadow_canonical_load_owner": str(shadow_payload.get("canonical_load_owner") or ""),
+        "shadow_runtime_project_state_persisted": bool(shadow_payload.get("runtime_project_state_persisted")),
+        "storage_has_nle": "nle" in storage_with_shadow_override,
+        "storage_has_nle_snapshot": "nle_snapshot" in storage_with_shadow_override,
+        "runtime_report_persisted_after_resave": NLE_SNAPSHOT_READBACK_PARITY_KEY in storage_after,
+        "runtime_state_persisted_after_resave": NLE_PROJECT_STATE_RUNTIME_KEY in storage_after,
+        "quarantine_persisted_after_resave": NLE_PERSISTENCE_QUARANTINE_KEY in storage_after,
+        "resave_rebuilt_shadow_from_legacy": rebuilt_signature == default_caption_signature,
+        "full_cutover_blockers": [
+            "top_level_nle_projection_gap_coverage_missing",
+            "default_project_load_still_uses_legacy_editor_state",
+            "owner_approval_and_rollback_boundary_required_for_any_load_owner_change",
+        ],
+    }
 
 
 def _approved_snapshot_persistence_check(work_dir: Path) -> dict[str, Any]:
@@ -778,6 +899,9 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     future_payload = _future_payload_quarantine_check()
     approved_snapshot = _approved_snapshot_persistence_check(out_dir / "approved_snapshot_fixture")
     top_level_nle_shadow = _approved_top_level_nle_shadow_check(out_dir / "approved_top_level_nle_fixture")
+    top_level_nle_compatibility_projection = _top_level_nle_compatibility_projection_check(
+        out_dir / "top_level_nle_compatibility_projection_fixture"
+    )
     corrupted_snapshot = _corrupted_snapshot_readback_check(out_dir / "corrupted_snapshot_fixture")
     roughcut_sidecar = _roughcut_sidecar_readback_check(out_dir / "roughcut_sidecar_readback_fixture")
     operation_roundtrip_matrix = _operation_roundtrip_matrix(out_dir / "operation_roundtrip_matrix")
@@ -799,6 +923,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "future_payload_quarantine": future_payload,
         "approved_snapshot_persistence": approved_snapshot,
         "approved_top_level_nle_shadow": top_level_nle_shadow,
+        "top_level_nle_compatibility_projection": top_level_nle_compatibility_projection,
         "corrupted_snapshot_readback": corrupted_snapshot,
         "roughcut_sidecar_readback": roughcut_sidecar,
         "operation_roundtrip_matrix": operation_roundtrip_matrix,
@@ -811,6 +936,13 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and not future_payload["remaining_unapproved_fields"]
         and approved_snapshot["ready"]
         and top_level_nle_shadow["ready"]
+        and top_level_nle_compatibility_projection["explicit_projection_uses_top_level_nle"]
+        and top_level_nle_compatibility_projection["default_load_uses_legacy_rows"]
+        and top_level_nle_compatibility_projection["explicit_projection_differs_from_default"]
+        and top_level_nle_compatibility_projection["runtime_state_hydrated_from_legacy"]
+        and not top_level_nle_compatibility_projection["runtime_report_persisted_after_resave"]
+        and not top_level_nle_compatibility_projection["runtime_state_persisted_after_resave"]
+        and not top_level_nle_compatibility_projection["quarantine_persisted_after_resave"]
         and not top_level_nle_shadow["runtime_report_persisted"]
         and not top_level_nle_shadow["runtime_state_persisted"]
         and not top_level_nle_shadow["quarantine_persisted"]
@@ -840,8 +972,15 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "operation_roundtrip_family_count": len(operation_roundtrip_matrix),
         "render_export_parity_passed": bool(render_export_parity["stable"]),
         "top_level_nle_shadow_ready": bool(top_level_nle_shadow["ready"]),
+        "top_level_nle_compatibility_projection_passed": bool(
+            top_level_nle_compatibility_projection["explicit_projection_uses_top_level_nle"]
+            and top_level_nle_compatibility_projection["default_load_uses_legacy_rows"]
+            and top_level_nle_compatibility_projection["explicit_projection_differs_from_default"]
+        ),
+        "top_level_nle_canonical_projection_complete": False,
         "remaining_full_cutover_gates": [
             "making top-level nle payloads canonical load owners",
+            "representing gap rows and all editor row shapes in the canonical top-level nle projection",
             "persisting _nle_project_state payloads",
             "making nle_snapshot the canonical load source",
             "changing legacy editor_state compatibility guarantees",
@@ -865,6 +1004,11 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     future = checks.get("future_payload_quarantine") if isinstance(checks.get("future_payload_quarantine"), dict) else {}
     approved = checks.get("approved_snapshot_persistence") if isinstance(checks.get("approved_snapshot_persistence"), dict) else {}
     top_level = checks.get("approved_top_level_nle_shadow") if isinstance(checks.get("approved_top_level_nle_shadow"), dict) else {}
+    top_level_projection = (
+        checks.get("top_level_nle_compatibility_projection")
+        if isinstance(checks.get("top_level_nle_compatibility_projection"), dict)
+        else {}
+    )
     corrupted = checks.get("corrupted_snapshot_readback") if isinstance(checks.get("corrupted_snapshot_readback"), dict) else {}
     roughcut = checks.get("roughcut_sidecar_readback") if isinstance(checks.get("roughcut_sidecar_readback"), dict) else {}
     operations = checks.get("operation_roundtrip_matrix") if isinstance(checks.get("operation_roundtrip_matrix"), list) else []
@@ -877,7 +1021,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "",
         f"- Status: `{payload.get('status')}`",
         f"- Prep ready: `{bool(payload.get('prep_ready'))}`",
-        f"- Persistence cutover ready: `{bool(payload.get('persistence_cutover_ready'))}`",
+        f"- Persistence cutover allowed: `{bool(payload.get('persistence_cutover_ready'))}`",
         f"- Operation roundtrip families: `{payload.get('operation_roundtrip_family_count')}`",
         f"- Operation roundtrip all passed: `{bool(payload.get('operation_roundtrip_all_passed'))}`",
         "",
@@ -912,6 +1056,25 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Legacy rows stable: `{bool(top_level.get('legacy_rows_stable'))}`",
         f"- Read-back parity stable: `{bool(top_level.get('readback_parity_stable'))}`",
         f"- Runtime report/state/quarantine persisted: `{bool(top_level.get('runtime_report_persisted'))}/{bool(top_level.get('runtime_state_persisted'))}/{bool(top_level.get('quarantine_persisted'))}`",
+        "",
+        "## Top-Level NLE Compatibility Projection",
+        "",
+        "Compatibility audit evidence only. Canonical project load still rebuilds from legacy editor_state rows; approved nle/nle_snapshot data remains shadow metadata.",
+        "",
+        f"- Status: `{top_level_projection.get('status')}`",
+        f"- Not runtime change: `{bool(top_level_projection.get('not_runtime_change'))}`",
+        f"- Current canonical load owner: `{top_level_projection.get('current_canonical_load_owner')}`",
+        f"- Default load source: `{top_level_projection.get('default_load_source')}`",
+        f"- Explicit projection source: `{top_level_projection.get('explicit_projection_source')}`",
+        f"- Explicit projection uses top-level NLE: `{bool(top_level_projection.get('explicit_projection_uses_top_level_nle'))}`",
+        f"- Default load uses legacy rows: `{bool(top_level_projection.get('default_load_uses_legacy_rows'))}`",
+        f"- Explicit projection differs from default legacy captions: `{bool(top_level_projection.get('explicit_projection_differs_from_default'))}`",
+        f"- Explicit projection caption/gap count: `{top_level_projection.get('explicit_projection_caption_count')}` / `{top_level_projection.get('explicit_projection_gap_count')}`",
+        f"- Default row/caption/gap count: `{top_level_projection.get('default_row_count')}` / `{top_level_projection.get('default_caption_count')}` / `{top_level_projection.get('default_gap_count')}`",
+        f"- Gap coverage ready: `{bool(top_level_projection.get('gap_coverage_ready'))}`",
+        f"- Canonical load owner change allowed: `{bool(top_level_projection.get('canonical_load_owner_change_allowed'))}`",
+        f"- Disk format cutover allowed: `{bool(top_level_projection.get('disk_format_cutover_allowed'))}`",
+        f"- Resave rebuilt shadow from legacy rows: `{bool(top_level_projection.get('resave_rebuilt_shadow_from_legacy'))}`",
         "",
         "## Corrupted Snapshot Readback",
         "",

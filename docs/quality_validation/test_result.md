@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.20 G2 Top-Level NLE Compatibility Projection Audit - 2026-06-29 KST
+
+- 실행 모드: source-app G2 NLE persistence cutover audit extension, compatibility projection false-positive guards, and version/schema bump.
+- 결과: pass for the bounded compatibility-audit slice. The audit remains blocked for canonical cutover because top-level projection gap coverage is incomplete and default project load still uses legacy `editor_state` rows.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.20.md`
+  - Audit report: `output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040120-g2-top-level-nle-compatibility-projection-audit`
+- 실제 결과:
+  - App version updated to `04.01.20`.
+  - Project schema version updated to `04.01.20`.
+  - `tools/audit_nle_persistence_cutover.py` now reports `top_level_nle_compatibility_projection`.
+  - Audit state: `status=blocked`, `prep_ready=true`, `top_level_nle_compatibility_projection_passed=true`, `top_level_nle_canonical_projection_complete=false`.
+  - Compatibility projection state: `status=compatibility_projection_partial_blocked`, `not_runtime_change=true`, current canonical owner `legacy_editor_state`, default load source `legacy_editor_state`, explicit projection source `top_level_nle_shadow_metadata`, explicit projection differs from default legacy captions, explicit projection caption/gap count `2/0`, default row/caption/gap count `3/2/1`, and `gap_coverage_ready=false`.
+  - Canonical load-owner change and disk-format cutover remain disallowed.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_macos_bundle_runtime_paths.py` -> `23 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "readback or direct_srt"` -> `3 passed, 13 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.20`, `PROJECT_SCHEMA_VERSION=04.01.20`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.19 G2 NLE Canonical Load-Owner Review Packet - 2026-06-29 KST
 
 - 실행 모드: source-app G2 NLE canonical load-owner owner-review packet generator, false-positive guard tests, and version/schema bump.

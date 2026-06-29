@@ -33,7 +33,49 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.19 / G2 NLE Canonical Load-Owner Review Packet
+## Current Handoff - 2026-06-29 v04.01.20 / G2 Top-Level NLE Compatibility Projection Audit
+
+### Scope
+
+- Completed the G2 top-level NLE compatibility projection audit slice.
+- Bumped source-app version and project schema from `04.01.19` to `04.01.20`.
+- Extended `tools/audit_nle_persistence_cutover.py` and `tests/test_nle_persistence_cutover_audit.py`.
+- Generated audit evidence that explicitly projects top-level `nle` shadow metadata while proving default project load still uses legacy rows.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.20`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.20`.
+- Audit report: `output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018/nle_persistence_cutover_audit.md`.
+- Audit state: `status=blocked`, `prep_ready=true`, `top_level_nle_compatibility_projection_passed=true`, `top_level_nle_canonical_projection_complete=false`.
+- Compatibility projection state: `status=compatibility_projection_partial_blocked`, `not_runtime_change=true`, current canonical owner `legacy_editor_state`, default load source `legacy_editor_state`, explicit projection source `top_level_nle_shadow_metadata`, explicit projection differs from default legacy captions, explicit projection caption/gap count `2/0`, default row/caption/gap count `3/2/1`, and `gap_coverage_ready=false`.
+- Resave rebuilt the top-level shadow from legacy rows, runtime report/state/quarantine stayed unpersisted, and runtime NLE state still hydrated from legacy rows.
+- This is compatibility audit evidence only. It is not a project load/save behavior change, top-level `nle` canonical load-owner switch, `nle_snapshot` canonical load-source switch, persisted `_nle_project_state`, legacy `editor_state` removal, visible UI/UX change, STT/cache default change, or App Store submission proof.
+
+### Evidence
+
+- Audit generation: `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018` -> `status=blocked`, `compatibility_projection_partial_blocked`.
+- Compile check: `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- NLE audit/canonical packet/persistence guard/macOS bundle guards: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_macos_bundle_runtime_paths.py` -> `23 passed`.
+- NLE snapshot read-back/direct-SRT subset: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_snapshot.py -k "readback or direct_srt"` -> `3 passed, 13 deselected`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.20`, `PROJECT_SCHEMA_VERSION=04.01.20`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture boundary, QE false-positive guards, and editor-workflow wording constraints. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G2 full NLE disk-format cutover remains blocked until gap-row coverage, exact canonical load-owner scope, rollback/quarantine behavior, and legacy/direct-SRT/roughcut/render-export proof are complete.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+- G0 remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, upload/submission, and owner-approved metadata values.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G2, implement only the next gap-row compatibility projection proof before any canonical load-owner change.
+- If continuing G0, provide or install the missing signing identities and owner metadata values, then rerun the readiness audit before any package/upload attempt.
+
+## Previous Handoff - 2026-06-29 v04.01.19 / G2 NLE Canonical Load-Owner Review Packet
 
 ### Scope
 

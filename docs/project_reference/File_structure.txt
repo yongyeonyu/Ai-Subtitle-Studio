@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.01.19-source-app
+Document-Version: 04.01.20-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-Last-Updated: 2026-06-28
+Last-Updated: 2026-06-29
 Updated-By: Codex
 Scope: Shallow actual filesystem map for high-signal navigation.
 Role-Description-Rule: Tree entries must match current paths. Speculative cleanup notes are not allowed.
@@ -10,7 +10,7 @@ Role-Description-Rule: Tree entries must match current paths. Speculative cleanu
 AI Subtitle Studio - Shallow Actual File Structure
 Last Updated: 2026-06-29
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-App Version: 04.01.19
+App Version: 04.01.20
 Structure Document: docs/project_reference/File_structure.txt
 Note: Root development docs policy keeps AGENTS.md as the only root dev doc.
 ================================================================================

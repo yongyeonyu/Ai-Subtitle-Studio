@@ -158,6 +158,34 @@ Focused guards:
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py
 ```
 
+## G2 top-level NLE compatibility projection audit
+
+For top-level `nle` compatibility projection work, run the persistence audit
+directly and keep the result blocked unless the explicit top-level projection,
+legacy default load, gap coverage, rollback/quarantine, and render/export gates
+are all proven:
+
+```bash
+./venv/bin/python tools/audit_nle_persistence_cutover.py \
+  --output-dir output/manual_verification/latest/nle_top_level_compatibility_projection_YYYYMMDD_HHMM
+```
+
+The current expected state is audit evidence only:
+`top_level_nle_compatibility_projection_passed=true`,
+`top_level_nle_canonical_projection_complete=false`,
+`status=compatibility_projection_partial_blocked`,
+default load source `legacy_editor_state`,
+explicit projection source `top_level_nle_shadow_metadata`,
+`gap_coverage_ready=false`, and
+`canonical_load_owner_change_allowed=false`.
+
+Focused guards:
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_persistence_guard.py
+```
+
 ## Trace workspace validation
 
 Trace/temp-workspace changes should first prove syntax, focused trace behavior, then the startup/app-command diagnostic guard.

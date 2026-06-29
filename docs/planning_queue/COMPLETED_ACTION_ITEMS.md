@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.19-source-app
+Document-Version: 04.01.20-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,22 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.20 G2 Top-Level NLE Compatibility Projection Audit
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.20"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.20`.
+3. `tools/audit_nle_persistence_cutover.py` now includes a top-level `nle` compatibility projection check that explicitly reads approved shadow metadata while proving the normal project load path still uses legacy `editor_state` rows.
+4. Audit evidence was written to `output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018/nle_persistence_cutover_audit.md`.
+5. Audit state: `status=blocked`, `prep_ready=true`, `top_level_nle_compatibility_projection_passed=true`, `top_level_nle_canonical_projection_complete=false`, and compatibility projection status `compatibility_projection_partial_blocked`.
+6. The projection proof keeps `not_runtime_change=true`, `canonical_load_owner_unchanged=true`, current canonical owner `legacy_editor_state`, `canonical_load_owner_change_allowed=false`, and `disk_format_cutover_allowed=false`.
+7. The explicit top-level `nle` projection reads `2` captions and `0` gaps, while default legacy load remains `3` rows, `2` captions, and `1` gap; this preserves the next blocker as `top_level_nle_projection_gap_coverage_missing` instead of pretending the canonical projection is complete.
+8. Resave rebuilt the top-level shadow from legacy rows, runtime report/state/quarantine stayed unpersisted, and runtime NLE state still hydrated from legacy rows.
+9. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+10. Focused verification passed: compile check for touched audit/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_macos_bundle_runtime_paths.py` -> `23 passed`; NLE snapshot subset -> `3 passed, 13 deselected`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.20` / `PROJECT_SCHEMA_VERSION=04.01.20`; `git diff --check -- .` -> pass.
+11. This slice does not switch project load ownership, make top-level `nle` or `nle_snapshot` canonical, persist `_nle_project_state`, remove legacy `editor_state`, perform per-pixel NLE writes, change UI/UX, change STT/cache defaults, or provide App Store packaging/signing/upload/submission proof.
 
 ## v04.01.19 G2 NLE Canonical Load-Owner Review Packet
 
