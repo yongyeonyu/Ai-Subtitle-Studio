@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.31 G0/G1/G2/G3 Blocker Recheck And Active-Queue Metadata Sync - 2026-06-29 KST
+
+- 실행 모드: non-destructive active-group blocker recheck and documentation sync.
+- 결과: pass for documentation/source-of-truth consistency; remaining executable release/default/NLE work is still blocked by explicit owner/external gates.
+- 저장 위치:
+  - G0 readiness audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
+  - G0 metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040131-g0g1g2g3-blocker-recheck-and-active-queue-metadata-sync`
+- 실제 결과:
+  - G0 remains `status=blocked`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`.
+  - Blocker groups: signed artifacts `3`, sandbox smoke `1`, App Store Connect `1`, signing identities `4`, owner metadata `16`.
+  - Local signing identity proof shows only `Apple Development: axony99@gmail.com (5M6F7NN5SW)`.
+  - Required App Store signing/metadata/upload env vars were unset for the current process.
+  - Owner metadata remains incomplete: owner-input metadata `0/8`, App Store Connect metadata `0/8`, owner-values preflight `ready=false`, issue count `75`, forbidden-claim scan `pass`.
+  - G1 remains owner-review gated for exactly one cache default promotion plus rollback boundary and same-fixture proof after any default change.
+  - G2/G3 have no currently selected wider editing/NLE implementation gate beyond the approved persistence/runtime guard scope.
+  - `docs/planning_queue/ACTION_ITEMS.md` bottom metadata was corrected from stale `04.01.25` to `04.01.31`.
+- 검증:
+  - `tools/jammini_watchdog.sh --status` resolved the active route; `--handoff-probe` packet `20260629-160626` did not produce a physical handoff file.
+  - Three read-only sub-agent reviews completed for G0, G1, and G2/G3.
+  - This recheck does not prove App Store readiness, upload/submission, metadata completion, STT cache default promotion, NLE 100% completion, UI/UX change, or new runtime behavior.
+
 ## v04.01.31 G3 Stronger Live Active-Final Artifact Audit - 2026-06-29 KST
 
 - 실행 모드: source-app G3 offline audit of existing representative live-NLE runtime/status artifact for active pre-final `final > 0` observations.

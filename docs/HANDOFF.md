@@ -33,7 +33,55 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / G3 Stronger Live Active-Final Artifact Audit
+## Current Handoff - 2026-06-29 v04.01.31 / G0/G1/G2/G3 Blocker Recheck And Active-Queue Metadata Sync
+
+### Scope
+
+- Rechecked the currently remaining active groups after the G3 active-final audit.
+- Regenerated non-destructive G0 App Store blocker and owner-input artifacts.
+- Verified Jammini route status and attempted a fresh handoff probe.
+- Collected three read-only sub-agent reviews for G0, G1, and G2/G3.
+- Updated active G0 artifact pointers and fixed stale `ACTION_ITEMS.md` bottom metadata.
+- Production app code was unchanged.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.31`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.31`.
+- G0 audit report: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`.
+- G0 owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`.
+- G0 state remains blocked: `status=blocked`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`.
+- Blocker groups remain `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, and `owner_metadata=16`.
+- Local signing proof still shows only `Apple Development: axony99@gmail.com (5M6F7NN5SW)`.
+- `CODESIGN_IDENTITY`, `INSTALLER_IDENTITY`, `APP_STORE_OWNER_METADATA_JSON`, `APP_STORE_READINESS_JSON`, and `AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED` are unset.
+- Owner metadata values preflight remains `ready=false`, owner-input metadata `0/8`, App Store Connect metadata `0/8`, issue count `75`, forbidden-claim scan `pass`.
+- G1 remains owner-review gated: NAS real-media evidence is sufficient for review, but not for default promotion. A future default change must choose exactly one cache, create a rollback boundary, and rerun same-fixture proof after the default change.
+- G2/G3 have no currently selected implementation slice beyond the approved persistence/runtime guard scope. Wider NLE/editor changes require a fresh bounded owner-selected gate.
+- `docs/planning_queue/ACTION_ITEMS.md` bottom metadata now matches `04.01.31`.
+
+### Evidence
+
+- G0 audit generation: `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608` -> `status=blocked`, blocker count `25`.
+- Metadata package generation: `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608` -> owner input complete `false`, submission ready `false`.
+- Signing identity check: `security find-identity -v -p codesigning` -> only `Apple Development: axony99@gmail.com (5M6F7NN5SW)`.
+- Environment check: required App Store signing/metadata/upload env vars were empty.
+- Jammini `--status` resolved the active route, but the fresh `--handoff-probe` packet `20260629-160626` did not produce a physical handoff file; `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+- Three sub-agent reviews were collected: 한결 for G0 packaging/signing, 서린 for G1 QE/cache default gate, and 유진 for G2/G3 NLE/workflow scope.
+
+### Remaining Risks
+
+- Do not claim App Store readiness, metadata completion, signed package readiness, sandbox smoke, App Store Connect validation, upload, or submission.
+- Do not promote STT collect caches by default until the owner chooses exactly one cache and the post-change proof passes.
+- Do not claim NLE 100% completion, Taption UX full adoption, per-pixel editor writes, UI/UX change approval, or full G3 completion from the current evidence.
+- The fresh G0 recheck artifacts are ignored output evidence and are referenced by docs; they are not committed binary artifacts.
+
+### Next Recommended Action
+
+- For G0, obtain Apple Distribution and 3rd Party Mac Developer Installer identities plus owner-approved metadata values JSON before package/upload execution.
+- For G1, ask the owner whether to promote exactly one cache default; otherwise keep defaults off.
+- For G2/G3, ask the owner to choose a fresh bounded gate before widening editor/NLE behavior.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / G3 Stronger Live Active-Final Artifact Audit
 
 ### Scope
 

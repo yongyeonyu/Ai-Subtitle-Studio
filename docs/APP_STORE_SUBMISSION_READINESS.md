@@ -110,13 +110,13 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 
 ## Latest Owner-Input Package
 
-- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`
 
 Latest package state: `status=blocked`, `not_submission_proof=true`,
 `owner_input_complete=false`, `app_store_submission_ready=false`, pending
 owner-input metadata `8/8`, pending App Store Connect metadata `8`, owner
 values preflight `false`, forbidden-claim scan `pass` with `0` matches, app
-version `04.01.31` from the current-version G0 package refresh, upload confirmation guard present, and sanitized source
+version `04.01.31` from the current blocker recheck, upload confirmation guard present, and sanitized source
 readiness snapshot with overall stoplight `red`.
 This package is a collection/checklist artifact only; it does not replace signed
 package proof, sandbox smoke, App Store Connect validation, upload/submission,
@@ -159,6 +159,8 @@ real-media STT quality, or roughcut proof.
 - `output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228/app_store_metadata_owner_input_package.md`
 - `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608/app_store_metadata_owner_input_package.md`
 
 Latest known state: `status=blocked`, `local_packaging_ready=true`,
 `app_store_submission_ready=false`, overall stoplight `red`, blocker count
@@ -186,7 +188,7 @@ CODESIGN_IDENTITY="Apple Distribution: ..." packaging/macos/sign_app_bundle.sh
 packaging/macos/validate_app_bundle.sh
 INSTALLER_IDENTITY="3rd Party Mac Developer Installer: ..." packaging/macos/build_app_store_pkg.sh
 ASC_API_KEY="..." ASC_API_ISSUER="..." packaging/macos/upload_app_store_build.sh validate
-AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1 APP_STORE_READINESS_JSON="output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.json" ASC_API_KEY="..." ASC_API_ISSUER="..." packaging/macos/upload_app_store_build.sh upload
+AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1 APP_STORE_READINESS_JSON="output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.json" ASC_API_KEY="..." ASC_API_ISSUER="..." packaging/macos/upload_app_store_build.sh upload
 ```
 
 ## Official References

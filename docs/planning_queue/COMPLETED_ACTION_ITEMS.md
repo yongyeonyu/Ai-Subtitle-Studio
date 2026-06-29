@@ -19,6 +19,20 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.31 G0/G1/G2/G3 Blocker Recheck And Active-Queue Metadata Sync
+
+Source request: continue remaining action items, verify Jammini/agents, keep completed work separate, and keep the worktree clean after each completed task.
+
+1. Rechecked the current G0 App Store state with `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608`.
+2. Regenerated the owner-input package with `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_recheck_v040131_20260629_1608`.
+3. G0 remains blocked: `status=blocked`, `app_store_submission_ready=false`, blocker count `25`, signed artifacts `3`, sandbox smoke `1`, App Store Connect validation `1`, signing identities `4`, and owner metadata `16`.
+4. Current local signing proof still shows only `Apple Development: axony99@gmail.com (5M6F7NN5SW)`; Apple Distribution and 3rd Party Mac Developer Installer identities are missing, and `CODESIGN_IDENTITY`, `INSTALLER_IDENTITY`, `APP_STORE_OWNER_METADATA_JSON`, `APP_STORE_READINESS_JSON`, and `AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED` are unset.
+5. Owner metadata remains incomplete: owner-input metadata `0/8`, App Store Connect metadata `0/8`, owner-values preflight `ready=false`, issue count `75`, forbidden-claim scan `pass`.
+6. Jammini `--status` resolved the active route, but the fresh `--handoff-probe` packet `20260629-160626` did not produce a physical handoff file. Dex did not treat chat/probe send success as delivered Jammini proof.
+7. Three sub-agent reviews were completed. 한결 confirmed G0 packaging/upload is blocked on signing identities and owner metadata values JSON. 서린 confirmed G1 real NAS evidence is sufficient for owner review but not default promotion, which still requires choosing exactly one cache, rollback boundary, and same-fixture proof after the default change. 유진 confirmed G2/G3 have no currently selected implementation slice beyond the approved persistence/runtime guard scope and need a fresh bounded owner-selected gate for any wider editor/NLE expansion.
+8. Updated `docs/planning_queue/ACTION_ITEMS.md` latest G0 artifact pointers to the recheck artifacts and corrected the stale bottom metadata from `04.01.25` to `04.01.31`.
+9. This slice does not claim App Store readiness, upload/submission readiness, metadata completion, cache default promotion, full G1/G2/G3 completion, NLE 100% completion, per-pixel editor writes, UI/UX changes, or new runtime behavior.
+
 ## v04.01.31 G3 Stronger Live Active-Final Artifact Audit
 
 Source request: continue remaining action items, verify and use Jammini/agents, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
