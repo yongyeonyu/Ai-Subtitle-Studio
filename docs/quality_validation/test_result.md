@@ -1,5 +1,29 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.32 Code Review, Version Release, And Agent Bootstrap Refresh - 2026-06-29 KST
+
+- 실행 모드: documentation/release/code-review checkpoint; no runtime behavior change.
+- 결과: pass for focused version/schema/status and docs-consolidation guards.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.32.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040132-code-review-version-release-and-agent-bootstrap-refresh`
+  - Jammini probe: `.agents/sentinel/handoffs/20260629-214917-watchdog-handoff-probe.md`
+- 실제 결과:
+  - `APP_VERSION` updated to `04.01.32`.
+  - `PROJECT_SCHEMA_VERSION` updated to `04.01.32`.
+  - `AGENTS.md` new-chat continuation now points at the `v04.01.32` release checkpoint, latest docs-consolidation guard, latest G0/G1 evidence pointers, and latest physical Jammini probe.
+  - Code review found no runtime app-code issue requiring behavior changes. The applied fixes were documentation/bootstrap consistency fixes.
+  - Active queue remains `docs/planning_queue/ACTION_ITEMS.md`; completed history remains `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`.
+- 검증:
+  - `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py` -> pass.
+  - `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
+  - Docs consolidation presence check -> `docs_consolidation_presence=pass`.
+  - Tracked development `.md` path check excluding `.agents`, `.codex_work`, `_backup_mac_migration`, `checkpoints`, and `output` -> only `./AGENTS.md` remains outside `docs/`.
+  - Direct version assertion -> `APP_VERSION=04.01.32`, `PROJECT_SCHEMA_VERSION=04.01.32`.
+  - `git diff --check -- .` -> pass.
+- 제외:
+  - This does not prove full QA, App Store package/signing/upload/submission, owner metadata completion, STT/cache default promotion, UI/UX change, or NLE runtime behavior change.
+
 ## v04.01.31 G0 Owner Metadata Values Template Support - 2026-06-29 KST
 
 - 실행 모드: non-destructive App Store owner metadata values template support.

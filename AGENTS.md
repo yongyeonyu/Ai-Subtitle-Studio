@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.31-source-app
+Document-Version: 04.01.32-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.31`
-- Latest release checkpoint: `v04.01.31`
+- App version in code: `04.01.32`
+- Latest release checkpoint: `v04.01.32`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -235,28 +235,29 @@ Completed item rule:
   - result: pass, `profile=quick`, `scenario_count=1`, `passed=1`, `failed_count=0`, scenario `editor_compact_macau`
   - scope note: source-app editor workflow baseline only; not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, or roughcut proof.
 - Latest release checkpoint scope:
-  - `v04.01.31` - G2 owner-approved final source-app project persistence load-owner opt-in proof, tied only to the explicit standalone `nle_snapshot` canonical load-source policy plus the distinct final approval schema. This declares `default_project_authority=nle_snapshot` for the approved payload, keeps `editor_state` present as a compatibility projection, preserves supplemental `_nle_project_state` proof, blocks forged final policy, preserves Direct SRT precedence, bumps version/schema to `04.01.31`, and refreshes the NLE cutover audit to `status=ready` with blockers `[]`. It does not remove the `editor_state` compatibility key, perform per-pixel NLE writes, change roughcut sidecars, change UI/UX, change STT/cache defaults, or provide App Store submission proof.
+  - `v04.01.32` - documentation-consolidation, code-review, release, and new-chat bootstrap checkpoint. This keeps the `v04.01.31` G2 final source-app project persistence load-owner behavior unchanged, keeps development documentation under `docs/` with root `AGENTS.md` as the only root development-doc exception, records the stale duplicate `doc/ACTION_ITEMS.md` removal, bumps version/schema to `04.01.32`, and refreshes AGENTS/HANDOFF/release pointers for the next chat. It does not change UI/UX, STT/cache defaults, NLE runtime behavior, App Store packaging/signing/upload/submission, or owner metadata readiness.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths. Owner-approved top-level `nle` canonical load opt-in is available only when paired with matching `nle_snapshot`; owner-approved standalone `nle_snapshot` load-source opt-in is available only under the explicit snapshot policy payload; owner-approved `_nle_project_state` persistence is available only as a supplemental runtime-state payload tied to that standalone snapshot policy; owner-approved legacy disk-shape replacement is available only as legacy-compatible `editor_state` row projection from the approved snapshot source; and owner-approved final source-app project persistence load-owner policy is available only under the distinct final approval schema while retaining `editor_state` as a compatibility projection.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.31`:
+- Latest focused guard set for `v04.01.32`:
+  - Documentation consolidation guard: tracked development `.md` files outside `docs/` are limited to protected root `AGENTS.md` after excluding `.agents`, `.codex_work`, `_backup_mac_migration`, `checkpoints`, and `output`.
+  - Presence guard: `doc/` is absent, `docs/planning_queue/ACTION_ITEMS.md` remains the active queue, `docs/planning_queue/COMPLETED_ACTION_ITEMS.md` remains the completed archive, and moved docs exist at `docs/project_reference/icon_assets.md`, `docs/workflow_operations/macos_packaging.md`, `docs/archive_legacy/native_macos_ai_studio_native.md`, and `docs/product_behavior/apple_black_color_table.md`.
   - G2 final cutover-ready opt-in policy: final source-app project persistence load-owner policy can be accepted only when the distinct owner-approved final schema, approved standalone `nle_snapshot` canonical source, runtime-state permission, legacy-compatible `editor_state` projection permission, compatibility-key retention, `default_project_authority=nle_snapshot`, and rollback preservation flags are present.
   - G2 final cutover-ready audit: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md` -> `status=ready`, `app_version=04.01.31`, `prep_ready=true`, `persistence_cutover_ready=true`, `blockers=[]`, matrix `overall_stoplight=green`, ready/blocked gates `12/0`, current canonical owner `nle_snapshot`, `final_cutover_ready=ready`, and `not_ui_change=true`.
   - Final proof: loaded/runtime/reloaded/storage snapshot/runtime/editor_state first caption text stays `final cutover canonical first`; `editor_state` remains present as a compatibility projection and does not mean dual canonical ownership; cache-hit read/resave hydrates runtime state; forged final policy is blocked; Direct SRT precedence is preserved; storage after resave has `_nle_project_state` only for the explicit approved payload and no top-level `nle`, readback report, or quarantine.
   - Compile check: `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/project_io.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py tests/test_macos_bundle_runtime_paths.py` -> pass.
   - Focused NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `34 passed`.
   - Audit generation: `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156` -> `status=ready`, ready/blocked gates `12/0`, blockers `[]`.
-  - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`
-  - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`
+  - project/status guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`
   - cancel proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, status/guided-status command elapsed samples below `0.01s`, cancel returned `current_pipeline_cancel_requested`, and post-cancel status was `ST_IDLE/backend_active=false`
   - close proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json` -> `app-close-request` returned while active in `0.009954s`, then bridge became `app_unreachable` after app exit
   - quit proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json` -> `app-quit-request` returned while active in `0.001577s`, then bridge became `app_unreachable` after app exit
   - Direct SRT focused guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "direct_srt_rows_to_runtime_nle_state or direct_srt_readback_drift_without_overwriting_srt_rows" tests/test_editor_autosave_cleanup.py -k "direct_srt_mode or direct_srt_micro_overlap"` -> `2 passed, 140 deselected`
-  - direct version assertion: `APP_VERSION=04.01.31`, `PROJECT_SCHEMA_VERSION=04.01.31`
+  - direct version assertion: `APP_VERSION=04.01.32`, `PROJECT_SCHEMA_VERSION=04.01.32`
   - `git diff --check -- .` -> pass
   - active global-canvas proof: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, timeline zoom/fit/time-window/max plus zoom-max/play/pause/status/guided-status all `ok=true`, max command elapsed `0.267435s`, `19` nonzero snapshots, final track count stayed `0`, cancel returned to `backend_active=false`
-  - prior physical Jammini probe remains `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`; current `--handoff-probe` packet did not produce a fresh physical handoff file, so do not overclaim a new physical route proof from it.
+  - latest physical Jammini probe: `.agents/sentinel/handoffs/20260629-214917-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`, `PROBE_ID=20260629-214917`.
   - three sub-agent reviews converged on requiring a distinct final-cutover schema/policy, cache-hit/save-reopen/export/roughcut/Direct SRT proof, forged-policy fail-closed evidence, `editor_state` compatibility key retention, and wording that avoids App Store/UI/STT overclaims.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
@@ -271,10 +272,10 @@ Completed item rule:
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
-- Latest completed action-item slice: `v04.01.31 G2 Final Cutover Ready Opt-In Proof`.
+- Latest completed action-item slice: `v04.01.32 Code Review, Version Release, And Agent Bootstrap Refresh`.
 - Current G0 App Store evidence snapshot:
-  - latest blocker matrix audit: `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.md`
-  - latest metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228/app_store_metadata_owner_input_package.md`
+  - latest blocker matrix audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
+  - latest metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
   - current readiness state: `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`; version lock and packaging template gates are green, signed-artifact proof/sandbox/App Store Connect validation/signing identities/owner metadata are red, pending owner-input metadata remains `8/8`, and pending App Store Connect metadata remains `8`.
   - owner approval for App Store packaging/signing/upload/metadata execution exists, but exact signed `.pkg`, strict App Store-candidate `codesign`, `pkgutil --check-signature`, sandbox workflow smoke, App Store Connect validation, upload/submission proof, and owner metadata values JSON are still missing.
 - Current G2 NLE evidence snapshot:
@@ -292,7 +293,7 @@ Completed item rule:
   - latest NLE canonical load-owner review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`
   - review packet state: `owner_review_required_blocked`, `canonical_load_owner_unchanged=true`, current canonical owner `legacy_editor_state`, `canonical_load_owner_change_allowed=false`, `disk_format_cutover_allowed=false`; top-level `nle` and `nle_snapshot` remain compatibility/shadow metadata and full NLE disk-format cutover remains blocked.
 - Current G1 latency evidence snapshot:
-  - latest STT collect-cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`
+  - latest STT collect-cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040131_20260629_1527/stt_cache_default_review_packet.md`
   - review packet state: `owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`; STT1, STT2 recheck, and word precision cache default changes remain owner-approval-required, one-cache-at-a-time, and rollback-boundary gated.
   - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
   - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
@@ -319,7 +320,7 @@ Completed item rule:
   - latest variance result over 10 generated/cache artifacts: elapsed avg/min/max/range `41.66/1.312/82.433/81.121s`; stage ranges STT1 `20.134950s`, STT2 `15.939524s`, word precision `20.271760s`, subtitle postprocess `30.410655s`; worst memory pressure counts `unknown=4`, `normal=4`, `critical=2`; old tail-collapse generated runs are still flagged as duration-bound failures.
   - Jammini/서린 NAS-off variance review: `.agents/sentinel/handoffs/20260628-025200-stt-latency-nas-off-variance-review.md`; verdict `HOLD` for algorithm/default changes while NAS is unavailable, analysis-only work accepted.
 - Other active queue items:
-  - `Mac App Store Submission Readiness`; latest blocker matrix is `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.md` with `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`, signed-artifact proof/sandbox/App Store Connect validation/signing identities/owner metadata still red, owner-input metadata pending `8/8`, and App Store Connect metadata pending `8`. Owner approval for App Store packaging/signing/upload/metadata execution exists, but signed `.pkg`, strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, upload/submission, and owner metadata values JSON remain incomplete. Developer ID beta `.dmg` remains a separate opt-in track.
+  - `Mac App Store Submission Readiness`; latest blocker matrix is `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`, and latest owner-input package is `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`. Current state remains `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`, signed-artifact proof/sandbox App Store Connect validation/signing identities/owner metadata still red, owner-input metadata ready `0/8`, and App Store Connect metadata ready `0/8`. Owner approval for App Store packaging/signing/upload/metadata execution exists, but signed `.pkg`, strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, upload/submission, and owner metadata values JSON remain incomplete. Developer ID beta `.dmg` remains a separate opt-in track.
 - Latest post-generation editor readiness closeout:
   - verification index: `output/manual_verification/latest/post_generation_editor_readiness_index_20260627/verification_index.md`
   - focused guard result: `7 passed, 190 deselected`

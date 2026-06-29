@@ -19,6 +19,33 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.32 Code Review, Version Release, And Agent Bootstrap Refresh
+
+Source request: code review and fix, clean worktree, push main, bump version,
+release, update the agent file, and prepare for a new chat.
+
+1. Reviewed the documentation-consolidation release state and found no runtime
+   app-code defect requiring behavior changes.
+2. Fixed review findings in the handoff/bootstrap surface: refreshed stale
+   AGENTS current-state pointers, removed a duplicated project/status guard
+   line, updated the latest physical Jammini route proof, and aligned release
+   pointers for a new chat.
+3. Bumped `APP_VERSION` and `PROJECT_SCHEMA_VERSION` from `04.01.31` to
+   `04.01.32`.
+4. Added `docs/release_notes/RELEASE_v04.01.32.md`.
+5. Updated `AGENTS.md`, `docs/PROJECT_STATE.md`, `docs/README.md`,
+   `docs/HANDOFF.md`, `docs/planning_queue/ACTION_ITEMS.md`, and
+   `docs/quality_validation/test_result.md`.
+6. Preserved the fresh physical Jammini probe
+   `.agents/sentinel/handoffs/20260629-214917-watchdog-handoff-probe.md` and
+   its `.agents/sentinel/handoff.md` index pointer.
+7. Focused validation passed: py_compile for version files, project/status
+   focused guard `66 passed, 84 deselected`, docs consolidation presence check,
+   tracked docs path check, direct version assertion, and `git diff --check`.
+8. This checkpoint does not change UI/UX, STT/cache defaults, NLE runtime
+   behavior, App Store packaging/signing/upload/submission, owner metadata
+   readiness, or subtitle generation.
+
 ## v04.01.31 Development Documentation Consolidation And Legacy Queue Removal
 
 Source request: move development documents into `docs/` except `AGENTS.md`,

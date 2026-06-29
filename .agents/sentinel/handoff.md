@@ -1,4 +1,5 @@
 # Sentinel Handoffs Index
+- `.agents/sentinel/handoffs/20260629-214917-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260629-162922-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260629-162107-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260629-160626-watchdog-handoff-probe.md`

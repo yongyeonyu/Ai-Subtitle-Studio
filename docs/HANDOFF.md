@@ -33,7 +33,59 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / Development Documentation Consolidation
+## Current Handoff - 2026-06-29 v04.01.32 / Code Review, Version Release, And Agent Bootstrap Refresh
+
+### Scope
+
+- Reviewed the latest documentation-consolidation checkpoint and current
+  release/bootstrap state.
+- Bumped app/project schema version to `04.01.32`.
+- Added `docs/release_notes/RELEASE_v04.01.32.md`.
+- Updated `AGENTS.md` for the next chat.
+- Updated project state, docs hub, active queue metadata, completed archive,
+  validation result, and this handoff.
+- Preserved the fresh physical Jammini probe
+  `.agents/sentinel/handoffs/20260629-214917-watchdog-handoff-probe.md`.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.32`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.32`.
+- Latest release checkpoint: `v04.01.32`.
+- Code review found no runtime app-code issue requiring behavior changes.
+- Review fixes applied: AGENTS stale pointer refresh, duplicate guard-line
+  cleanup, latest physical Jammini probe pointer, and release/bootstrap pointer
+  alignment.
+- Runtime app behavior, UI/UX, STT/cache defaults, NLE runtime behavior, and
+  App Store readiness state were unchanged.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py` -> pass.
+- Focused version/status guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
+- Docs consolidation presence check -> `docs_consolidation_presence=pass`.
+- Tracked development `.md` path check excluding `.agents`, `.codex_work`,
+  `_backup_mac_migration`, `checkpoints`, and `output` -> only `./AGENTS.md`
+  remains outside `docs/`.
+- Direct version assertion -> `APP_VERSION=04.01.32`,
+  `PROJECT_SCHEMA_VERSION=04.01.32`.
+- `git diff --check -- .` -> pass.
+
+### Remaining Risks
+
+- G0 remains blocked on Apple Distribution/installer identities, signed `.pkg`,
+  strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store
+  Connect validation, upload/submission proof, and owner metadata values JSON.
+- G1 cache defaults remain off until the owner chooses exactly one cache and
+  same-fixture post-change proof passes.
+- G2/G3 future expansion still needs a fresh bounded owner-selected gate.
+
+### Next Recommended Action
+
+- Start the new chat from `AGENTS.md`, then
+  `docs/planning_queue/ACTION_ITEMS.md`, `docs/README.md`, and this handoff.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / Development Documentation Consolidation
 
 ### Scope
 

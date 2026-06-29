@@ -44,9 +44,9 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.31` from `core/runtime/config.py`
-- Project schema version: `04.01.31` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.31.md`
+- App version: `04.01.32` from `core/runtime/config.py`
+- Project schema version: `04.01.32` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.32.md`
 - Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929`
 - Latest NLE final cutover-ready opt-in audit: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md`
 - Previous NLE legacy disk-shape replacement opt-in audit: `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.md`
@@ -63,14 +63,13 @@ The repository root intentionally keeps no active development docs other than
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
 - Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
 
-`v04.01.31` is a G2 final source-app project persistence load-owner opt-in proof
-checkpoint. It allows the approved payload to declare
-`default_project_authority=nle_snapshot` only when the distinct final approval
-schema and all preceding snapshot/runtime/legacy-projection policies are present.
-The `editor_state` key remains present as a compatibility projection, forged
-final policy is blocked, Direct SRT precedence is preserved, and the audit is
-green with blockers `[]`. It is not UI/UX change, STT/cache default change,
-full QA, or App Store submission proof.
+`v04.01.32` is a documentation-consolidation, code-review, release, and
+new-chat bootstrap checkpoint. It keeps the `v04.01.31` G2 final source-app
+project persistence load-owner behavior unchanged, moves development
+documentation under `docs/`, retires the stale duplicate `doc/ACTION_ITEMS.md`
+queue, and refreshes AGENTS/HANDOFF/release pointers for the next chat. It is
+not UI/UX change, STT/cache default change, full QA, packaging/signing/upload,
+or App Store submission proof.
 
 ## Active Groups
 
@@ -109,7 +108,8 @@ final cutover-ready opt-in proof, the `v04.01.31` G0 App Store
 current-version readiness refresh, the `v04.01.31` G1 STT cache review
 packet evidence-binding refresh, the `v04.01.31` G0/G1/G2/G3 blocker
 recheck plus active-queue metadata sync, and the `v04.01.31` G0 owner metadata
-values template support.
+values template support, plus the `v04.01.32` development-documentation
+consolidation and new-chat bootstrap refresh.
 
 ## Must Not Break
 
