@@ -8,6 +8,7 @@
 - `ui/main/main_window.py`: 메인 윈도우와 상위 UI 조립
 - `tools/qa_suite_runner.py`: 저장소 표준 검증 진입점
 - `tools/appctl.py`: 실행 중 앱 상태/제어 보조 도구
+- `tools/generate_stt_cache_default_review_packet.py`: G1 STT collect-cache default review packet generator; runtime defaults stay unchanged.
 
 루트 `config.py`는 없고, 앱 기본 런타임 설정의 중심은 `core/runtime/config.py`입니다.
 

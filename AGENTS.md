@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.17-source-app
+Document-Version: 04.01.18-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.17`
-- Latest release checkpoint: `v04.01.17`
+- App version in code: `04.01.18`
+- Latest release checkpoint: `v04.01.18`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -235,26 +235,27 @@ Completed item rule:
   - result: pass, `profile=quick`, `scenario_count=1`, `passed=1`, `failed_count=0`, scenario `editor_compact_macau`
   - scope note: source-app editor workflow baseline only; not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, or roughcut proof.
 - Latest release checkpoint scope:
-  - `v04.01.17` - source-app G0 source quick QA baseline before packaging, 04.01.17 version/schema bump, and release docs. This is not App Store submission proof.
+  - `v04.01.18` - G1 STT collect-cache default review packet, 04.01.18 version/schema bump, and release docs. This is owner-review evidence only; it does not enable collect-cache defaults, claim production speed improvement, or prove App Store submission readiness.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths. Owner-approved `nle_snapshot` and top-level `nle` shadow metadata remain compatibility metadata only; persisted `_nle_project_state`, canonical NLE load ownership, and legacy save/reopen replacement remain gated.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.17`:
-  - source-app quick QA baseline: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929` -> `profile=quick`, `scenario_count=1`, `passed_count=1`, `failed_count=0`, scenario `editor_compact_macau`
-  - compile check: `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass
-  - macOS bundle runtime path guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_macos_bundle_runtime_paths.py` -> `4 passed`
+- Latest focused guard set for `v04.01.18`:
+  - STT cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md` -> `status=owner_review_required`, `not_runtime_change=true`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `false/false`, evidence write/hit elapsed `177.888s -> 1.183s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, global max active `1`, timeout detected `false`
+  - source-app quick QA baseline remains: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929` -> `profile=quick`, `scenario_count=1`, `passed_count=1`, `failed_count=0`, scenario `editor_compact_macau`
+  - compile check: `./venv/bin/python -m py_compile tools/generate_stt_cache_default_review_packet.py tests/test_stt_cache_default_review_packet.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass
+  - STT cache packet and macOS bundle guards: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py tests/test_macos_bundle_runtime_paths.py` -> `10 passed`
   - project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`
   - cancel proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_cancel_20260629_083050/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, status/guided-status command elapsed samples below `0.01s`, cancel returned `current_pipeline_cancel_requested`, and post-cancel status was `ST_IDLE/backend_active=false`
   - close proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json` -> `app-close-request` returned while active in `0.009954s`, then bridge became `app_unreachable` after app exit
   - quit proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json` -> `app-quit-request` returned while active in `0.001577s`, then bridge became `app_unreachable` after app exit
-  - direct version assertion: `APP_VERSION=04.01.17`, `PROJECT_SCHEMA_VERSION=04.01.17`
+  - direct version assertion: `APP_VERSION=04.01.18`, `PROJECT_SCHEMA_VERSION=04.01.18`
   - `git diff --check -- .` -> pass
   - App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md` -> `status=blocked`, `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner-input metadata `8/8`, forbidden-claim scan `pass` with `0` matches, and sanitized readiness snapshot without raw keychain identity names.
   - App Store blocker refresh: `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md` -> `status=blocked`, `submission_target=mac_app_store_pkg`, `local_packaging_ready=true`, `app_store_submission_ready=false`, blocker count `15`, Apple Development identity present, Apple Distribution identity missing, installer identity missing, owner-input metadata pending `8/8`
   - active global-canvas proof: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, timeline zoom/fit/time-window/max plus zoom-max/play/pause/status/guided-status all `ok=true`, max command elapsed `0.267435s`, `19` nonzero snapshots, final track count stayed `0`, cancel returned to `backend_active=false`
   - prior physical Jammini probe remains `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`; current `--handoff-probe` packet did not produce a fresh physical handoff file, so do not overclaim a new physical route proof from it.
-  - three sub-agent reviews converged on keeping this G0 slice to source-app quick QA baseline only; signed `.pkg`, App Store Connect validation/upload/submission, sandbox smoke, and owner metadata completion remain HOLD.
+  - three sub-agent reviews converged on keeping this G1 slice review-only: defaults remain off, cache-hit `1.183s` is same-fixture replay evidence and not first-run user speed, and any default promotion must be owner-approved one cache at a time with rollback proof. Signed `.pkg`, App Store Connect validation/upload/submission, sandbox smoke, and owner metadata completion remain HOLD for G0.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
   - `total_elapsed_sec=48.511`
@@ -268,8 +269,10 @@ Completed item rule:
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
-- Latest completed action-item slice: `v04.01.17 G0 Source Quick QA Baseline Before Packaging`.
+- Latest completed action-item slice: `v04.01.18 G1 STT Cache Default Review Packet`.
 - Current G1 latency evidence snapshot:
+  - latest STT collect-cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`
+  - review packet state: `owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`; STT1, STT2 recheck, and word precision cache default changes remain owner-approval-required, one-cache-at-a-time, and rollback-boundary gated.
   - latest generated-video direct validation evidence: `output/manual_verification/latest/generated_video_subtitle_validation_20260628_latest/validation_report.md`
   - strict duration-bound follow-up: `output/manual_verification/latest/generated_video_strict_duration_validation_20260628/strict_duration_report.md`
   - strict acceptance gate follow-up: `output/manual_verification/latest/generated_video_strict_acceptance_gate_20260628/reference_benchmark_acceptance.md`

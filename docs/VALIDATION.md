@@ -75,6 +75,29 @@ AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 AI_SUBTITLE_STUDIO_QA_X5_MEDIA='/path/to/audi
 ./venv/bin/python -m pytest -q tests/test_roughcut_*.py
 ```
 
+## G1 STT cache default review packet
+
+For collect-cache default review work, generate a packet from accepted evidence
+without enabling defaults or changing runtime behavior:
+
+```bash
+./venv/bin/python tools/generate_stt_cache_default_review_packet.py \
+  --evidence-dir output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202 \
+  --output-dir output/manual_verification/latest/stt_cache_default_review_packet_YYYYMMDD_HHMM
+```
+
+The packet must remain review-only: `owner_review_required`,
+`production_defaults_unchanged=true`, `default_promotion_allowed=false`, and
+current defaults `stt_primary_collect_cache_enabled=false` plus
+`stt_recheck_collect_cache_enabled=false`.
+
+Focused guards:
+
+```bash
+./venv/bin/python -m py_compile tools/generate_stt_cache_default_review_packet.py tests/test_stt_cache_default_review_packet.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py
+```
+
 ## G3 live NLE observability proof
 
 For `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`,

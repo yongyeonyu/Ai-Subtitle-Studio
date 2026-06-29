@@ -1,4 +1,4 @@
-# Version: 04.01.17
+# Version: 04.01.18
 # Phase: SOURCE_APP_CONTINUATION_V4_1_0_RELEASE
 
 
@@ -13,7 +13,7 @@ OS_NAME = platform.system()          # "Darwin", "Windows", "Linux"
 IS_MAC = OS_NAME == "Darwin"
 IS_WINDOWS = OS_NAME == "Windows"
 IS_LINUX = OS_NAME == "Linux"
-APP_VERSION = "04.01.17"
+APP_VERSION = "04.01.18"
 MACBOOK_ONLY_APP = True
 SUPPORTED_OS_NAMES = ("Darwin",)
 APP_STORE_TARGET = True

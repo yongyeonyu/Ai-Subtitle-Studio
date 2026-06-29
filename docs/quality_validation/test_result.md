@@ -1,5 +1,28 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.18 G1 STT Cache Default Review Packet - 2026-06-29 KST
+
+- 실행 모드: source-app G1 collect-cache owner-review packet generator, false-positive guard tests, and version/schema bump.
+- 결과: pass for the bounded owner-review packet slice. This is review evidence only; it does not enable collect caches by default and does not claim production speed improvement.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.18.md`
+  - Review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`
+  - Decision matrix: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/decision_matrix.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040118-g1-stt-cache-default-review-packet`
+- 실제 결과:
+  - App version updated to `04.01.18`.
+  - Project schema version updated to `04.01.18`.
+  - `tools/generate_stt_cache_default_review_packet.py` now writes JSON/Markdown owner-review artifacts from the existing NAS collect-cache backfill evidence.
+  - Generated packet state: `status=owner_review_required`, `not_runtime_change=true`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `false/false`.
+  - Evidence preserved: write/hit elapsed `177.888s -> 1.183s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, global max active `1`, timeout detected `false`.
+  - Decision matrix keeps STT1, STT2 recheck, and word precision cache promotion owner-approved, one-cache-at-a-time, and rollback-boundary gated.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/generate_stt_cache_default_review_packet.py tests/test_stt_cache_default_review_packet.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py tests/test_macos_bundle_runtime_paths.py` -> `10 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.18`, `PROJECT_SCHEMA_VERSION=04.01.18`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.17 G0 Source Quick QA Baseline Before Packaging - 2026-06-29 KST
 
 - 실행 모드: source-app G0 quick QA baseline before packaging and version/schema bump.

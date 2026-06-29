@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.17-source-app
+Document-Version: 04.01.18-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,21 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.18 G1 STT Cache Default Review Packet
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.18"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.18`.
+3. `tools/generate_stt_cache_default_review_packet.py` now writes a G1 owner-review packet from the existing representative NAS collect-cache backfill evidence without changing runtime defaults.
+4. Review packet evidence was written to `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`.
+5. Packet state: `status=owner_review_required`, `not_runtime_change=true`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`.
+6. Evidence preserved from the representative NAS write/hit replay: elapsed `177.888s -> 1.183s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, global max active `1`, and timeout detected `false`.
+7. Decision matrix keeps STT1 primary collect cache, STT2 selective recheck collect cache, and word precision collect cache as owner-approval-required with `default_change_allowed=false` and one-cache-at-a-time rollback boundaries.
+8. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+9. Focused verification passed: compile check for touched packet/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py tests/test_macos_bundle_runtime_paths.py` -> `10 passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.18` / `PROJECT_SCHEMA_VERSION=04.01.18`; `git diff --check -- .` -> pass.
+10. This slice does not enable collect caches by default, claim production speed improvement, change STT/STT2/word precision quality policy, change UI/UX, change NLE persistence, or provide App Store packaging/signing/upload/submission proof.
 
 ## v04.01.17 G0 Source Quick QA Baseline Before Packaging
 

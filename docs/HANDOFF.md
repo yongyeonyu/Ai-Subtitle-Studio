@@ -33,7 +33,48 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.17 / G0 Source Quick QA Baseline Before Packaging
+## Current Handoff - 2026-06-29 v04.01.18 / G1 STT Cache Default Review Packet
+
+### Scope
+
+- Completed the G1 STT collect-cache default review packet slice.
+- Bumped source-app version and project schema from `04.01.17` to `04.01.18`.
+- Added `tools/generate_stt_cache_default_review_packet.py` and `tests/test_stt_cache_default_review_packet.py`.
+- Generated a review-only artifact from existing representative NAS collect-cache evidence and updated current docs/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.18`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.18`.
+- Review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`.
+- Packet state: `status=owner_review_required`, `not_runtime_change=true`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`.
+- Current defaults remain `stt_primary_collect_cache_enabled=false` and `stt_recheck_collect_cache_enabled=false`.
+- Preserved NAS evidence: write/hit elapsed `177.888s -> 1.183s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, global max active `1`, timeout detected `false`.
+- This is owner-review evidence only. It is not cache default promotion, first-run user speed proof, production speedup claim, UI/UX change, NLE persistence change, or App Store packaging/signing/upload/submission proof.
+
+### Evidence
+
+- Packet generation: `./venv/bin/python tools/generate_stt_cache_default_review_packet.py --evidence-dir output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202 --output-dir output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703` -> `status=owner_review_required`.
+- Compile check: `./venv/bin/python -m py_compile tools/generate_stt_cache_default_review_packet.py tests/test_stt_cache_default_review_packet.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- STT cache packet and macOS bundle guards: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_stt_cache_default_review_packet.py tests/test_macos_bundle_runtime_paths.py` -> `10 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.18`, `PROJECT_SCHEMA_VERSION=04.01.18`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for release boundary, QE, and editor-workflow wording constraints. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+- G0 remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, upload/submission, and owner-approved metadata values.
+- Any additional active-worker final-surface proof remains a separate G3 gate if selected by the queue.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G1, ask whether to promote exactly one collect cache by default, then create a rollback boundary and rerun same-fixture proof after the default change.
+- If continuing G0, provide or install the missing signing identities and owner metadata values, then rerun the readiness audit before any package/upload attempt.
+
+## Previous Handoff - 2026-06-29 v04.01.17 / G0 Source Quick QA Baseline Before Packaging
 
 ### Scope
 

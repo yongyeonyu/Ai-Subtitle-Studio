@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.17-source-app
+Document-Version: 04.01.18-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.17`.
+- App version: `04.01.18`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -108,6 +108,7 @@ Current baseline:
 - Representative HeyDealer first-180s STT1 plus STT2/word collect-cache write/hit backfill is strict-accepted.
 - `stt_recheck_collect_cache_enabled=false` and `stt_primary_collect_cache_enabled=false` remain production defaults until explicit owner approval.
 - Latest strict real-media collect-cache backfill refresh: `output/manual_verification/latest/stt_cache_backfill_real_nas_20260628_2202/`; preflight passed, write/hit accepted, elapsed `177.888s -> 1.183s`, raw/final/reference `58/56/89`, quality/text/timing `93.766/94.267/0.5808s`, final invalid/non-monotonic/overlap `0/0/0`, final last end/duration bound `180.0/180.0`, global max active `1`, STT1/STT2/word provider calls `true -> false`, and timeout audit reported `timeout_detected=false`.
+- Latest collect-cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`; status `owner_review_required`, `production_defaults_unchanged=true`, `default_promotion_allowed=false`, current defaults `false/false`, and decision matrix keeps STT1, STT2 recheck, and word precision cache promotion owner-approved and one-cache-at-a-time only.
 - NAS HeyDealer first 180 seconds remains the owner-level gate for production-facing latency/default decisions.
 
 Detailed plan:
@@ -265,8 +266,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.17"
-document_version: "04.01.17-source-app"
+app_version: "04.01.18"
+document_version: "04.01.18-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

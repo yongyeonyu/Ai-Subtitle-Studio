@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.17-codemap
+Document-Version: 04.01.18-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -33,6 +33,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/verify_full_media_pipeline.py`: full-media verification runner with top-level performance/quality summary metrics.
 - `tools/audit_app_store_readiness.py`: non-destructive Mac App Store readiness blocker audit.
 - `tools/generate_app_store_metadata_package.py`: Mac App Store owner-input metadata package generator; writes checklist/matrix/guardrail artifacts without claiming submission proof.
+- `tools/generate_stt_cache_default_review_packet.py`: G1 STT collect-cache owner-review packet generator; summarizes existing NAS cache write/hit evidence without enabling production cache defaults.
 
 ## UI Areas
 
