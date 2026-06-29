@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.01.20-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.01.20-30D158?style=for-the-badge)](../release_notes/RELEASE_v04.01.20.md)
+[![App Version](https://img.shields.io/badge/app-04.01.21-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.01.21-30D158?style=for-the-badge)](../release_notes/RELEASE_v04.01.21.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -224,9 +224,9 @@ Recommended read order for a fresh continuation:
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.01.20` |
-| Latest release checkpoint | `v04.01.20` |
-| Handoff document version | `04.01.20-source-app` |
+| App version in code | `04.01.21` |
+| Latest release checkpoint | `v04.01.21` |
+| Handoff document version | `04.01.21-source-app` |
 | Active phase | `SOURCE_APP_CONTINUATION_V4_1_0` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
@@ -258,7 +258,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.01.20.md`](../release_notes/RELEASE_v04.01.20.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.01.21.md`](../release_notes/RELEASE_v04.01.21.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

@@ -159,6 +159,7 @@ class ProjectNleSnapshotTests(unittest.TestCase):
         self.assertEqual(sequence.clips[0].sequence_end, 8.0)
         self.assertEqual([caption.text for caption in sequence.captions], ["첫 자막", "둘째 자막"])
         self.assertEqual([(caption.sequence_start, caption.sequence_end) for caption in sequence.captions], [(0.0, 2.0), (4.0, 5.5)])
+        self.assertEqual(len(sequence.gaps), 0)
 
         cut_markers = [marker for marker in sequence.markers if marker.kind == "cut_boundary"]
         exact_markers = [marker for marker in sequence.markers if marker.kind == "roughcut_exact_join"]
@@ -911,6 +912,7 @@ class ProjectNleSnapshotTests(unittest.TestCase):
 
         sequence = snapshot.sequences[0]
         self.assertEqual(snapshot.metadata["caption_count"], 2)
+        self.assertEqual(snapshot.metadata["gap_count"], 1)
         self.assertEqual(sequence.duration, round(duration_sec, 6))
         self.assertEqual(
             [caption.text for caption in sequence.captions],
@@ -924,6 +926,10 @@ class ProjectNleSnapshotTests(unittest.TestCase):
         self.assertEqual(sequence.captions[0].metadata["words"][0]["word"], "first")
         self.assertEqual(sequence.captions[0].metadata["subtitle_stage_confidence"]["stages"]["stt"]["score"], 91)
         self.assertEqual(sequence.captions[0].metadata["start_frame"], first_start_frame)
+        self.assertEqual(len(sequence.gaps), 1)
+        self.assertAlmostEqual(sequence.gaps[0].sequence_start, first_end_frame / fps)
+        self.assertAlmostEqual(sequence.gaps[0].sequence_end, gap_end_frame / fps)
+        self.assertEqual(sequence.gaps[0].metadata["start_frame"], first_end_frame)
 
         render_plan = snapshot.render_plans[0]
         self.assertEqual(render_plan.output_duration, 4.0)

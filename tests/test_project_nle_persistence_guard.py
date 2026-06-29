@@ -243,7 +243,9 @@ class NLEPersistenceGuardTests(unittest.TestCase):
             NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
         )
         self.assertEqual(nle_payload["metadata"]["caption_count"], 1)
+        self.assertEqual(nle_payload["metadata"]["gap_count"], 1)
         self.assertEqual(nle_payload["sequences"][0]["captions"][0]["text"], "first")
+        self.assertEqual(nle_payload["sequences"][0]["gaps"][0]["gap_id"], "gap_1")
         self.assertEqual(loaded_rows, expected_rows)
         self.assertIsInstance(loaded_state, NLEProjectState)
         self.assertTrue(parity["checked"])

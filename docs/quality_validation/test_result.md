@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.21 G2 Top-Level NLE Gap Projection Coverage Audit - 2026-06-29 KST
+
+- 실행 모드: source-app G2 NLE top-level shadow gap projection coverage audit, compatibility false-positive guards, and version/schema bump.
+- 결과: pass for the bounded compatibility-audit slice. The previous gap coverage blocker is closed, but the audit remains blocked for canonical cutover because default project load still uses legacy `editor_state` rows and load-owner/disk-format cutover remains disallowed.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.21.md`
+  - Audit report: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040121-g2-top-level-nle-gap-projection-coverage-audit`
+- 실제 결과:
+  - App version updated to `04.01.21`.
+  - Project schema version updated to `04.01.21`.
+  - `core/project/nle_snapshot.py` now represents legacy gap rows as non-caption `GapSegment` metadata on `Sequence.gaps` inside approved top-level `nle` shadow payloads.
+  - `tools/audit_nle_persistence_cutover.py` now reports explicit top-level caption plus gap compatibility projection while preserving default legacy project load.
+  - Audit state: `status=blocked`, `prep_ready=true`, `persistence_cutover_ready=false`, `top_level_nle_compatibility_projection_passed=true`, `top_level_nle_canonical_projection_complete=false`.
+  - Compatibility projection state: `status=gap_projection_coverage_ready_blocked`, `not_runtime_change=true`, current canonical owner `legacy_editor_state`, default load source `legacy_editor_state`, explicit projection source `top_level_nle_shadow_metadata`, explicit/default row-caption-gap counts `3/2/1`, and `gap_coverage_ready=true`.
+  - Canonical load-owner change and disk-format cutover remain disallowed.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_snapshot.py tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py tests/test_project_nle_snapshot.py tests/test_project_nle_persistence_guard.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `6 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_project_nle_snapshot.py -k "top_level or readback or direct_srt or snapshot_adapter"` -> `7 passed, 17 deselected`.
+  - `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041` -> `status=blocked`, `gap_coverage_ready=true`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_snapshot.py tests/test_macos_bundle_runtime_paths.py` -> `39 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.21`, `PROJECT_SCHEMA_VERSION=04.01.21`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.20 G2 Top-Level NLE Compatibility Projection Audit - 2026-06-29 KST
 
 - 실행 모드: source-app G2 NLE persistence cutover audit extension, compatibility projection false-positive guards, and version/schema bump.

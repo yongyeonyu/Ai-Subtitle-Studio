@@ -167,16 +167,17 @@ are all proven:
 
 ```bash
 ./venv/bin/python tools/audit_nle_persistence_cutover.py \
-  --output-dir output/manual_verification/latest/nle_top_level_compatibility_projection_YYYYMMDD_HHMM
+  --output-dir output/manual_verification/latest/nle_top_level_gap_projection_YYYYMMDD_HHMM
 ```
 
 The current expected state is audit evidence only:
 `top_level_nle_compatibility_projection_passed=true`,
 `top_level_nle_canonical_projection_complete=false`,
-`status=compatibility_projection_partial_blocked`,
+`status=gap_projection_coverage_ready_blocked`,
 default load source `legacy_editor_state`,
 explicit projection source `top_level_nle_shadow_metadata`,
-`gap_coverage_ready=false`, and
+explicit/default row-caption-gap counts `3/2/1`,
+`gap_coverage_ready=true`, and
 `canonical_load_owner_change_allowed=false`.
 
 Focused guards:

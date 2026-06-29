@@ -19,6 +19,7 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["render_export_parity_passed"] is True
     assert report["top_level_nle_shadow_ready"] is True
     assert "top_level_nle_shadow_not_canonical_load_owner" in report["blockers"]
+    assert "top_level_nle_projection_gap_coverage_missing" not in report["blockers"]
     runtime = report["checks"]["runtime_roundtrip"]
     assert runtime["loaded_runtime_state"] is True
     assert runtime["runtime_caption_count"] == 3
@@ -45,11 +46,13 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert top_level["runtime_project_state_persisted"] is False
     assert top_level["legacy_rows_stable"] is True
     assert top_level["readback_parity_stable"] is True
+    assert top_level["caption_count"] == 2
+    assert top_level["gap_count"] == 1
     assert top_level["runtime_report_persisted"] is False
     assert top_level["runtime_state_persisted"] is False
     assert top_level["quarantine_persisted"] is False
     compatibility = report["checks"]["top_level_nle_compatibility_projection"]
-    assert compatibility["status"] == "compatibility_projection_partial_blocked"
+    assert compatibility["status"] == "gap_projection_coverage_ready_blocked"
     assert compatibility["not_runtime_change"] is True
     assert compatibility["canonical_load_owner_unchanged"] is True
     assert compatibility["current_canonical_load_owner"] == "legacy_editor_state"
@@ -58,18 +61,18 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert compatibility["explicit_projection_uses_top_level_nle"] is True
     assert compatibility["default_load_uses_legacy_rows"] is True
     assert compatibility["explicit_projection_differs_from_default"] is True
+    assert compatibility["explicit_projection_row_count"] == 3
     assert compatibility["explicit_projection_caption_count"] == 2
-    assert compatibility["explicit_projection_gap_count"] == 0
+    assert compatibility["explicit_projection_gap_count"] == 1
     assert compatibility["default_row_count"] == 3
     assert compatibility["default_caption_count"] == 2
     assert compatibility["default_gap_count"] == 1
-    assert compatibility["gap_coverage_ready"] is False
+    assert compatibility["gap_coverage_ready"] is True
     assert compatibility["runtime_state_hydrated_from_legacy"] is True
     assert compatibility["runtime_report_persisted_after_resave"] is False
     assert compatibility["runtime_state_persisted_after_resave"] is False
     assert compatibility["quarantine_persisted_after_resave"] is False
     assert compatibility["resave_rebuilt_shadow_from_legacy"] is True
-    assert "top_level_nle_projection_gap_coverage_missing" in report["blockers"]
     assert report["top_level_nle_compatibility_projection_passed"] is True
     assert report["top_level_nle_canonical_projection_complete"] is False
     corrupted = report["checks"]["corrupted_snapshot_readback"]
@@ -140,15 +143,17 @@ def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
         assert "## Top-Level NLE Shadow" in markdown
         assert "- Storage has top-level NLE: `True`" in markdown
         assert "- Canonical load owner: `legacy_editor_state`" in markdown
+        assert "- Caption/gap count: `2` / `1`" in markdown
         assert "## Top-Level NLE Compatibility Projection" in markdown
         assert "Compatibility audit evidence only." in markdown
-        assert "- Status: `compatibility_projection_partial_blocked`" in markdown
+        assert "- Status: `gap_projection_coverage_ready_blocked`" in markdown
         assert "- Default load source: `legacy_editor_state`" in markdown
         assert "- Explicit projection uses top-level NLE: `True`" in markdown
         assert "- Default load uses legacy rows: `True`" in markdown
-        assert "- Explicit projection caption/gap count: `2` / `0`" in markdown
+        assert "- Explicit projection row count: `3`" in markdown
+        assert "- Explicit projection caption/gap count: `2` / `1`" in markdown
         assert "- Default row/caption/gap count: `3` / `2` / `1`" in markdown
-        assert "- Gap coverage ready: `False`" in markdown
+        assert "- Gap coverage ready: `True`" in markdown
         for forbidden in (
             "canonical load owner ready",
             "cutover ready",

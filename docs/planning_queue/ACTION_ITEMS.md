@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.20-source-app
+Document-Version: 04.01.21-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.20`.
+- App version: `04.01.21`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -160,7 +160,8 @@ Current baseline:
 - Approved top-level `nle` shadow metadata can be written for explicitly marked projects, but `canonical_load_owner` remains `legacy_editor_state`.
 - Persisted `_nle_project_state`, making `nle` or `nle_snapshot` the canonical load owner, and full NLE disk-format cutover remain gated.
 - Legacy save/reopen compatibility remains mandatory.
-- Latest top-level NLE compatibility projection audit: `output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018/nle_persistence_cutover_audit.md`; `top_level_nle_compatibility_projection_passed=true`, `status=compatibility_projection_partial_blocked`, `not_runtime_change=true`, default project load remains `legacy_editor_state`, explicit top-level `nle` projection differs from default legacy captions, explicit projection has caption/gap count `2/0`, default rows have row/caption/gap count `3/2/1`, `gap_coverage_ready=false`, runtime state remains hydrated from legacy rows, resave rebuilds the shadow from legacy rows, and canonical load-owner / disk-format cutover remain disallowed.
+- Latest top-level NLE gap projection coverage audit: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.md`; `top_level_nle_compatibility_projection_passed=true`, `top_level_nle_canonical_projection_complete=false`, `status=gap_projection_coverage_ready_blocked`, `not_runtime_change=true`, default project load remains `legacy_editor_state`, explicit top-level `nle` projection includes the legacy gap row as non-caption gap metadata, explicit/default row-caption-gap counts are both `3/2/1`, `gap_coverage_ready=true`, runtime state remains hydrated from legacy rows, resave rebuilds the shadow from legacy rows, and canonical load-owner / disk-format cutover remain disallowed. Completed detail: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040121-g2-top-level-nle-gap-projection-coverage-audit`.
+- Previous top-level NLE compatibility projection audit: `output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018/nle_persistence_cutover_audit.md`; this is the previous partial proof where explicit projection had caption/gap count `2/0` and `gap_coverage_ready=false`.
 - Latest top-level NLE shadow metadata proof: `output/manual_verification/latest/nle_top_level_shadow_metadata_20260629_0020/nle_persistence_cutover_audit.md`; `prep_ready=true`, `top_level_nle_shadow_ready=true`, storage has approved top-level `nle` plus `nle_snapshot`, `canonical_load_owner=legacy_editor_state`, legacy rows and read-back parity are stable, runtime report/runtime state/quarantine do not persist, operation roundtrip all passed across `11` families, render/export parity passed, and full cutover remains `persistence_cutover_ready=false`.
 - Latest canonical load-owner review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`; status `owner_review_required_blocked`, `canonical_load_owner_unchanged=true`, current canonical owner `legacy_editor_state`, `canonical_load_owner_change_allowed=false`, `disk_format_cutover_allowed=false`, top-level `nle` remains `shadow_metadata`, operation roundtrip `11` families passed, render/export final invalid/non-monotonic/overlap `0/0/0`, and full NLE disk-format cutover remains blocked.
 - Completed close/deferred-save blocker proof: `output/manual_verification/latest/nle_close_deferred_save_v040102_20260629/close_deferred_save_report.md`; raw vector `time.start_frame/end_frame` rows no longer collapse into `nle_save_export_invalid_duration`, close-triggered deferred-save failures no longer reschedule stale retry loops, and true final overlaps still raise `nle_save_export_final_overlap`.

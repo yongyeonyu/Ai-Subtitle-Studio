@@ -62,6 +62,16 @@ class CaptionSegment:
 
 
 @dataclass(frozen=True, slots=True)
+class GapSegment:
+    gap_id: str
+    sequence_start: float
+    sequence_end: float
+    line: int = 0
+    clip_id: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class TimelineMarker:
     marker_id: str
     kind: str
@@ -88,6 +98,7 @@ class Sequence:
     tracks: tuple[Track, ...] = ()
     clips: tuple[Clip, ...] = ()
     captions: tuple[CaptionSegment, ...] = ()
+    gaps: tuple[GapSegment, ...] = ()
     markers: tuple[TimelineMarker, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -178,6 +189,16 @@ def _signature_caption(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _signature_gap(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "gap_id": str(row.get("gap_id") or ""),
+        "sequence_start": _round_float(row.get("sequence_start")),
+        "sequence_end": _round_float(row.get("sequence_end")),
+        "line": _as_int(row.get("line"), 0),
+        "clip_id": str(row.get("clip_id") or ""),
+    }
+
+
 def _signature_marker(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "marker_id": str(row.get("marker_id") or ""),
@@ -214,6 +235,11 @@ def nle_snapshot_readback_signature(snapshot: NLESnapshot | dict[str, Any] | Non
                 "captions": [
                     _signature_caption(row)
                     for row in sequence.get("captions") or []
+                    if isinstance(row, dict)
+                ],
+                "gaps": [
+                    _signature_gap(row)
+                    for row in sequence.get("gaps") or []
                     if isinstance(row, dict)
                 ],
                 "markers": [
@@ -286,6 +312,8 @@ def build_nle_snapshot_readback_parity_report(
             len(seq.get("captions", [])) for seq in persisted_signature.get("sequences", [])
         ),
         "fresh_caption_count": sum(len(seq.get("captions", [])) for seq in fresh_signature.get("sequences", [])),
+        "persisted_gap_count": sum(len(seq.get("gaps", [])) for seq in persisted_signature.get("sequences", [])),
+        "fresh_gap_count": sum(len(seq.get("gaps", [])) for seq in fresh_signature.get("sequences", [])),
         "persisted_marker_count": sum(len(seq.get("markers", [])) for seq in persisted_signature.get("sequences", [])),
         "fresh_marker_count": sum(len(seq.get("markers", [])) for seq in fresh_signature.get("sequences", [])),
         "persisted_render_plan_count": len(persisted_signature.get("render_plans", [])),
@@ -526,6 +554,48 @@ def _build_captions(project: dict[str, Any], clips: tuple[Clip, ...]) -> tuple[C
     return tuple(captions)
 
 
+def _build_gaps(project: dict[str, Any], clips: tuple[Clip, ...]) -> tuple[GapSegment, ...]:
+    by_index, by_path = _clip_lookup(clips, project)
+    gaps: list[GapSegment] = []
+    for index, row in enumerate(project_segments_to_editor(project, include_analysis_candidates=False)):
+        if not isinstance(row, dict) or not row.get("is_gap"):
+            continue
+        start = _as_float(row.get("start", row.get("timeline_start", 0.0)), 0.0)
+        end = _as_float(row.get("end", row.get("timeline_end", start)), start)
+        clip_id = ""
+        clip_idx = row.get("_clip_idx")
+        if clip_idx is not None:
+            clip_id = by_index.get(_as_int(clip_idx), "")
+        if not clip_id:
+            clip_id = by_path.get(str(row.get("_clip_file") or ""), "")
+        gaps.append(
+            GapSegment(
+                gap_id=str(row.get("id") or row.get("index") or f"gap_{index + 1:04d}"),
+                sequence_start=max(0.0, start),
+                sequence_end=max(start, end),
+                line=_as_int(row.get("line"), index),
+                clip_id=clip_id,
+                metadata=_copy_metadata(
+                    row,
+                    drop={
+                        "id",
+                        "index",
+                        "line",
+                        "start",
+                        "end",
+                        "timeline_start",
+                        "timeline_end",
+                        "text",
+                        "speaker",
+                        "spk",
+                        "is_gap",
+                    },
+                ),
+            )
+        )
+    return tuple(gaps)
+
+
 def _marker_from_cut_boundary(row: dict[str, Any], *, index: int, kind: str, time_domain: str) -> TimelineMarker:
     time_value = _as_float(row.get("timeline_sec", row.get("time", row.get("start", 0.0))), 0.0)
     return TimelineMarker(
@@ -730,6 +800,7 @@ def build_project_nle_snapshot(project: dict[str, Any], *, project_path: str = "
     duration = project_total_duration(source)
     assets, clips = _build_assets_and_clips(source, fps=fps, duration=duration)
     captions = _build_captions(source, clips)
+    gaps = _build_gaps(source, clips)
     selected_candidate = selected_roughcut_candidate(source.get("roughcut_state"))
     markers = _build_markers(source, selected_candidate)
     render_plans = _build_render_plans(selected_candidate)
@@ -737,10 +808,12 @@ def build_project_nle_snapshot(project: dict[str, Any], *, project_path: str = "
         duration,
         max((clip.sequence_end for clip in clips), default=0.0),
         max((caption.sequence_end for caption in captions), default=0.0),
+        max((gap.sequence_end for gap in gaps), default=0.0),
     )
     tracks = (
         Track("track_media_0001", "media", tuple(clip.clip_id for clip in clips)),
         Track("track_caption_0001", "captions", tuple(caption.caption_id for caption in captions)),
+        Track("track_gap_0001", "gaps", tuple(gap.gap_id for gap in gaps)),
         Track("track_markers_0001", "markers", tuple(marker.marker_id for marker in markers)),
     )
     sequence = Sequence(
@@ -751,6 +824,7 @@ def build_project_nle_snapshot(project: dict[str, Any], *, project_path: str = "
         tracks=tracks,
         clips=clips,
         captions=captions,
+        gaps=gaps,
         markers=markers,
         metadata={
             "source": "project_snapshot_adapter",
@@ -772,6 +846,7 @@ def build_project_nle_snapshot(project: dict[str, Any], *, project_path: str = "
             "read_only": True,
             "asset_count": len(assets),
             "caption_count": len(captions),
+            "gap_count": len(gaps),
             "marker_count": len(markers),
             "render_plan_count": len(render_plans),
         },
@@ -805,6 +880,7 @@ def build_top_level_nle_shadow_payload(
             "legacy_editor_state_remains_canonical": True,
             "asset_count": int(metadata.get("asset_count") or 0),
             "caption_count": int(metadata.get("caption_count") or 0),
+            "gap_count": int(metadata.get("gap_count") or 0),
             "marker_count": int(metadata.get("marker_count") or 0),
             "render_plan_count": int(metadata.get("render_plan_count") or 0),
         },
@@ -814,6 +890,7 @@ def build_top_level_nle_shadow_payload(
 __all__ = [
     "CaptionSegment",
     "Clip",
+    "GapSegment",
     "NLE_SNAPSHOT_READBACK_PARITY_KEY",
     "NLE_SNAPSHOT_READBACK_PARITY_SCHEMA",
     "NLE_SNAPSHOT_SCHEMA",
