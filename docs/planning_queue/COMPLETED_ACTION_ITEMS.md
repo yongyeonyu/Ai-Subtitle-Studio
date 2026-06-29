@@ -19,6 +19,21 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.31 G0 App Store Current-Version Readiness Refresh
+
+Source request: continue remaining action items, verify and use Jammini/agents, run App Store packaging/signing/upload/metadata work only within approved gates, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route (`active_conversation_id=075ebb10-b98a-43bd-b9ee-9046675d41d7`).
+2. `tools/jammini_watchdog.sh --handoff-probe` sent probe `20260629-151512`, but no fresh physical handoff file was visible; Dex did not claim delivered Jammini proof from chat-only status.
+3. Three sub-agent reviews were completed: 한결 packaging/signing/upload gate scout, 서린 owner metadata/QE gate scout, and 유진 docs/product wording scout. All converged on a current-version G0 refresh only, with App Store submission readiness still blocked.
+4. Non-destructive readiness evidence was refreshed at `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.md`.
+5. Metadata owner-input package evidence was refreshed at `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`.
+6. Current G0 state remains blocked: `app_version=04.01.31`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`, and blocker groups `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=16`.
+7. Owner metadata remains incomplete: owner values preflight `ready=false`, issue count `75`, owner-input metadata `0/8` ready, App Store Connect metadata `0/8` ready, and forbidden-claim scan `pass`.
+8. Missing submission proof remains explicit: signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, Apple Distribution identity, 3rd Party Mac Developer Installer identity, upload/submission proof, and owner-approved metadata values JSON.
+9. Focused verification passed: compile check for App Store audit/package/preflight/test modules; `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `37 passed`.
+10. This slice does not build a package, sign with Apple Distribution, run sandbox smoke, run App Store Connect validation, upload, submit, complete owner metadata, change UI/UX, change subtitle generation, change STT/cache defaults, or change NLE behavior.
+
 ## v04.01.31 G2 Final Cutover Ready Opt-In Proof
 
 Source request: continue remaining action items, verify and use Jammini/agents, apply the NLE structure, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.

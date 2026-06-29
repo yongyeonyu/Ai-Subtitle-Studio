@@ -58,8 +58,8 @@ The repository root intentionally keeps no active development docs other than
 - Latest top-level NLE gap projection coverage audit: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.md`
 - Latest NLE canonical load-owner review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`
 - Latest STT cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`
-- Latest App Store readiness audit: `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.md`
-- Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228/app_store_metadata_owner_input_package.md`
+- Latest App Store readiness audit: `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.md`
+- Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`
 
 `v04.01.31` is a G2 final source-app project persistence load-owner opt-in proof
 checkpoint. It allows the approved payload to declare
@@ -102,8 +102,9 @@ App Store upload preflight guard proof, `v04.01.26` owner metadata values
 preflight guard proof, `v04.01.27` top-level NLE canonical load opt-in proof,
 `v04.01.28` standalone NLE snapshot canonical load-source proof,
 `v04.01.29` runtime `_nle_project_state` persistence opt-in proof,
-`v04.01.30` legacy disk-shape replacement opt-in proof, and `v04.01.31`
-final cutover-ready opt-in proof.
+`v04.01.30` legacy disk-shape replacement opt-in proof, `v04.01.31`
+final cutover-ready opt-in proof, and the `v04.01.31` G0 App Store
+current-version readiness refresh.
 
 ## Must Not Break
 
@@ -128,10 +129,13 @@ Current blockers:
 - Apple Distribution and installer signing identity proof.
 - Owner metadata: privacy answers, export compliance, screenshots, support URL, review notes, age rating, release-note copy.
 
+Latest G0 audit: `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.md`.
+Latest G0 owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`.
 Latest G0 state: `local_packaging_ready=true`, `app_store_submission_ready=false`,
 overall stoplight `red`, blocker count `25`. Version lock and packaging template
 are green; signed-artifact proof, sandbox smoke, App Store Connect validation,
-signing identities, and owner metadata are still red.
+signing identities, and owner metadata are still red. Owner-input metadata is
+`0/8` ready and App Store Connect metadata is `0/8` ready.
 
 Developer ID beta `.dmg` remains a separate opt-in distribution track and must
 not be counted as Mac App Store submission proof.

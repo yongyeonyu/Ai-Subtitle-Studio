@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.31 G0 App Store Current-Version Readiness Refresh - 2026-06-29 KST
+
+- 실행 모드: source-app G0 non-destructive current-version App Store readiness audit and metadata owner-input package refresh.
+- 결과: pass for the bounded refresh. G0 remains blocked; this is not package signing, sandbox smoke, validation, upload, submission, or owner metadata completion proof.
+- 저장 위치:
+  - Readiness audit: `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.md`
+  - Readiness JSON: `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.json`
+  - Metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040131-g0-app-store-current-version-readiness-refresh`
+- 실제 결과:
+  - App version stayed `04.01.31`.
+  - Readiness state: `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`.
+  - Blocker groups: `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=16`.
+  - Owner metadata values preflight: `ready=false`, issue count `75`, owner-input metadata `0/8` ready, App Store Connect metadata `0/8` ready, forbidden-claim scan `pass`.
+  - Missing proof remains: signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, Apple Distribution identity, 3rd Party Mac Developer Installer identity, upload/submission proof, and owner-approved metadata values JSON.
+  - This refresh does not change UI/UX, subtitle generation, STT/cache defaults, NLE behavior, package signing, upload, or submission state.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tools/check_app_store_owner_metadata_values.py tools/check_app_store_upload_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_metadata_values_preflight.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py core/runtime/config.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `37 passed`.
+  - `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653` -> `status=blocked`, blocker count `25`.
+  - `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653` -> `not_submission_proof=true`, owner-input metadata `8/8` pending, App Store Connect metadata `8` pending.
+
 ## v04.01.31 G2 Final Cutover Ready Opt-In Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G2 owner-approved final project persistence load-owner opt-in proof, forged-policy guard, cache-hit hydration guard, Direct SRT precedence guard, compatibility `editor_state` projection guard, and version/schema bump.

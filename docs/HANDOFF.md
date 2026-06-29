@@ -33,7 +33,48 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / G2 Final Cutover Ready Opt-In Proof
+## Current Handoff - 2026-06-29 v04.01.31 / G0 App Store Current-Version Readiness Refresh
+
+### Scope
+
+- Completed a non-destructive G0 current-version App Store readiness refresh for `APP_VERSION=04.01.31`.
+- Generated a refreshed readiness audit and metadata owner-input package.
+- Updated the active G0 pointers, completed archive, App Store readiness doc, project state, and validation result.
+- No code, signing, packaging, upload, submission, UI/UX, subtitle-generation, STT/cache-default, or NLE behavior changes were made in this slice.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.31`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.31`.
+- G0 readiness audit: `output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653/app_store_readiness_audit.md`.
+- G0 metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653/app_store_metadata_owner_input_package.md`.
+- Current G0 state remains `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`.
+- Blocker groups remain `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, and `owner_metadata=16`.
+- Owner metadata values preflight remains `ready=false` with issue count `75`, owner-input metadata `0/8` ready, App Store Connect metadata `0/8` ready, and forbidden-claim scan `pass`.
+- This refresh is current-version evidence only. It is not signed `.pkg`, strict codesign, package signature, sandbox smoke, App Store Connect validation, upload/submission, or owner metadata completion proof.
+
+### Evidence
+
+- Readiness audit generation: `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_current_version_refresh_v040131_20260629_151653` -> `status=blocked`, blocker count `25`.
+- Metadata package generation: `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_v040131_20260629_151653` -> `not_submission_proof=true`, owner-input metadata `8/8` pending, App Store Connect metadata `8` pending.
+- Compile check: `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tools/check_app_store_owner_metadata_values.py tools/check_app_store_upload_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_metadata_values_preflight.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py core/runtime/config.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused G0 guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `37 passed`.
+- Three sub-agent reviews were collected for packaging/signing gates, owner metadata/QE gates, and docs/product wording. Jammini `--status` resolved the active route, but the fresh `--handoff-probe` packet did not produce a physical handoff file; `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G0 still requires Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, content-bound App Store Connect validation, upload/submission proof, and owner-approved metadata values JSON.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+- G2 future editor-owner expansion, per-pixel NLE writes, and any UI/UX-visible editing behavior still require separate owner-approved proof.
+
+### Next Recommended Action
+
+- Continue remaining active groups from `docs/planning_queue/ACTION_ITEMS.md`.
+- If continuing G0, first provide owner-approved metadata values JSON or configure Apple Distribution / 3rd Party Mac Developer Installer identities; do not upload from owner approval alone.
+- If continuing G1, keep collect-cache defaults off until owner review approves one cache at a time.
+- If continuing G2/G3, keep App Store and UI/UX proof surfaces separate from NLE/runtime proof.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / G2 Final Cutover Ready Opt-In Proof
 
 ### Scope
 
