@@ -516,6 +516,114 @@ def _top_level_nle_compatibility_projection_check(work_dir: Path) -> dict[str, A
     }
 
 
+def _canonical_load_owner_rollback_boundary_check(work_dir: Path) -> dict[str, Any]:
+    project_path = work_dir / "canonical-load-owner-rollback-boundary.aissproj"
+    project = _legacy_project()
+    project["nle_persistence"] = {
+        "persist_snapshot": True,
+        "persist_top_level_nle": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+    }
+    expected_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+    expected_signature = _row_signature(expected_rows, include_id=False)
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+
+    candidate_load_owner = "top_level_nle_shadow_metadata"
+    rollback_probe_text = "rollback candidate shadow text"
+    candidate_storage = deepcopy(storage)
+    nle_payload = candidate_storage.get("nle") if isinstance(candidate_storage.get("nle"), dict) else {}
+    nle_payload["canonical_load_owner"] = candidate_load_owner
+    nle_payload["runtime_project_state_persisted"] = True
+    nle_persistence = nle_payload.get("persistence") if isinstance(nle_payload.get("persistence"), dict) else {}
+    nle_persistence["canonical_load_owner"] = candidate_load_owner
+    nle_persistence["legacy_editor_state_remains_canonical"] = False
+    nle_persistence["runtime_project_state_persisted"] = True
+    sequences = nle_payload.get("sequences") if isinstance(nle_payload.get("sequences"), list) else []
+    sequence = sequences[0] if sequences and isinstance(sequences[0], dict) else {}
+    captions = sequence.get("captions") if isinstance(sequence.get("captions"), list) else []
+    if captions and isinstance(captions[0], dict):
+        captions[0]["text"] = rollback_probe_text
+    snapshot = (
+        candidate_storage.get("nle_snapshot")
+        if isinstance(candidate_storage.get("nle_snapshot"), dict)
+        else {}
+    )
+    snapshot_persistence = (
+        snapshot.get("persistence") if isinstance(snapshot.get("persistence"), dict) else {}
+    )
+    snapshot_persistence["legacy_editor_state_remains_canonical"] = False
+    snapshot_persistence["runtime_project_state_persisted"] = True
+    candidate_storage[NLE_PROJECT_STATE_RUNTIME_KEY] = {"schema": "future-runtime-persistence-candidate"}
+    project_path.write_text(json.dumps(candidate_storage, ensure_ascii=False), encoding="utf-8")
+    clear_project_file_cache(str(project_path))
+
+    loaded = read_project_file(str(project_path))
+    rollback_report = (
+        loaded.get(NLE_PERSISTENCE_QUARANTINE_KEY)
+        if isinstance(loaded.get(NLE_PERSISTENCE_QUARANTINE_KEY), dict)
+        else {}
+    )
+    loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+    loaded_signature = _row_signature(loaded_rows, include_id=False)
+    loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    write_project_file(str(project_path), loaded)
+    storage_after = read_project_storage_payload(str(project_path))
+    try:
+        assert_no_unapproved_nle_persistence_fields(storage_after, surface="rollback_boundary_storage_after")
+        storage_after_clean = True
+    except ValueError:
+        storage_after_clean = False
+    storage_after_nle = storage_after.get("nle") if isinstance(storage_after.get("nle"), dict) else {}
+    storage_after_rows = _editor_rows_from_top_level_nle_payload(storage_after_nle)
+    storage_after_first_caption_text = _first_caption_text(storage_after_rows)
+    stripped_keys = list(rollback_report.get("stripped_keys") or [])
+    ready = (
+        bool(rollback_report)
+        and {"nle", "nle_snapshot", NLE_PROJECT_STATE_RUNTIME_KEY}.issubset(set(stripped_keys))
+        and loaded_signature == expected_signature
+        and _first_caption_text(loaded_rows) == "first"
+        and _first_caption_text(loaded_rows) != rollback_probe_text
+        and isinstance(loaded_state, NLEProjectState)
+        and storage_after_clean
+        and "nle" in storage_after
+        and "nle_snapshot" in storage_after
+        and str(storage_after_nle.get("canonical_load_owner") or "") == "legacy_editor_state"
+        and storage_after_first_caption_text == "first"
+        and storage_after_first_caption_text != rollback_probe_text
+        and NLE_PROJECT_STATE_RUNTIME_KEY not in storage_after
+        and NLE_PERSISTENCE_QUARANTINE_KEY not in storage_after
+    )
+    return {
+        "project_path": str(project_path),
+        "ready": ready,
+        "status": "defined" if ready else "blocked",
+        "not_runtime_change": True,
+        "not_disk_format_cutover": True,
+        "not_ui_change": True,
+        "rollback_target": "legacy_editor_state",
+        "candidate_load_owner": candidate_load_owner,
+        "candidate_runtime_state_persistence_attempted": True,
+        "candidate_snapshot_canonical_source_attempted": True,
+        "candidate_shadow_text": rollback_probe_text,
+        "loaded_first_caption_text": _first_caption_text(loaded_rows),
+        "resave_first_caption_text": storage_after_first_caption_text,
+        "candidate_shadow_text_leaked_to_default_load": _first_caption_text(loaded_rows) == rollback_probe_text,
+        "candidate_shadow_text_leaked_after_resave": storage_after_first_caption_text == rollback_probe_text,
+        "quarantine_recorded": bool(rollback_report),
+        "stripped_keys": stripped_keys,
+        "stripped_count": int(rollback_report.get("stripped_count") or 0),
+        "default_load_preserved_legacy_rows": loaded_signature == expected_signature,
+        "runtime_state_hydrated_from_legacy": isinstance(loaded_state, NLEProjectState),
+        "storage_after_clean": storage_after_clean,
+        "storage_after_nle_canonical_load_owner": str(storage_after_nle.get("canonical_load_owner") or ""),
+        "storage_after_has_nle": "nle" in storage_after,
+        "storage_after_has_nle_snapshot": "nle_snapshot" in storage_after,
+        "storage_after_has_runtime_nle_key": NLE_PROJECT_STATE_RUNTIME_KEY in storage_after,
+        "storage_after_has_quarantine": NLE_PERSISTENCE_QUARANTINE_KEY in storage_after,
+    }
+
+
 def _approved_snapshot_persistence_check(work_dir: Path) -> dict[str, Any]:
     project_path = work_dir / "approved-nle-snapshot.aissproj"
     project = _legacy_project()
@@ -981,6 +1089,7 @@ def _canonical_load_owner_gate_matrix(
         else {}
     )
     roughcut = checks.get("roughcut_sidecar_readback") if isinstance(checks.get("roughcut_sidecar_readback"), dict) else {}
+    rollback = checks.get("canonical_load_owner_rollback_boundary") if isinstance(checks.get("canonical_load_owner_rollback_boundary"), dict) else {}
     gate_values = {
         "top_level_shadow_ready": bool(top_level.get("ready")),
         "compatibility_projection_ready": bool(projection.get("explicit_projection_uses_top_level_nle"))
@@ -998,7 +1107,7 @@ def _canonical_load_owner_gate_matrix(
         "roughcut_sidecar_ready": bool(roughcut.get("render_export_stable"))
         and bool(roughcut.get("roughcut_sidecar_stable"))
         and bool(roughcut.get("corrupted_marker_drift_detected")),
-        "rollback_boundary_defined": False,
+        "rollback_boundary_defined": bool(rollback.get("ready")),
         "canonical_load_owner_change_allowed": bool(projection.get("canonical_load_owner_change_allowed")),
         "nle_snapshot_canonical_load_source_allowed": False,
         "runtime_project_state_persistence_allowed": False,
@@ -1040,6 +1149,9 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     top_level_nle_compatibility_projection = _top_level_nle_compatibility_projection_check(
         out_dir / "top_level_nle_compatibility_projection_fixture"
     )
+    canonical_load_owner_rollback_boundary = _canonical_load_owner_rollback_boundary_check(
+        out_dir / "canonical_load_owner_rollback_boundary_fixture"
+    )
     corrupted_snapshot = _corrupted_snapshot_readback_check(out_dir / "corrupted_snapshot_fixture")
     roughcut_sidecar = _roughcut_sidecar_readback_check(out_dir / "roughcut_sidecar_readback_fixture")
     operation_roundtrip_matrix = _operation_roundtrip_matrix(out_dir / "operation_roundtrip_matrix")
@@ -1062,6 +1174,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "approved_snapshot_persistence": approved_snapshot,
         "approved_top_level_nle_shadow": top_level_nle_shadow,
         "top_level_nle_compatibility_projection": top_level_nle_compatibility_projection,
+        "canonical_load_owner_rollback_boundary": canonical_load_owner_rollback_boundary,
         "corrupted_snapshot_readback": corrupted_snapshot,
         "roughcut_sidecar_readback": roughcut_sidecar,
         "operation_roundtrip_matrix": operation_roundtrip_matrix,
@@ -1082,6 +1195,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and top_level_nle_compatibility_projection["shadow_override_absent_from_default_load"]
         and top_level_nle_compatibility_projection["resave_discarded_shadow_override"]
         and top_level_nle_compatibility_projection["runtime_state_hydrated_from_legacy"]
+        and canonical_load_owner_rollback_boundary["ready"]
         and not top_level_nle_compatibility_projection["runtime_report_persisted_after_resave"]
         and not top_level_nle_compatibility_projection["runtime_state_persisted_after_resave"]
         and not top_level_nle_compatibility_projection["quarantine_persisted_after_resave"]
@@ -1142,12 +1256,11 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
             "persisting _nle_project_state payloads",
             "making nle_snapshot the canonical load source",
             "changing legacy editor_state compatibility guarantees",
-            "proving rollback and quarantine behavior for any future load-owner change",
         ],
         "next_safe_steps": [
             "keep legacy editor rows canonical while nle_snapshot is persisted as compatibility metadata",
             "treat top-level nle gap coverage as shadow compatibility evidence only",
-            "define a separate rollback-boundary proof before any canonical load-owner change",
+            "define a separate owner-approval packet before any canonical load-owner change",
         ],
     }
 
@@ -1166,6 +1279,11 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     top_level_projection = (
         checks.get("top_level_nle_compatibility_projection")
         if isinstance(checks.get("top_level_nle_compatibility_projection"), dict)
+        else {}
+    )
+    rollback = (
+        checks.get("canonical_load_owner_rollback_boundary")
+        if isinstance(checks.get("canonical_load_owner_rollback_boundary"), dict)
         else {}
     )
     corrupted = checks.get("corrupted_snapshot_readback") if isinstance(checks.get("corrupted_snapshot_readback"), dict) else {}
@@ -1242,6 +1360,26 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Canonical load owner change allowed: `{bool(top_level_projection.get('canonical_load_owner_change_allowed'))}`",
         f"- Disk format cutover allowed: `{bool(top_level_projection.get('disk_format_cutover_allowed'))}`",
         f"- Resave rebuilt shadow from legacy rows: `{bool(top_level_projection.get('resave_rebuilt_shadow_from_legacy'))}`",
+        "",
+        "## Canonical Load-Owner Rollback Boundary",
+        "",
+        "Rollback-boundary audit evidence only. A future candidate payload that claims canonical NLE ownership is quarantined back to legacy editor_state rows before any default load or resave can adopt it.",
+        "",
+        f"- Ready: `{bool(rollback.get('ready'))}`",
+        f"- Status: `{rollback.get('status')}`",
+        f"- Rollback target: `{rollback.get('rollback_target')}`",
+        f"- Candidate load owner: `{rollback.get('candidate_load_owner')}`",
+        f"- Candidate shadow text: `{rollback.get('candidate_shadow_text')}`",
+        f"- Loaded first caption text: `{rollback.get('loaded_first_caption_text')}`",
+        f"- Resave first caption text: `{rollback.get('resave_first_caption_text')}`",
+        f"- Candidate shadow text leaked to default load: `{bool(rollback.get('candidate_shadow_text_leaked_to_default_load'))}`",
+        f"- Candidate shadow text leaked after resave: `{bool(rollback.get('candidate_shadow_text_leaked_after_resave'))}`",
+        f"- Quarantine recorded: `{bool(rollback.get('quarantine_recorded'))}`",
+        f"- Stripped keys: `{', '.join(rollback.get('stripped_keys') or [])}`",
+        f"- Default load preserved legacy rows: `{bool(rollback.get('default_load_preserved_legacy_rows'))}`",
+        f"- Storage after clean: `{bool(rollback.get('storage_after_clean'))}`",
+        f"- Storage after NLE canonical load owner: `{rollback.get('storage_after_nle_canonical_load_owner')}`",
+        f"- Storage after has NLE/snapshot/runtime/quarantine: `{bool(rollback.get('storage_after_has_nle'))}/{bool(rollback.get('storage_after_has_nle_snapshot'))}/{bool(rollback.get('storage_after_has_runtime_nle_key'))}/{bool(rollback.get('storage_after_has_quarantine'))}`",
         "",
         "## Canonical Load-Owner Gate Matrix",
         "",

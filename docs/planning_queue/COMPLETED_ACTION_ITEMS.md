@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.23-source-app
+Document-Version: 04.01.24-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,22 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.24 G2 Canonical Load-Owner Rollback Boundary Audit
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item. Owner approval for App Store packaging/signing/upload/metadata execution and persisted NLE/UI structure scope was reconfirmed before this slice.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.24"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.24`.
+3. `tools/audit_nle_persistence_cutover.py` now includes a canonical load-owner rollback-boundary check.
+4. The rollback-boundary check writes a candidate payload that attempts to promote top-level `nle`, `nle_snapshot`, and `_nle_project_state` to canonical/runtime persistence, then proves read/load strips those candidate claims and preserves legacy rows.
+5. Audit evidence was written to `output/manual_verification/latest/nle_load_owner_rollback_boundary_v040124_20260629_1138/nle_persistence_cutover_audit.md`.
+6. Audit state: `status=blocked`, `app_version=04.01.24`, `prep_ready=true`, `persistence_cutover_ready=false`, `overall_stoplight=red`, and ready/blocked gates `7/5`.
+7. `rollback_boundary_defined` is ready; `canonical_load_owner_change_allowed`, `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready` remain blocked.
+8. False-positive proof: candidate shadow text `rollback candidate shadow text` never reaches default load or resave; both keep first caption text `first`. Resave regenerates approved `nle`/`nle_snapshot` shadow metadata with `canonical_load_owner=legacy_editor_state` and without persisted runtime state or quarantine.
+9. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+10. Focused verification passed: compile check for touched NLE/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `6 passed`; generated audit report above; NLE audit/canonical packet/persistence/snapshot/macOS bundle rerun -> `39 passed, 4 subtests passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.24` / `PROJECT_SCHEMA_VERSION=04.01.24`; `git diff --check -- .` -> pass.
+11. This slice does not switch project load ownership, make top-level `nle` or `nle_snapshot` canonical, persist `_nle_project_state`, remove legacy `editor_state`, replace the legacy disk shape, perform per-pixel NLE writes, change UI/UX, change STT/cache defaults, or provide App Store packaging/signing/upload/submission proof.
 
 ## v04.01.23 G2 Canonical Load-Owner Gate Matrix Audit
 

@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.23-source-app
+Document-Version: 04.01.24-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.23`.
+- App version: `04.01.24`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -160,7 +160,8 @@ Current baseline:
 - Approved top-level `nle` shadow metadata can be written for explicitly marked projects, but `canonical_load_owner` remains `legacy_editor_state`.
 - Persisted `_nle_project_state`, making `nle` or `nle_snapshot` the canonical load owner, and full NLE disk-format cutover remain gated.
 - Legacy save/reopen compatibility remains mandatory.
-- Latest canonical load-owner gate matrix audit: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.md`; `status=blocked`, `app_version=04.01.23`, `prep_ready=true`, `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates `6/6`, current canonical owner `legacy_editor_state`, target candidate `top_level_nle_shadow_metadata`, and `not_runtime_change/not_disk_format_cutover/not_ui_change=true/true/true`. Blocked gates remain `rollback_boundary_defined`, `canonical_load_owner_change_allowed`, `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`. The false-positive guard proves top-level `nle` override text `nle shadow first` appears only in explicit projection, while default load and resave keep legacy text `first`. Completed detail: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040123-g2-canonical-load-owner-gate-matrix-audit`.
+- Latest canonical load-owner rollback-boundary audit: `output/manual_verification/latest/nle_load_owner_rollback_boundary_v040124_20260629_1138/nle_persistence_cutover_audit.md`; `status=blocked`, `app_version=04.01.24`, `prep_ready=true`, `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates `7/5`, current canonical owner `legacy_editor_state`, target candidate `top_level_nle_shadow_metadata`, and `not_runtime_change/not_disk_format_cutover/not_ui_change=true/true/true`. `rollback_boundary_defined` is now ready because candidate `nle`, `nle_snapshot`, and `_nle_project_state` canonical-owner claims are stripped/quarantined on read; default load and resave keep legacy text `first`; resave regenerates approved top-level `nle`/`nle_snapshot` with `canonical_load_owner=legacy_editor_state`. Blocked gates remain `canonical_load_owner_change_allowed`, `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`. Completed detail: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040124-g2-canonical-load-owner-rollback-boundary-audit`.
+- Previous canonical load-owner gate matrix audit: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.md`; `status=blocked`, ready/blocked gates `6/6`, and `rollback_boundary_defined` was still blocked before the current rollback-boundary proof.
 - Previous top-level NLE gap projection coverage audit: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.md`; `top_level_nle_compatibility_projection_passed=true`, `top_level_nle_canonical_projection_complete=false`, `status=gap_projection_coverage_ready_blocked`, `not_runtime_change=true`, default project load remains `legacy_editor_state`, explicit top-level `nle` projection includes the legacy gap row as non-caption gap metadata, explicit/default row-caption-gap counts are both `3/2/1`, `gap_coverage_ready=true`, runtime state remains hydrated from legacy rows, resave rebuilds the shadow from legacy rows, and canonical load-owner / disk-format cutover remain disallowed. Completed detail: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040121-g2-top-level-nle-gap-projection-coverage-audit`.
 - Previous top-level NLE compatibility projection audit: `output/manual_verification/latest/nle_top_level_compatibility_projection_v040120_20260629_1018/nle_persistence_cutover_audit.md`; this is the previous partial proof where explicit projection had caption/gap count `2/0` and `gap_coverage_ready=false`.
 - Latest top-level NLE shadow metadata proof: `output/manual_verification/latest/nle_top_level_shadow_metadata_20260629_0020/nle_persistence_cutover_audit.md`; `prep_ready=true`, `top_level_nle_shadow_ready=true`, storage has approved top-level `nle` plus `nle_snapshot`, `canonical_load_owner=legacy_editor_state`, legacy rows and read-back parity are stable, runtime report/runtime state/quarantine do not persist, operation roundtrip all passed across `11` families, render/export parity passed, and full cutover remains `persistence_cutover_ready=false`.
@@ -270,8 +271,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.20"
-document_version: "04.01.20-source-app"
+app_version: "04.01.24"
+document_version: "04.01.24-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

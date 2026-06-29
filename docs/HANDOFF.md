@@ -33,7 +33,50 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.23 / G2 Canonical Load-Owner Gate Matrix Audit
+## Current Handoff - 2026-06-29 v04.01.24 / G2 Canonical Load-Owner Rollback Boundary Audit
+
+### Scope
+
+- Completed the G2 canonical load-owner rollback-boundary audit slice.
+- Bumped source-app version and project schema from `04.01.23` to `04.01.24`.
+- Extended `tools/audit_nle_persistence_cutover.py` and `tests/test_nle_persistence_cutover_audit.py`.
+- Generated audit evidence proving a candidate top-level `nle`/`nle_snapshot`/runtime-state canonical-owner payload is stripped back to legacy `editor_state` loading before default load or resave can adopt it.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.24`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.24`.
+- Audit report: `output/manual_verification/latest/nle_load_owner_rollback_boundary_v040124_20260629_1138/nle_persistence_cutover_audit.md`.
+- Audit state: `status=blocked`, `app_version=04.01.24`, `prep_ready=true`, `persistence_cutover_ready=false`, and `top_level_nle_compatibility_projection_passed=true`.
+- Gate matrix: `overall_stoplight=red`, ready/blocked gates `7/5`, current canonical owner `legacy_editor_state`, target candidate `top_level_nle_shadow_metadata`, and `rollback_boundary_defined=ready`.
+- Blocked gates remain `canonical_load_owner_change_allowed`, `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
+- Rollback proof: candidate shadow text `rollback candidate shadow text` never reaches default load or resave; both keep first caption text `first`. Resave regenerates approved `nle`/`nle_snapshot` shadow metadata with `canonical_load_owner=legacy_editor_state` and without persisted runtime state or quarantine.
+- Owner approval exists for G0 App Store packaging/signing/upload/metadata execution and persisted NLE/UI structure scope, but this slice is audit evidence only. It is not a project load-owner switch, `nle_snapshot` canonical source switch, persisted `_nle_project_state`, legacy `editor_state` replacement, visible UI/UX change, STT/cache default change, App Store package creation, signing, validation, upload, submission, or metadata completion proof.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused NLE audit: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `6 passed`.
+- Audit generation: `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_load_owner_rollback_boundary_v040124_20260629_1138` -> `status=blocked`, `overall_stoplight=red`, ready/blocked gates `7/5`.
+- NLE audit/canonical packet/persistence/snapshot/macOS bundle guards: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_snapshot.py tests/test_macos_bundle_runtime_paths.py` -> `39 passed, 4 subtests passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.24`, `PROJECT_SCHEMA_VERSION=04.01.24`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture boundary, QE false-positive guards, and editor-workflow wording constraints. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G2 full NLE disk-format cutover remains blocked until canonical load-owner change policy, `nle_snapshot` canonical-source policy, runtime-state persistence policy, legacy disk-shape replacement policy, and final cutover proof are implemented and reproved.
+- G0 has owner approval to proceed, but remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, upload/submission proof, and owner-approved metadata values.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G0, use the owner approval to run the next App Store packaging/signing/metadata step only after required identities and metadata values are available, then preserve exact logs.
+- If continuing G2, choose a separate owner-approved canonical load-owner or UI-structure slice and prove save/reopen/render/export parity before widening behavior.
+
+## Previous Handoff - 2026-06-29 v04.01.23 / G2 Canonical Load-Owner Gate Matrix Audit
 
 ### Scope
 

@@ -44,23 +44,25 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.23` from `core/runtime/config.py`
-- Project schema version: `04.01.23` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.23.md`
+- App version: `04.01.24` from `core/runtime/config.py`
+- Project schema version: `04.01.24` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.24.md`
 - Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929`
-- Latest NLE canonical load-owner gate matrix audit: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.md`
+- Latest NLE canonical load-owner rollback-boundary audit: `output/manual_verification/latest/nle_load_owner_rollback_boundary_v040124_20260629_1138/nle_persistence_cutover_audit.md`
+- Previous NLE canonical load-owner gate matrix audit: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.md`
 - Latest top-level NLE gap projection coverage audit: `output/manual_verification/latest/nle_top_level_gap_projection_v040121_20260629_1041/nle_persistence_cutover_audit.md`
 - Latest NLE canonical load-owner review packet: `output/manual_verification/latest/nle_canonical_load_owner_review_packet_v040119_20260629_095907/nle_canonical_load_owner_review_packet.md`
 - Latest STT cache default review packet: `output/manual_verification/latest/stt_cache_default_review_packet_v040118_20260629_094703/stt_cache_default_review_packet.md`
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`
 - Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
 
-`v04.01.23` is a G2 NLE canonical load-owner gate matrix audit checkpoint. It
-keeps canonical loading on legacy `editor_state`, records a red/blocked
-preflight matrix with ready/blocked gates `6/6`, and proves a mutated top-level
-`nle` shadow caption is not used by default load or resave. It is not package
-creation, validation, upload, submission, UI/UX change, subtitle-generation
-change, NLE canonical load-owner switch, or NLE disk-format cutover proof.
+`v04.01.24` is a G2 NLE canonical load-owner rollback-boundary audit checkpoint.
+It keeps canonical loading on legacy `editor_state`, records a red/blocked
+preflight matrix with ready/blocked gates `7/5`, and proves candidate canonical
+NLE ownership claims are stripped before default load or resave can adopt them.
+It is not package creation, validation, upload, submission, UI/UX change,
+subtitle-generation change, NLE canonical load-owner switch, or NLE disk-format
+cutover proof.
 
 ## Active Groups
 
@@ -88,7 +90,8 @@ NLE runtime/session mutation adoption, save/reopen compatibility, render/export
 parity, trace-bundle retention, `v04.01.19` NLE canonical load-owner review proof,
 `v04.01.20` top-level NLE compatibility projection proof, `v04.01.21`
 top-level NLE gap projection coverage proof, `v04.01.22` App Store blocker
-matrix proof, and `v04.01.23` NLE canonical load-owner gate matrix proof.
+matrix proof, `v04.01.23` NLE canonical load-owner gate matrix proof, and
+`v04.01.24` NLE canonical load-owner rollback-boundary proof.
 
 ## Must Not Break
 
