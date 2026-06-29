@@ -187,6 +187,33 @@ Focused guards:
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py
 ```
 
+## G2 NLE canonical load-owner gate matrix audit
+
+For canonical load-owner preflight work, run the persistence cutover audit
+directly and require the gate matrix to stay explicit about what is still
+blocked:
+
+```bash
+./venv/bin/python tools/audit_nle_persistence_cutover.py \
+  --output-dir output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_YYYYMMDD_HHMM
+```
+
+The current expected state is audit evidence only: `status=blocked`,
+`persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates
+`6/6`, current canonical owner `legacy_editor_state`, target candidate
+`top_level_nle_shadow_metadata`, and `not_runtime_change`,
+`not_disk_format_cutover`, and `not_ui_change` all true. The false-positive
+guard must show the shadow override text in explicit projection only, while
+default load and resave preserve legacy text.
+
+Focused guards:
+
+```bash
+./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py
+QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_snapshot.py tests/test_macos_bundle_runtime_paths.py
+```
+
 ## G2 top-level NLE compatibility projection audit
 
 For top-level `nle` compatibility projection work, run the persistence audit

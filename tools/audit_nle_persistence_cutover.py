@@ -48,6 +48,7 @@ from core.project.project_io import (
     read_project_storage_payload,
     write_project_file,
 )
+from core.runtime.config import APP_VERSION
 
 
 SCHEMA = "ai_subtitle_studio.nle_persistence_cutover_readiness.v1"
@@ -56,6 +57,20 @@ CUTOVER_BLOCKERS = (
     "top_level_nle_shadow_not_canonical_load_owner",
     "runtime_nle_project_state_must_remain_runtime_only",
     "legacy_disk_shape_required_for_full_cutover",
+)
+CANONICAL_LOAD_OWNER_GATE_ORDER = (
+    "top_level_shadow_ready",
+    "compatibility_projection_ready",
+    "legacy_default_load_still_canonical",
+    "operation_roundtrip_ready",
+    "render_export_parity_ready",
+    "roughcut_sidecar_ready",
+    "rollback_boundary_defined",
+    "canonical_load_owner_change_allowed",
+    "nle_snapshot_canonical_load_source_allowed",
+    "runtime_project_state_persistence_allowed",
+    "legacy_disk_shape_replacement_allowed",
+    "final_cutover_ready",
 )
 
 
@@ -381,6 +396,13 @@ def _editor_rows_from_top_level_nle_payload(nle_payload: dict[str, Any]) -> list
     return rows
 
 
+def _first_caption_text(rows: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> str:
+    for row in rows:
+        if isinstance(row, dict) and not row.get("is_gap"):
+            return str(row.get("text") or "")
+    return ""
+
+
 def _top_level_nle_compatibility_projection_check(work_dir: Path) -> dict[str, Any]:
     project_path = work_dir / "top-level-nle-compatibility-projection.aissproj"
     project = _legacy_project()
@@ -399,8 +421,9 @@ def _top_level_nle_compatibility_projection_check(work_dir: Path) -> dict[str, A
     sequences = nle_payload.get("sequences") if isinstance(nle_payload.get("sequences"), list) else []
     sequence = sequences[0] if sequences and isinstance(sequences[0], dict) else {}
     captions = sequence.get("captions") if isinstance(sequence.get("captions"), list) else []
+    shadow_override_caption_text = "nle shadow first"
     if captions and isinstance(captions[0], dict):
-        captions[0]["text"] = "nle shadow first"
+        captions[0]["text"] = shadow_override_caption_text
     project_path.write_text(json.dumps(storage, ensure_ascii=False), encoding="utf-8")
     clear_project_file_cache(str(project_path))
 
@@ -433,8 +456,12 @@ def _top_level_nle_compatibility_projection_check(work_dir: Path) -> dict[str, A
     write_project_file(str(project_path), loaded)
     storage_after = read_project_storage_payload(str(project_path))
     rebuilt_nle = storage_after.get("nle") if isinstance(storage_after.get("nle"), dict) else {}
-    rebuilt_signature = _row_signature(_editor_rows_from_top_level_nle_payload(rebuilt_nle), include_id=False)
+    rebuilt_rows = _editor_rows_from_top_level_nle_payload(rebuilt_nle)
+    rebuilt_signature = _row_signature(rebuilt_rows, include_id=False)
     gap_coverage_ready = explicit_gap_count == default_gap_count and explicit_gap_count > 0
+    explicit_first_caption_text = _first_caption_text(explicit_rows)
+    default_first_caption_text = _first_caption_text(default_rows)
+    resave_first_caption_text = _first_caption_text(rebuilt_rows)
 
     return {
         "status": "gap_projection_coverage_ready_blocked",
@@ -454,6 +481,15 @@ def _top_level_nle_compatibility_projection_check(work_dir: Path) -> dict[str, A
         "default_row_count": len(default_signature),
         "default_caption_count": len(default_caption_signature),
         "default_gap_count": default_gap_count,
+        "shadow_override_caption_text": shadow_override_caption_text,
+        "explicit_first_caption_text": explicit_first_caption_text,
+        "default_first_caption_text": default_first_caption_text,
+        "resave_first_caption_text": resave_first_caption_text,
+        "shadow_override_visible_in_explicit_projection": explicit_first_caption_text == shadow_override_caption_text,
+        "shadow_override_absent_from_default_load": default_first_caption_text != shadow_override_caption_text,
+        "default_load_preserved_legacy_text": default_first_caption_text == "first",
+        "resave_discarded_shadow_override": resave_first_caption_text != shadow_override_caption_text,
+        "resave_preserved_legacy_text": resave_first_caption_text == "first",
         "gap_coverage_ready": gap_coverage_ready,
         "default_legacy_rows_stable": default_signature == expected_default_rows,
         "runtime_state_hydrated_from_legacy": isinstance(loaded_state, NLEProjectState),
@@ -468,7 +504,7 @@ def _top_level_nle_compatibility_projection_check(work_dir: Path) -> dict[str, A
         "quarantine_persisted_after_resave": NLE_PERSISTENCE_QUARANTINE_KEY in storage_after,
         "resave_rebuilt_shadow_from_legacy": rebuilt_signature == default_signature,
         "resave_rebuilt_shadow_captions_from_legacy": _row_signature(
-            [row for row in _editor_rows_from_top_level_nle_payload(rebuilt_nle) if not row.get("is_gap")],
+            [row for row in rebuilt_rows if not row.get("is_gap")],
             include_id=False,
         )
         == default_caption_signature,
@@ -931,6 +967,69 @@ def _operation_roundtrip_matrix(work_dir: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _canonical_load_owner_gate_matrix(
+    *,
+    checks: dict[str, Any],
+    operation_roundtrip_all_passed: bool,
+    render_export_parity_passed: bool,
+    persistence_cutover_ready: bool,
+) -> dict[str, Any]:
+    top_level = checks.get("approved_top_level_nle_shadow") if isinstance(checks.get("approved_top_level_nle_shadow"), dict) else {}
+    projection = (
+        checks.get("top_level_nle_compatibility_projection")
+        if isinstance(checks.get("top_level_nle_compatibility_projection"), dict)
+        else {}
+    )
+    roughcut = checks.get("roughcut_sidecar_readback") if isinstance(checks.get("roughcut_sidecar_readback"), dict) else {}
+    gate_values = {
+        "top_level_shadow_ready": bool(top_level.get("ready")),
+        "compatibility_projection_ready": bool(projection.get("explicit_projection_uses_top_level_nle"))
+        and bool(projection.get("default_load_uses_legacy_rows"))
+        and bool(projection.get("gap_coverage_ready"))
+        and bool(projection.get("shadow_override_visible_in_explicit_projection")),
+        "legacy_default_load_still_canonical": str(projection.get("current_canonical_load_owner") or "")
+        == "legacy_editor_state"
+        and bool(projection.get("default_load_uses_legacy_rows"))
+        and bool(projection.get("shadow_override_absent_from_default_load"))
+        and bool(projection.get("resave_discarded_shadow_override"))
+        and str(top_level.get("canonical_load_owner") or "") == "legacy_editor_state",
+        "operation_roundtrip_ready": bool(operation_roundtrip_all_passed),
+        "render_export_parity_ready": bool(render_export_parity_passed),
+        "roughcut_sidecar_ready": bool(roughcut.get("render_export_stable"))
+        and bool(roughcut.get("roughcut_sidecar_stable"))
+        and bool(roughcut.get("corrupted_marker_drift_detected")),
+        "rollback_boundary_defined": False,
+        "canonical_load_owner_change_allowed": bool(projection.get("canonical_load_owner_change_allowed")),
+        "nle_snapshot_canonical_load_source_allowed": False,
+        "runtime_project_state_persistence_allowed": False,
+        "legacy_disk_shape_replacement_allowed": False,
+        "final_cutover_ready": bool(persistence_cutover_ready),
+    }
+    gates = [
+        {
+            "id": gate_id,
+            "status": "ready" if bool(gate_values[gate_id]) else "blocked",
+            "ready": bool(gate_values[gate_id]),
+        }
+        for gate_id in CANONICAL_LOAD_OWNER_GATE_ORDER
+    ]
+    blocked_gate_ids = [row["id"] for row in gates if not row["ready"]]
+    return {
+        "status": "ready" if not blocked_gate_ids else "blocked",
+        "overall_stoplight": "green" if not blocked_gate_ids else "red",
+        "current_canonical_load_owner": str(projection.get("current_canonical_load_owner") or ""),
+        "target_load_owner_candidate": "top_level_nle_shadow_metadata",
+        "gate_order": list(CANONICAL_LOAD_OWNER_GATE_ORDER),
+        "gates": gates,
+        "ready_gate_count": len(gates) - len(blocked_gate_ids),
+        "blocked_gate_count": len(blocked_gate_ids),
+        "blocked_gate_ids": blocked_gate_ids,
+        "not_runtime_change": True,
+        "not_disk_format_cutover": True,
+        "not_ui_change": True,
+    }
+
+
 def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> dict[str, Any]:
     out_dir = Path(output_dir or ROOT / "output" / "manual_verification" / "latest" / "nle_persistence_cutover_audit")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -979,6 +1078,9 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and top_level_nle_compatibility_projection["default_load_uses_legacy_rows"]
         and top_level_nle_compatibility_projection["explicit_projection_differs_from_default"]
         and top_level_nle_compatibility_projection["gap_coverage_ready"]
+        and top_level_nle_compatibility_projection["shadow_override_visible_in_explicit_projection"]
+        and top_level_nle_compatibility_projection["shadow_override_absent_from_default_load"]
+        and top_level_nle_compatibility_projection["resave_discarded_shadow_override"]
         and top_level_nle_compatibility_projection["runtime_state_hydrated_from_legacy"]
         and not top_level_nle_compatibility_projection["runtime_report_persisted_after_resave"]
         and not top_level_nle_compatibility_projection["runtime_state_persisted_after_resave"]
@@ -1004,13 +1106,22 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     blockers = list(CUTOVER_BLOCKERS)
     if not top_level_nle_compatibility_projection["gap_coverage_ready"]:
         blockers.insert(1, CUTOVER_GAP_COVERAGE_BLOCKER)
+    persistence_cutover_ready = False
+    canonical_load_owner_gate_matrix = _canonical_load_owner_gate_matrix(
+        checks=checks,
+        operation_roundtrip_all_passed=operation_roundtrip_all_passed,
+        render_export_parity_passed=bool(render_export_parity["stable"]),
+        persistence_cutover_ready=persistence_cutover_ready,
+    )
 
     return {
         "schema": SCHEMA,
+        "app_version": APP_VERSION,
         "status": "blocked",
         "prep_ready": prep_ready,
-        "persistence_cutover_ready": False,
+        "persistence_cutover_ready": persistence_cutover_ready,
         "blockers": blockers,
+        "canonical_load_owner_gate_matrix": canonical_load_owner_gate_matrix,
         "checks": checks,
         "operation_roundtrip_all_passed": operation_roundtrip_all_passed,
         "operation_roundtrip_family_count": len(operation_roundtrip_matrix),
@@ -1021,6 +1132,9 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
             and top_level_nle_compatibility_projection["default_load_uses_legacy_rows"]
             and top_level_nle_compatibility_projection["explicit_projection_differs_from_default"]
             and top_level_nle_compatibility_projection["gap_coverage_ready"]
+            and top_level_nle_compatibility_projection["shadow_override_visible_in_explicit_projection"]
+            and top_level_nle_compatibility_projection["shadow_override_absent_from_default_load"]
+            and top_level_nle_compatibility_projection["resave_discarded_shadow_override"]
         ),
         "top_level_nle_canonical_projection_complete": False,
         "remaining_full_cutover_gates": [
@@ -1065,6 +1179,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "# NLE Persistence Cutover Audit",
         "",
         f"- Status: `{payload.get('status')}`",
+        f"- App version: `{payload.get('app_version')}`",
         f"- Prep ready: `{bool(payload.get('prep_ready'))}`",
         f"- Persistence cutover allowed: `{bool(payload.get('persistence_cutover_ready'))}`",
         f"- Operation roundtrip families: `{payload.get('operation_roundtrip_family_count')}`",
@@ -1118,10 +1233,40 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Explicit projection row count: `{top_level_projection.get('explicit_projection_row_count')}`",
         f"- Explicit projection caption/gap count: `{top_level_projection.get('explicit_projection_caption_count')}` / `{top_level_projection.get('explicit_projection_gap_count')}`",
         f"- Default row/caption/gap count: `{top_level_projection.get('default_row_count')}` / `{top_level_projection.get('default_caption_count')}` / `{top_level_projection.get('default_gap_count')}`",
+        f"- Shadow override caption text: `{top_level_projection.get('shadow_override_caption_text')}`",
+        f"- Explicit/default/resave first caption text: `{top_level_projection.get('explicit_first_caption_text')}` / `{top_level_projection.get('default_first_caption_text')}` / `{top_level_projection.get('resave_first_caption_text')}`",
+        f"- Shadow override visible in explicit projection: `{bool(top_level_projection.get('shadow_override_visible_in_explicit_projection'))}`",
+        f"- Shadow override absent from default load: `{bool(top_level_projection.get('shadow_override_absent_from_default_load'))}`",
+        f"- Resave discarded shadow override: `{bool(top_level_projection.get('resave_discarded_shadow_override'))}`",
         f"- Gap coverage ready: `{bool(top_level_projection.get('gap_coverage_ready'))}`",
         f"- Canonical load owner change allowed: `{bool(top_level_projection.get('canonical_load_owner_change_allowed'))}`",
         f"- Disk format cutover allowed: `{bool(top_level_projection.get('disk_format_cutover_allowed'))}`",
         f"- Resave rebuilt shadow from legacy rows: `{bool(top_level_projection.get('resave_rebuilt_shadow_from_legacy'))}`",
+        "",
+        "## Canonical Load-Owner Gate Matrix",
+        "",
+        "This matrix is a cutover preflight only. It does not switch the project load owner, persist runtime NLE state, replace legacy editor_state, or change UI/UX.",
+        "",
+    ]
+    gate_matrix = payload.get("canonical_load_owner_gate_matrix") if isinstance(payload.get("canonical_load_owner_gate_matrix"), dict) else {}
+    lines.extend([
+        f"- Status: `{gate_matrix.get('status')}`",
+        f"- Overall stoplight: `{gate_matrix.get('overall_stoplight')}`",
+        f"- Current canonical load owner: `{gate_matrix.get('current_canonical_load_owner')}`",
+        f"- Target load-owner candidate: `{gate_matrix.get('target_load_owner_candidate')}`",
+        f"- Ready/blocked gates: `{gate_matrix.get('ready_gate_count')}` / `{gate_matrix.get('blocked_gate_count')}`",
+        f"- Not runtime change: `{bool(gate_matrix.get('not_runtime_change'))}`",
+        f"- Not disk-format cutover: `{bool(gate_matrix.get('not_disk_format_cutover'))}`",
+        f"- Not UI change: `{bool(gate_matrix.get('not_ui_change'))}`",
+        "",
+        "| Gate | Status |",
+        "| --- | --- |",
+    ])
+    for gate in gate_matrix.get("gates") or []:
+        if not isinstance(gate, dict):
+            continue
+        lines.append(f"| {gate.get('id')} | {gate.get('status')} |")
+    lines.extend([
         "",
         "## Corrupted Snapshot Readback",
         "",
@@ -1151,7 +1296,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "",
         "| Surface | Stable | Captions | Gaps | Candidates | Render Segments | Manifest | Stitched |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
+    ])
     for surface in render_surfaces:
         if not isinstance(surface, dict):
             continue

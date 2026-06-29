@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.23 G2 Canonical Load-Owner Gate Matrix Audit - 2026-06-29 KST
+
+- 실행 모드: source-app G2 NLE canonical load-owner gate matrix audit, compatibility false-positive guards, and version/schema bump.
+- 결과: pass for the bounded audit slice. Full NLE disk-format cutover remains blocked because rollback boundary, canonical load-owner approval, `nle_snapshot` canonical-source policy, runtime-state persistence policy, legacy disk-shape replacement policy, and final cutover proof are still incomplete.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.23.md`
+  - Audit report: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040123-g2-canonical-load-owner-gate-matrix-audit`
+- 실제 결과:
+  - App version updated to `04.01.23`.
+  - Project schema version updated to `04.01.23`.
+  - `tools/audit_nle_persistence_cutover.py` now reports app version and canonical load-owner gate matrix state.
+  - Audit state: `status=blocked`, `app_version=04.01.23`, `prep_ready=true`, `persistence_cutover_ready=false`, `top_level_nle_compatibility_projection_passed=true`, `top_level_nle_canonical_projection_complete=false`.
+  - Gate matrix: `overall_stoplight=red`, ready/blocked gates `6/6`, current canonical owner `legacy_editor_state`, target candidate `top_level_nle_shadow_metadata`.
+  - Blocked gates: `rollback_boundary_defined`, `canonical_load_owner_change_allowed`, `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
+  - False-positive guard: explicit top-level `nle` projection first caption text is `nle shadow first`; default load and resave first caption text remain legacy `first`.
+  - This is cutover preflight audit evidence only; it is not a canonical load-owner switch, disk-format cutover, runtime-state persistence, legacy shape replacement, or UI/UX change.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_nle_persistence_cutover.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py` -> `6 passed`.
+  - `./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_canonical_load_owner_gate_matrix_v040123_20260629_1115` -> `status=blocked`, `overall_stoplight=red`, ready/blocked gates `6/6`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_persistence_cutover_audit.py tests/test_nle_canonical_load_owner_review_packet.py tests/test_project_nle_persistence_guard.py tests/test_project_nle_snapshot.py tests/test_macos_bundle_runtime_paths.py` -> `39 passed, 4 subtests passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.23`, `PROJECT_SCHEMA_VERSION=04.01.23`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.22 G0 App Store Readiness Blocker Matrix Audit - 2026-06-29 KST
 
 - 실행 모드: non-destructive G0 App Store readiness blocker matrix audit, metadata owner-input package refresh, false-positive guard tests, and version/schema bump.

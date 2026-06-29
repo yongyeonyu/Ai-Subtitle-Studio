@@ -18,8 +18,32 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert report["operation_roundtrip_family_count"] == 11
     assert report["render_export_parity_passed"] is True
     assert report["top_level_nle_shadow_ready"] is True
+    assert report["app_version"]
     assert "top_level_nle_shadow_not_canonical_load_owner" in report["blockers"]
     assert "top_level_nle_projection_gap_coverage_missing" not in report["blockers"]
+    gate_matrix = report["canonical_load_owner_gate_matrix"]
+    assert gate_matrix["status"] == "blocked"
+    assert gate_matrix["overall_stoplight"] == "red"
+    assert gate_matrix["current_canonical_load_owner"] == "legacy_editor_state"
+    assert gate_matrix["target_load_owner_candidate"] == "top_level_nle_shadow_metadata"
+    assert gate_matrix["not_runtime_change"] is True
+    assert gate_matrix["not_disk_format_cutover"] is True
+    assert gate_matrix["not_ui_change"] is True
+    assert gate_matrix["ready_gate_count"] == 6
+    assert gate_matrix["blocked_gate_count"] == 6
+    gates = {row["id"]: row for row in gate_matrix["gates"]}
+    assert gates["top_level_shadow_ready"]["status"] == "ready"
+    assert gates["compatibility_projection_ready"]["status"] == "ready"
+    assert gates["legacy_default_load_still_canonical"]["status"] == "ready"
+    assert gates["operation_roundtrip_ready"]["status"] == "ready"
+    assert gates["render_export_parity_ready"]["status"] == "ready"
+    assert gates["roughcut_sidecar_ready"]["status"] == "ready"
+    assert gates["rollback_boundary_defined"]["status"] == "blocked"
+    assert gates["canonical_load_owner_change_allowed"]["status"] == "blocked"
+    assert gates["nle_snapshot_canonical_load_source_allowed"]["status"] == "blocked"
+    assert gates["runtime_project_state_persistence_allowed"]["status"] == "blocked"
+    assert gates["legacy_disk_shape_replacement_allowed"]["status"] == "blocked"
+    assert gates["final_cutover_ready"]["status"] == "blocked"
     runtime = report["checks"]["runtime_roundtrip"]
     assert runtime["loaded_runtime_state"] is True
     assert runtime["runtime_caption_count"] == 3
@@ -67,6 +91,15 @@ def test_nle_persistence_cutover_audit_keeps_cutover_blocked_while_runtime_contr
     assert compatibility["default_row_count"] == 3
     assert compatibility["default_caption_count"] == 2
     assert compatibility["default_gap_count"] == 1
+    assert compatibility["shadow_override_caption_text"] == "nle shadow first"
+    assert compatibility["explicit_first_caption_text"] == "nle shadow first"
+    assert compatibility["default_first_caption_text"] == "first"
+    assert compatibility["resave_first_caption_text"] == "first"
+    assert compatibility["shadow_override_visible_in_explicit_projection"] is True
+    assert compatibility["shadow_override_absent_from_default_load"] is True
+    assert compatibility["default_load_preserved_legacy_text"] is True
+    assert compatibility["resave_discarded_shadow_override"] is True
+    assert compatibility["resave_preserved_legacy_text"] is True
     assert compatibility["gap_coverage_ready"] is True
     assert compatibility["runtime_state_hydrated_from_legacy"] is True
     assert compatibility["runtime_report_persisted_after_resave"] is False
@@ -146,6 +179,11 @@ def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
         assert "- Caption/gap count: `2` / `1`" in markdown
         assert "## Top-Level NLE Compatibility Projection" in markdown
         assert "Compatibility audit evidence only." in markdown
+        assert "## Canonical Load-Owner Gate Matrix" in markdown
+        assert "This matrix is a cutover preflight only." in markdown
+        assert "- Overall stoplight: `red`" in markdown
+        assert "| canonical_load_owner_change_allowed | blocked |" in markdown
+        assert "| final_cutover_ready | blocked |" in markdown
         assert "- Status: `gap_projection_coverage_ready_blocked`" in markdown
         assert "- Default load source: `legacy_editor_state`" in markdown
         assert "- Explicit projection uses top-level NLE: `True`" in markdown
@@ -153,6 +191,11 @@ def test_nle_persistence_cutover_markdown_includes_top_level_shadow_section():
         assert "- Explicit projection row count: `3`" in markdown
         assert "- Explicit projection caption/gap count: `2` / `1`" in markdown
         assert "- Default row/caption/gap count: `3` / `2` / `1`" in markdown
+        assert "- Shadow override caption text: `nle shadow first`" in markdown
+        assert "- Explicit/default/resave first caption text: `nle shadow first` / `first` / `first`" in markdown
+        assert "- Shadow override visible in explicit projection: `True`" in markdown
+        assert "- Shadow override absent from default load: `True`" in markdown
+        assert "- Resave discarded shadow override: `True`" in markdown
         assert "- Gap coverage ready: `True`" in markdown
         for forbidden in (
             "canonical load owner ready",
