@@ -1,5 +1,27 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.31 G3 Active-Worker Export Final-Surface Regression Guard - 2026-06-29 KST
+
+- 실행 모드: source-app G3 app-command export final-surface regression guard for active-worker status.
+- 결과: pass for the bounded regression guard. This is not full G3 completion or a live real-media active `final > 0` final-surface proof.
+- 저장 위치:
+  - Test guard: `tests/test_app_command_bridge.py::AppCommandBridgeTests::test_active_worker_export_subtitles_keeps_runtime_reference_rows_off_final_surface`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040131-g3-active-worker-export-final-surface-regression-guard`
+- 실제 결과:
+  - The guard sets `backend._active=true` and editor state `ST_PROC`.
+  - Editor rows include two final rows plus VAD, STT1, STT2, and subtitle-preview runtime-reference rows that carry text.
+  - `export-subtitles` writes an SRT with exactly two final blocks and excludes the runtime VAD/STT1/STT2/subtitle-preview text from the final save/export surface.
+  - `guided-subtitle-status` keeps compact runtime-track counts `VAD/STT1/STT2/subtitle_preview/final = 1/1/1/1/2`.
+  - `final` remains the only save/export authority; runtime reference tracks are not authoritative and raw runtime segment text does not leak into compact status.
+  - Production code was unchanged.
+  - This guard does not prove active live real-media final-surface snapshots, active video export while generation is running, UI/UX change, STT/cache default promotion, worker fan-out/scheduler change, persisted NLE disk-format cutover, App Store readiness, upload, or submission.
+- 검증:
+  - `./venv/bin/python -m py_compile tests/test_app_command_bridge.py ui/main/app_command_bridge.py ui/main/app_command_bridge_handlers.py core/project/nle_runtime_cutover.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "active_worker_export_subtitles_keeps_runtime_reference_rows_off_final_surface or export_subtitles_command or status_command_reports_compact_nle_runtime_track_counts"` -> `4 passed, 81 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_subtitle_live_editor_feed_facade.py tests/test_remote_verify_actions.py tests/test_app_command_bridge.py -k "nle or runtime or status or live_nle or save_export or cancel_current_pipeline or app_close or app_quit or active_worker_export_subtitles"` -> `57 passed, 64 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.31`, `PROJECT_SCHEMA_VERSION=04.01.31`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.31 G1 STT Cache Default Review Packet Evidence Binding Refresh - 2026-06-29 KST
 
 - 실행 모드: source-app G1 owner-review packet evidence-binding refresh for NAS HeyDealer first-180s collect-cache write/hit evidence.

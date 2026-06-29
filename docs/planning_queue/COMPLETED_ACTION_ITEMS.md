@@ -19,6 +19,21 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.31 G3 Active-Worker Export Final-Surface Regression Guard
+
+Source request: continue remaining action items, verify and use Jammini/agents, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route (`active_conversation_id=075ebb10-b98a-43bd-b9ee-9046675d41d7`).
+2. `tools/jammini_watchdog.sh --handoff-probe` sent probe `20260629-153804`, but no fresh physical handoff file was visible; Dex did not claim delivered Jammini proof from chat-only status.
+3. Three sub-agent reviews were completed: 한결 architecture, 서린 strict QE/evidence, and 유진 docs/workflow wording. All converged on a narrow app-command export final-surface regression guard, not full G3 completion or a live active-final real-media proof.
+4. `tests/test_app_command_bridge.py` now covers `export-subtitles` while the dummy owner is active (`backend._active=true`, editor state `ST_PROC`) and the editor rows include final rows plus VAD, STT1, STT2, and subtitle-preview runtime-reference rows with text.
+5. The new guard proves the exported SRT contains only the two final rows (`final first`, `final second`) and excludes runtime VAD/STT1/STT2/subtitle-preview text from the final save/export surface.
+6. The same guard checks `guided-subtitle-status` keeps a compact runtime-track payload: counts `VAD/STT1/STT2/subtitle_preview/final = 1/1/1/1/2`, `final` remains the only save/export authority, and raw runtime segment text is not exposed in compact status.
+7. Production code was unchanged. This is a regression guard for an existing app-command save/export boundary and compact status contract.
+8. Focused verification passed: py_compile for `tests/test_app_command_bridge.py`, `ui/main/app_command_bridge.py`, `ui/main/app_command_bridge_handlers.py`, and `core/project/nle_runtime_cutover.py`; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "active_worker_export_subtitles_keeps_runtime_reference_rows_off_final_surface or export_subtitles_command or status_command_reports_compact_nle_runtime_track_counts"` -> `4 passed, 81 deselected`; expanded G3/app-command guard -> `57 passed, 64 deselected`; direct version assertion -> `APP_VERSION=04.01.31`, `PROJECT_SCHEMA_VERSION=04.01.31`; `git diff --check -- .` -> pass.
+9. The first expanded pytest attempt failed before collection because the system temp volume had no usable space. Dex cleared pip/Python/pytest caches only, preserved project evidence/output artifacts, confirmed free space returned to about `2.7GiB`, and reran the guard successfully.
+10. This slice does not claim full G3 completion, live real-media active `final > 0` final-surface proof, active video export while generation is running, production-code behavior change, UI/UX change, STT/cache default promotion, model downgrade, STT2 skipping, worker fan-out/scheduler change, persisted NLE disk-format cutover, App Store readiness, upload, or submission.
+
 ## v04.01.31 G0 App Store Current-Version Readiness Refresh
 
 Source request: continue remaining action items, verify and use Jammini/agents, run App Store packaging/signing/upload/metadata work only within approved gates, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.

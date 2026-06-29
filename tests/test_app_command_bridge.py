@@ -977,6 +977,107 @@ class AppCommandBridgeTests(unittest.TestCase):
         self.assertIn("00:02:42,233 --> 00:02:43,633", exported)
         self.assertIn("00:02:43,633 --> 00:02:46,900", exported)
 
+    def test_active_worker_export_subtitles_keeps_runtime_reference_rows_off_final_surface(self):
+        owner = _DummyOwner()
+        owner.backend._active = True
+        owner._editor_widget.sm.state = "ST_PROC"
+        owner._editor_widget._segments = [
+            {"line": 0, "start": 0.0, "end": 1.0, "text": "final first", "is_gap": False},
+            {
+                "line": 1,
+                "start": 1.0,
+                "end": 2.0,
+                "text": "runtime vad should not export",
+                "_nle_runtime_track": "VAD",
+                "_nle_runtime_role": "runtime_reference_only",
+                "_nle_save_export_authority": False,
+            },
+            {
+                "line": 2,
+                "start": 2.0,
+                "end": 3.0,
+                "text": "raw stt1 should not export",
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+                "_nle_runtime_track": "STT1",
+                "_nle_runtime_role": "runtime_reference_only",
+                "_nle_save_export_authority": False,
+            },
+            {
+                "line": 3,
+                "start": 3.0,
+                "end": 4.0,
+                "text": "raw stt2 should not export",
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT2",
+                "_nle_runtime_track": "STT2",
+                "_nle_runtime_role": "runtime_reference_only",
+                "_nle_save_export_authority": False,
+            },
+            {
+                "line": 4,
+                "start": 4.0,
+                "end": 5.0,
+                "text": "draft subtitle should not export",
+                "_live_subtitle_preview": True,
+                "_nle_runtime_track": "subtitle_preview",
+                "_nle_runtime_role": "runtime_reference_only",
+                "_nle_save_export_authority": False,
+            },
+            {"line": 5, "start": 5.0, "end": 6.0, "text": "final second", "is_gap": False},
+        ]
+        owner._editor_widget.timeline.canvas.vad_segments = [
+            {"start": 1.0, "end": 2.0, "text": "runtime vad should not leak"}
+        ]
+        owner._editor_widget._live_stt_preview_segments = [
+            {
+                "start": 2.0,
+                "end": 3.0,
+                "text": "raw stt1 should not leak",
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT1",
+            },
+            {
+                "start": 3.0,
+                "end": 4.0,
+                "text": "raw stt2 should not leak",
+                "_live_stt_preview": True,
+                "stt_preview_source": "STT2",
+            },
+        ]
+        owner._editor_widget._live_editor_preview_segments = [
+            {"start": 4.0, "end": 5.0, "text": "draft subtitle should not leak", "_live_subtitle_preview": True}
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            export_path = Path(tmp) / "active_worker_export.srt"
+
+            result = execute_app_command(owner, {"command": "export-subtitles", "path": str(export_path)})
+            status = execute_app_command(owner, {"command": "guided-subtitle-status"})
+            exported = export_path.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "subtitles_exported")
+        self.assertEqual(exported.count("-->"), 2)
+        self.assertIn("final first", exported)
+        self.assertIn("final second", exported)
+        self.assertNotIn("runtime vad", exported)
+        self.assertNotIn("raw stt1", exported)
+        self.assertNotIn("raw stt2", exported)
+        self.assertNotIn("draft subtitle", exported)
+        runtime_tracks = status["data"]["nle_runtime_tracks"]
+        self.assertTrue(runtime_tracks["compact_payload"])
+        self.assertEqual(
+            status["data"]["nle_runtime_track_counts"],
+            {"VAD": 1, "STT1": 1, "STT2": 1, "subtitle_preview": 1, "final": 2},
+        )
+        self.assertTrue(runtime_tracks["tracks"]["final"]["authoritative_for_save_export"])
+        for track in ("VAD", "STT1", "STT2", "subtitle_preview"):
+            self.assertFalse(runtime_tracks["tracks"][track]["authoritative_for_save_export"])
+        self.assertNotIn("segments", runtime_tracks["tracks"]["STT1"])
+        self.assertNotIn("raw stt1 should not leak", str(runtime_tracks))
+        self.assertNotIn("runtime vad should not leak", str(status["data"]["editor_runtime"]["nle_runtime_tracks"]))
+
     def test_export_subtitle_video_command_writes_mov_outputs(self):
         owner = _DummyOwner()
         with tempfile.TemporaryDirectory() as tmp:

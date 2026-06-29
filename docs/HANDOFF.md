@@ -33,7 +33,51 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / G1 STT Cache Default Review Packet Evidence Binding Refresh
+## Current Handoff - 2026-06-29 v04.01.31 / G3 Active-Worker Export Final-Surface Regression Guard
+
+### Scope
+
+- Completed a bounded G3 app-command export final-surface regression guard.
+- Added one focused test in `tests/test_app_command_bridge.py`.
+- Production code was unchanged.
+- Updated active G3 pointers, completed archive, project state, NLE action status, validation result, and this handoff.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.31`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.31`.
+- New guard: `tests/test_app_command_bridge.py::AppCommandBridgeTests::test_active_worker_export_subtitles_keeps_runtime_reference_rows_off_final_surface`.
+- The guard sets the dummy app-command owner active (`backend._active=true`, editor state `ST_PROC`) and mixes final rows with VAD, STT1, STT2, and subtitle-preview runtime-reference rows that carry text.
+- `export-subtitles` writes only the two final rows into the SRT and excludes runtime reference text from the final save/export surface.
+- `guided-subtitle-status` reports compact counts `VAD/STT1/STT2/subtitle_preview/final = 1/1/1/1/2`, keeps `final` as the only save/export authority, and avoids raw runtime segment text leakage.
+- This is a synthetic active-worker regression guard. It is not live real-media active `final > 0` final-surface proof.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tests/test_app_command_bridge.py ui/main/app_command_bridge.py ui/main/app_command_bridge_handlers.py core/project/nle_runtime_cutover.py` -> pass.
+- Focused app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "active_worker_export_subtitles_keeps_runtime_reference_rows_off_final_surface or export_subtitles_command or status_command_reports_compact_nle_runtime_track_counts"` -> `4 passed, 81 deselected`.
+- Expanded G3/app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_runtime_cutover.py tests/test_subtitle_live_editor_feed_facade.py tests/test_remote_verify_actions.py tests/test_app_command_bridge.py -k "nle or runtime or status or live_nle or save_export or cancel_current_pipeline or app_close or app_quit or active_worker_export_subtitles"` -> `57 passed, 64 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.31`, `PROJECT_SCHEMA_VERSION=04.01.31`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture, QE/evidence, and docs/workflow wording. Jammini `--status` resolved the active route, but the fresh `--handoff-probe` packet did not produce a physical handoff file; `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+- The first expanded pytest attempt failed before collection because the system temp volume had no usable space. Dex cleared pip/Python/pytest caches only, preserved project evidence/output artifacts, confirmed free space returned to about `2.7GiB`, and reran the guard successfully.
+
+### Remaining Risks
+
+- Do not claim full G3 completion from this slice.
+- A stronger live active-final proof remains separate if selected: active pre-final samples where `nle_runtime_track_counts.final > 0`, same-time snapshots, compact authority checks, final overlap guard, and save/export artifact counts would need to be tied together.
+- Do not reuse `g3_global_canvas_responsiveness_v040114` as live final-surface proof because its sampled active final track count stayed `0`.
+- G0 still requires Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, content-bound App Store Connect validation, upload/submission proof, and owner-approved metadata values JSON.
+- G1 cache defaults remain off until explicit owner approval chooses exactly one cache and reruns same-fixture proof after the default change.
+
+### Next Recommended Action
+
+- Continue remaining active groups from `docs/planning_queue/ACTION_ITEMS.md`.
+- If continuing G3, either stop at the current regression guard or run a stronger live active-final proof as a separate bounded gate; keep it separate from App Store, UI/UX, STT default, and persisted disk-format claims.
+- If continuing G0, first provide owner-approved metadata values JSON or configure Apple Distribution / 3rd Party Mac Developer Installer identities; do not upload from owner approval alone.
+- If continuing G1, ask the owner whether to promote exactly one cache default, then create a rollback boundary and rerun same-fixture proof after the default change.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / G1 STT Cache Default Review Packet Evidence Binding Refresh
 
 ### Scope
 
