@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.24-codemap
+Document-Version: 04.01.25-codemap
 Last-Updated: 2026-06-29
 Updated-By: Codex
 Purpose: Concise responsibility map for token-efficient code navigation.
@@ -33,6 +33,7 @@ Use this file for fast navigation. It is intentionally responsibility-driven and
 - `tools/verify_full_media_pipeline.py`: full-media verification runner with top-level performance/quality summary metrics.
 - `tools/audit_app_store_readiness.py`: non-destructive Mac App Store readiness blocker audit with version lock, stoplight, blocker-group, strict codesign, and package-signature gates.
 - `tools/generate_app_store_metadata_package.py`: Mac App Store owner-input metadata package generator; writes checklist/matrix/guardrail artifacts without claiming submission proof.
+- `tools/check_app_store_upload_preflight.py`: Mac App Store upload preflight helper; requires exact readiness JSON, exact `.pkg` binding, no blockers, and all submission gates true before upload mode can run.
 - `tools/generate_stt_cache_default_review_packet.py`: G1 STT collect-cache owner-review packet generator; summarizes existing NAS cache write/hit evidence without enabling production cache defaults.
 - `tools/generate_nle_canonical_load_owner_review_packet.py`: G2 NLE canonical load-owner owner-review packet generator; summarizes NLE persistence cutover audit evidence without changing project load ownership.
 - `tools/audit_nle_persistence_cutover.py`: G2 NLE persistence audit; includes explicit top-level `nle` caption plus gap compatibility projection, canonical load-owner gate matrix, and rollback-boundary proof while default project load remains legacy-owned.

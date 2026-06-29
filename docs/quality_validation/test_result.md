@@ -1,5 +1,34 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.25 G0 App Store Upload Preflight Guard And Metadata Refresh - 2026-06-29 KST
+
+- 실행 모드: source-app G0 App Store upload preflight guard, readiness proof-content hardening, metadata owner-input package refresh, and version/schema bump.
+- 결과: pass for the bounded guard/audit/package slice. App Store submission remains blocked because signed `.pkg`, content-bound strict `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, Apple Distribution/installer identities, and owner metadata values are still missing.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.25.md`
+  - Readiness audit: `output/manual_verification/latest/app_store_upload_preflight_guard_v040125_20260629_1200/app_store_readiness_audit.md`
+  - Readiness JSON: `output/manual_verification/latest/app_store_upload_preflight_guard_v040125_20260629_1200/app_store_readiness_audit.json`
+  - Metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040125_20260629_1200/app_store_metadata_owner_input_package.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040125-g0-app-store-upload-preflight-guard-and-metadata-refresh`
+- 실제 결과:
+  - App version updated to `04.01.25`.
+  - Project schema version updated to `04.01.25`.
+  - `packaging/macos/upload_app_store_build.sh upload` now requires `AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1` plus `APP_STORE_READINESS_JSON`.
+  - `tools/check_app_store_upload_preflight.py` now blocks upload unless readiness JSON has `app_store_submission_ready=true`, no blockers, all submission gates true, and exact `.pkg` path binding.
+  - `tools/audit_app_store_readiness.py` now rejects placeholder proof files for `codesign`, `pkgutil`, sandbox smoke, and App Store validation, and requires configured signing identities to match keychain identity text.
+  - Current readiness state: `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `17`.
+  - Blocker groups: `version_lock=0`, `packaging_template=0`, `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=8`, `unknown=0`.
+  - Metadata package remains `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner metadata `8/8`, forbidden-claim scan `pass`.
+  - This is guard/audit/package evidence only; it is not package creation, Apple Distribution signing, App Store Connect validation, upload, submission, owner metadata completion, UI/UX change, subtitle-generation change, STT/cache default change, or NLE persistence/load behavior change.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tools/check_app_store_upload_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_script.py tests/test_app_store_upload_preflight.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_script.py tests/test_app_store_upload_preflight.py tests/test_macos_bundle_runtime_paths.py` -> `26 passed`.
+  - `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_upload_preflight_guard_v040125_20260629_1200` -> `status=blocked`, overall stoplight `red`, blocker count `17`.
+  - `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_v040125_20260629_1200` -> `not_submission_proof=true`, pending owner-input metadata `8/8`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.25`, `PROJECT_SCHEMA_VERSION=04.01.25`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.24 G2 Canonical Load-Owner Rollback Boundary Audit - 2026-06-29 KST
 
 - 실행 모드: source-app G2 NLE canonical load-owner rollback-boundary audit, compatibility false-positive guards, and version/schema bump.

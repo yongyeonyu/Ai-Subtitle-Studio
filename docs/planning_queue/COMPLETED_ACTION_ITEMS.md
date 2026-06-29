@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.24-source-app
+Document-Version: 04.01.25-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,23 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.25 G0 App Store Upload Preflight Guard And Metadata Refresh
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.25"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.25`.
+3. `packaging/macos/upload_app_store_build.sh` now refuses `upload` mode unless `AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1`, `APP_STORE_READINESS_JSON`, and `tools/check_app_store_upload_preflight.py` all pass for the exact `.pkg`.
+4. `tools/check_app_store_upload_preflight.py` was added to require `app_store_submission_ready=true`, no blockers, all submission gates true, and exact `.pkg` path binding before upload mode can call `xcrun altool --upload-app`.
+5. `tools/audit_app_store_readiness.py` now treats `codesign`, `pkgutil`, sandbox smoke, and App Store validation proof as content-bound evidence instead of plain file existence. Placeholder proof files remain blocked, and configured signing identities must match the local keychain identity text.
+6. `tools/generate_app_store_metadata_package.py` now carries the upload execution guard into the owner-input package and summary.
+7. Audit evidence was refreshed at `output/manual_verification/latest/app_store_upload_preflight_guard_v040125_20260629_1200/app_store_readiness_audit.md`.
+8. Metadata owner-input package was refreshed at `output/manual_verification/latest/app_store_metadata_owner_input_package_v040125_20260629_1200/app_store_metadata_owner_input_package.md`.
+9. Current G0 remains blocked: `app_store_submission_ready=false`, blocker count `17`, blocker groups `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=8`, and owner-input metadata pending `8/8`.
+10. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+11. Focused verification passed: compile check for touched App Store/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_script.py tests/test_app_store_upload_preflight.py tests/test_macos_bundle_runtime_paths.py` -> `26 passed`; audit generation and metadata package generation passed; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.25` / `PROJECT_SCHEMA_VERSION=04.01.25`; `git diff --check -- .` -> pass.
+12. This slice does not build a package, sign with Apple Distribution, run App Store Connect validation, upload, submit, complete owner metadata, change UI/UX, change subtitle generation, change STT/cache defaults, or change NLE persistence/load behavior.
 
 ## v04.01.24 G2 Canonical Load-Owner Rollback Boundary Audit
 

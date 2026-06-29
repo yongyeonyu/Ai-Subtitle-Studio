@@ -151,6 +151,8 @@ OWNER_APPROVAL_REQUIRED_ACTIONS = (
     "packaging/macos/create_dmg.sh",
 )
 
+UPLOAD_CONFIRM_ENV = "AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED"
+
 OFFICIAL_REFERENCES = {
     "upload_builds": "https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/",
     "app_privacy": "https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy",
@@ -170,6 +172,18 @@ def _path_status(path: Path) -> dict[str, Any]:
         "is_dir": expanded.is_dir() if exists else False,
         "is_executable": os.access(expanded, os.X_OK) if exists else False,
     }
+
+
+def _read_text(path: Path, *, limit: int = 4000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[:limit]
+    except Exception:
+        return ""
+
+
+def _target_bound(text: str, target: Path) -> bool:
+    target = target.expanduser().resolve(strict=False)
+    return str(target) in text or target.name in text
 
 
 def _load_plist(path: Path) -> tuple[dict[str, Any], str]:
@@ -273,6 +287,8 @@ def _check_environment() -> dict[str, Any]:
     return {
         "codesign_identity_configured": bool(os.environ.get("CODESIGN_IDENTITY")),
         "installer_identity_configured": bool(os.environ.get("INSTALLER_IDENTITY")),
+        "codesign_identity": os.environ.get("CODESIGN_IDENTITY", ""),
+        "installer_identity": os.environ.get("INSTALLER_IDENTITY", ""),
         "app_store_connect_auth_configured": asc_api_ready or asc_password_ready,
         "notary_keychain_profile_configured": bool(os.environ.get("NOTARY_KEYCHAIN_PROFILE")),
     }
@@ -345,6 +361,82 @@ def _check_local_signing_identities() -> dict[str, Any]:
     }
 
 
+def _strict_codesign_proof(path: Path, app_path: Path) -> dict[str, Any]:
+    status = _path_status(path)
+    text = _read_text(path) if status["is_file"] else ""
+    target_bound = _target_bound(text, app_path) if text else False
+    lowered = text.lower()
+    success = "valid on disk" in lowered or "satisfies its designated requirement" in lowered
+    failure = any(marker in lowered for marker in ("not signed", "invalid", "rejected", "error"))
+    return {
+        **status,
+        "target_path_bound": target_bound,
+        "proof_valid": bool(status["is_file"] and target_bound and success and not failure),
+    }
+
+
+def _pkg_signature_proof(path: Path, pkg_path: Path) -> dict[str, Any]:
+    status = _path_status(path)
+    text = _read_text(path) if status["is_file"] else ""
+    target_bound = _target_bound(text, pkg_path) if text else False
+    lowered = text.lower()
+    success = "status: signed" in lowered or "signed by a certificate trusted" in lowered
+    failure = any(marker in lowered for marker in ("status: unsigned", "not signed", "rejected", "error"))
+    return {
+        **status,
+        "target_path_bound": target_bound,
+        "proof_valid": bool(status["is_file"] and target_bound and success and not failure),
+    }
+
+
+def _sandbox_smoke_proof(path: Path) -> dict[str, Any]:
+    status = _path_status(path)
+    text = _read_text(path) if status["is_file"] else ""
+    proof_valid = False
+    if text:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            status_value = str(payload.get("status") or payload.get("result") or "").lower()
+            proof_valid = (
+                payload.get("ok") is True
+                or payload.get("passed") is True
+                or status_value in {"ok", "pass", "passed", "success"}
+                or (
+                    payload.get("failed_count") == 0
+                    and ("passed_count" in payload or "scenario_count" in payload)
+                )
+            )
+    return {**status, "proof_valid": bool(status["is_file"] and proof_valid)}
+
+
+def _app_store_validation_proof(path: Path, pkg_path: Path) -> dict[str, Any]:
+    status = _path_status(path)
+    text = _read_text(path) if status["is_file"] else ""
+    target_bound = _target_bound(text, pkg_path) if text else False
+    lowered = text.lower()
+    success = any(
+        marker in lowered
+        for marker in (
+            "no errors",
+            "validation successful",
+            "success-message",
+            "has been successfully validated",
+            "status=\"0\"",
+        )
+    )
+    failure = any(marker in lowered for marker in ("failed", "invalid")) or (
+        "error" in lowered and "no errors" not in lowered
+    )
+    return {
+        **status,
+        "target_path_bound": target_bound,
+        "proof_valid": bool(status["is_file"] and target_bound and success and not failure),
+    }
+
+
 def _check_artifacts(app_path: Path, pkg_path: Path, output_dir: Path) -> dict[str, Any]:
     app_status = _path_status(app_path)
     pkg_status = _path_status(pkg_path)
@@ -355,10 +447,10 @@ def _check_artifacts(app_path: Path, pkg_path: Path, output_dir: Path) -> dict[s
     return {
         "app_bundle": app_status,
         "app_store_pkg": pkg_status,
-        "strict_codesign_verification": _path_status(strict_codesign),
-        "pkg_signature_verification": _path_status(pkg_signature),
-        "sandbox_smoke": _path_status(sandbox_smoke),
-        "app_store_connect_validation": _path_status(asc_validation),
+        "strict_codesign_verification": _strict_codesign_proof(strict_codesign, app_path),
+        "pkg_signature_verification": _pkg_signature_proof(pkg_signature, pkg_path),
+        "sandbox_smoke": _sandbox_smoke_proof(sandbox_smoke),
+        "app_store_connect_validation": _app_store_validation_proof(asc_validation, pkg_path),
     }
 
 
@@ -415,17 +507,27 @@ def _blocker_group(blocker: str) -> str:
         "signed_app_store_pkg_missing",
         "strict_codesign_verification_missing",
         "pkg_signature_verification_missing",
+        "strict_codesign_verification_invalid",
+        "pkg_signature_verification_invalid",
     }:
         return "signed_artifacts"
-    if blocker == "sandbox_smoke_missing":
+    if blocker in {"sandbox_smoke_missing", "sandbox_smoke_failed"}:
         return "sandbox_smoke"
-    if blocker in {"app_store_connect_validation_missing", "app_store_connect_auth_not_configured"}:
+    if blocker in {
+        "app_store_connect_validation_missing",
+        "app_store_connect_validation_failed",
+        "app_store_connect_auth_not_configured",
+    }:
         return "app_store_connect"
     if blocker in {
         "apple_distribution_codesign_identity_not_configured",
         "installer_identity_not_configured",
         "apple_distribution_identity_missing_from_keychain",
         "installer_identity_missing_from_keychain",
+        "apple_distribution_codesign_identity_wrong_type",
+        "apple_distribution_codesign_identity_not_in_keychain",
+        "installer_identity_wrong_type",
+        "installer_identity_not_in_keychain",
     }:
         return "signing_identities"
     if blocker.startswith("non_code_submission_item_pending:"):
@@ -473,8 +575,13 @@ def _submission_gate_summary(
 ) -> dict[str, Any]:
     app_bundle_ready = bool((artifacts.get("app_bundle") or {}).get("is_dir"))
     pkg_ready = bool((artifacts.get("app_store_pkg") or {}).get("is_file"))
-    strict_codesign_ready = bool((artifacts.get("strict_codesign_verification") or {}).get("is_file"))
-    pkg_signature_ready = bool((artifacts.get("pkg_signature_verification") or {}).get("is_file"))
+    strict_codesign_ready = bool((artifacts.get("strict_codesign_verification") or {}).get("proof_valid"))
+    pkg_signature_ready = bool((artifacts.get("pkg_signature_verification") or {}).get("proof_valid"))
+    sandbox_smoke_ready = bool((artifacts.get("sandbox_smoke") or {}).get("proof_valid"))
+    asc_validation_ready = bool((artifacts.get("app_store_connect_validation") or {}).get("proof_valid"))
+    codesign_identity = str(environment.get("codesign_identity") or "")
+    installer_identity = str(environment.get("installer_identity") or "")
+    identity_names = set(str(name) for name in signing_identities.get("identity_names") or [])
     return {
         "app_version": app_version,
         "version_lock_ready": bool(app_version) and bool(info.get("version_placeholders_ok")),
@@ -484,14 +591,14 @@ def _submission_gate_summary(
         "strict_codesign_verification_ready": strict_codesign_ready,
         "pkg_signature_verification_ready": pkg_signature_ready,
         "signed_artifacts_ready": app_bundle_ready and pkg_ready and strict_codesign_ready and pkg_signature_ready,
-        "sandbox_smoke_ready": bool((artifacts.get("sandbox_smoke") or {}).get("is_file")),
-        "app_store_connect_validation_ready": bool(
-            (artifacts.get("app_store_connect_validation") or {}).get("is_file")
-        ),
+        "sandbox_smoke_ready": sandbox_smoke_ready,
+        "app_store_connect_validation_ready": asc_validation_ready,
         "apple_distribution_identity_ready": bool(environment.get("codesign_identity_configured"))
-        and bool(signing_identities.get("apple_distribution_present")),
+        and codesign_identity.startswith("Apple Distribution:")
+        and codesign_identity in identity_names,
         "installer_identity_ready": bool(environment.get("installer_identity_configured"))
-        and bool(signing_identities.get("installer_distribution_present")),
+        and installer_identity.startswith("3rd Party Mac Developer Installer:")
+        and installer_identity in identity_names,
         "app_store_connect_auth_ready": bool(environment.get("app_store_connect_auth_configured")),
         "owner_metadata_ready": int(submission_content.get("pending_owner_input_count") or 0) == 0,
         "app_store_submission_ready": bool(app_store_submission_ready),
@@ -526,6 +633,19 @@ def _distribution_tracks(*, app_store_submission_ready: bool, pkg_path: Path) ->
     }
 
 
+def _upload_execution_guard() -> dict[str, Any]:
+    return {
+        "upload_confirmation_required": True,
+        "upload_confirmation_env_var": UPLOAD_CONFIRM_ENV,
+        "upload_confirmation_required_value": "1",
+        "upload_confirmation_configured_for_current_process": os.environ.get(UPLOAD_CONFIRM_ENV) == "1",
+        "validate_mode_requires_upload_confirmation": False,
+        "upload_mode_without_confirmation_exits": 64,
+        "script_path": "packaging/macos/upload_app_store_build.sh",
+        "not_submission_proof": True,
+    }
+
+
 def build_readiness_report(
     *,
     root: Path = ROOT,
@@ -557,16 +677,32 @@ def build_readiness_report(
         blockers.append("signed_app_store_pkg_missing")
     if not artifacts["strict_codesign_verification"]["is_file"]:
         blockers.append("strict_codesign_verification_missing")
+    elif not artifacts["strict_codesign_verification"]["proof_valid"]:
+        blockers.append("strict_codesign_verification_invalid")
     if not artifacts["pkg_signature_verification"]["is_file"]:
         blockers.append("pkg_signature_verification_missing")
+    elif not artifacts["pkg_signature_verification"]["proof_valid"]:
+        blockers.append("pkg_signature_verification_invalid")
     if not artifacts["sandbox_smoke"]["is_file"]:
         blockers.append("sandbox_smoke_missing")
+    elif not artifacts["sandbox_smoke"]["proof_valid"]:
+        blockers.append("sandbox_smoke_failed")
     if not artifacts["app_store_connect_validation"]["is_file"]:
         blockers.append("app_store_connect_validation_missing")
+    elif not artifacts["app_store_connect_validation"]["proof_valid"]:
+        blockers.append("app_store_connect_validation_failed")
     if not environment["codesign_identity_configured"]:
         blockers.append("apple_distribution_codesign_identity_not_configured")
+    elif not str(environment.get("codesign_identity") or "").startswith("Apple Distribution:"):
+        blockers.append("apple_distribution_codesign_identity_wrong_type")
+    elif str(environment.get("codesign_identity") or "") not in set(signing_identities["identity_names"]):
+        blockers.append("apple_distribution_codesign_identity_not_in_keychain")
     if not environment["installer_identity_configured"]:
         blockers.append("installer_identity_not_configured")
+    elif not str(environment.get("installer_identity") or "").startswith("3rd Party Mac Developer Installer:"):
+        blockers.append("installer_identity_wrong_type")
+    elif str(environment.get("installer_identity") or "") not in set(signing_identities["identity_names"]):
+        blockers.append("installer_identity_not_in_keychain")
     if not signing_identities["apple_distribution_present"]:
         blockers.append("apple_distribution_identity_missing_from_keychain")
     if not signing_identities["installer_distribution_present"]:
@@ -614,6 +750,7 @@ def build_readiness_report(
             app_store_submission_ready=app_store_submission_ready,
             pkg_path=pkg_path,
         ),
+        "upload_execution_guard": _upload_execution_guard(),
         "packaging": packaging,
         "entitlements": entitlements,
         "info_plist_template": info,
@@ -631,6 +768,7 @@ def build_readiness_report(
             "packaging/macos/validate_app_bundle.sh",
             "INSTALLER_IDENTITY='3rd Party Mac Developer Installer: ...' packaging/macos/build_app_store_pkg.sh",
             "ASC_API_KEY=... ASC_API_ISSUER=... packaging/macos/upload_app_store_build.sh validate",
+            f"{UPLOAD_CONFIRM_ENV}=1 APP_STORE_READINESS_JSON='{output_dir / 'app_store_readiness_audit.json'}' ASC_API_KEY=... ASC_API_ISSUER=... packaging/macos/upload_app_store_build.sh upload",
         ],
     }
 
@@ -652,6 +790,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     signing_identities = payload.get("signing_identities") or {}
     entitlements = payload.get("entitlements") or {}
     tracks = payload.get("distribution_tracks") or {}
+    upload_guard = payload.get("upload_execution_guard") or {}
     non_code = payload.get("non_code_submission_items") or {}
     submission_content = payload.get("submission_content_audit") or {}
     lines = [
@@ -677,6 +816,20 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Upload Execution Guard",
+            "",
+            f"- Upload confirmation required: `{bool(upload_guard.get('upload_confirmation_required'))}`",
+            f"- Confirmation env var: `{upload_guard.get('upload_confirmation_env_var')}`",
+            f"- Required value: `{upload_guard.get('upload_confirmation_required_value')}`",
+            f"- Configured for current process: `{bool(upload_guard.get('upload_confirmation_configured_for_current_process'))}`",
+            f"- Validate mode requires upload confirmation: `{bool(upload_guard.get('validate_mode_requires_upload_confirmation'))}`",
+            f"- Upload mode without confirmation exits: `{upload_guard.get('upload_mode_without_confirmation_exits')}`",
+            f"- Script path: `{upload_guard.get('script_path')}`",
+            "",
+        ]
+    )
+    lines.extend(
+        [
             "## Non-Destructive Next Steps",
             "",
         ]
@@ -738,10 +891,10 @@ def _markdown_report(payload: dict[str, Any]) -> str:
             "",
             f"- App bundle: `{(artifacts.get('app_bundle') or {}).get('path')}` / exists `{(artifacts.get('app_bundle') or {}).get('is_dir')}`",
             f"- App Store pkg: `{(artifacts.get('app_store_pkg') or {}).get('path')}` / exists `{(artifacts.get('app_store_pkg') or {}).get('is_file')}`",
-            f"- Strict codesign proof: `{(artifacts.get('strict_codesign_verification') or {}).get('path')}` / exists `{(artifacts.get('strict_codesign_verification') or {}).get('is_file')}`",
-            f"- Package signature proof: `{(artifacts.get('pkg_signature_verification') or {}).get('path')}` / exists `{(artifacts.get('pkg_signature_verification') or {}).get('is_file')}`",
-            f"- Sandbox smoke: exists `{(artifacts.get('sandbox_smoke') or {}).get('is_file')}`",
-            f"- App Store Connect validation: exists `{(artifacts.get('app_store_connect_validation') or {}).get('is_file')}`",
+            f"- Strict codesign proof: `{(artifacts.get('strict_codesign_verification') or {}).get('path')}` / exists `{(artifacts.get('strict_codesign_verification') or {}).get('is_file')}` / target bound `{(artifacts.get('strict_codesign_verification') or {}).get('target_path_bound')}` / proof valid `{(artifacts.get('strict_codesign_verification') or {}).get('proof_valid')}`",
+            f"- Package signature proof: `{(artifacts.get('pkg_signature_verification') or {}).get('path')}` / exists `{(artifacts.get('pkg_signature_verification') or {}).get('is_file')}` / target bound `{(artifacts.get('pkg_signature_verification') or {}).get('target_path_bound')}` / proof valid `{(artifacts.get('pkg_signature_verification') or {}).get('proof_valid')}`",
+            f"- Sandbox smoke: exists `{(artifacts.get('sandbox_smoke') or {}).get('is_file')}` / proof valid `{(artifacts.get('sandbox_smoke') or {}).get('proof_valid')}`",
+            f"- App Store Connect validation: exists `{(artifacts.get('app_store_connect_validation') or {}).get('is_file')}` / target bound `{(artifacts.get('app_store_connect_validation') or {}).get('target_path_bound')}` / proof valid `{(artifacts.get('app_store_connect_validation') or {}).get('proof_valid')}`",
             "",
             "## Signing And Auth Gate",
             "",

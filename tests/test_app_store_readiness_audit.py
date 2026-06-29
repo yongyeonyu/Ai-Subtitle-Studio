@@ -5,6 +5,22 @@ from tools import audit_app_store_readiness
 from tools.audit_app_store_readiness import NON_CODE_SUBMISSION_ITEMS, build_readiness_report
 
 
+def _write_valid_submission_proofs(output_dir: Path, app_path: Path, pkg_path: Path) -> None:
+    (output_dir / "app_codesign_verify.txt").write_text(
+        f"{app_path}: valid on disk\n{app_path}: satisfies its Designated Requirement\n",
+        encoding="utf-8",
+    )
+    (output_dir / "pkgutil_check_signature.txt").write_text(
+        f"Package \"{pkg_path}\":\n   Status: signed by a certificate trusted by Mac OS X\n",
+        encoding="utf-8",
+    )
+    (output_dir / "sandbox_smoke_result.json").write_text('{"status":"passed"}', encoding="utf-8")
+    (output_dir / "app_store_connect_validation.xml").write_text(
+        f"No errors validating {pkg_path}\n",
+        encoding="utf-8",
+    )
+
+
 def test_app_store_readiness_audit_blocks_without_submission_artifacts(tmp_path):
     root = Path(__file__).resolve().parents[1]
 
@@ -25,6 +41,17 @@ def test_app_store_readiness_audit_blocks_without_submission_artifacts(tmp_path)
     assert "app_store_connect_validation_missing" in report["blockers"]
     assert report["stoplight"]["overall"] == "red"
     assert report["entitlements"]["temporary_exceptions"] == []
+    upload_guard = report["upload_execution_guard"]
+    assert upload_guard["upload_confirmation_required"] is True
+    assert upload_guard["upload_confirmation_env_var"] == "AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED"
+    assert upload_guard["upload_confirmation_required_value"] == "1"
+    assert upload_guard["validate_mode_requires_upload_confirmation"] is False
+    assert upload_guard["upload_mode_without_confirmation_exits"] == 64
+    assert upload_guard["not_submission_proof"] is True
+    upload_commands = [command for command in report["next_owner_approved_commands"] if command.endswith("upload_app_store_build.sh upload")]
+    assert len(upload_commands) == 1
+    assert "AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1" in upload_commands[0]
+    assert "APP_STORE_READINESS_JSON=" in upload_commands[0]
 
 
 def test_app_store_readiness_audit_checks_required_entitlements():
@@ -177,10 +204,7 @@ def test_app_store_readiness_audit_metadata_remains_final_gate_when_technical_ga
     app_path.mkdir()
     pkg_path.write_text("pkg", encoding="utf-8")
     output_dir.mkdir()
-    (output_dir / "app_codesign_verify.txt").write_text("codesign ok", encoding="utf-8")
-    (output_dir / "pkgutil_check_signature.txt").write_text("pkg signature ok", encoding="utf-8")
-    (output_dir / "sandbox_smoke_result.json").write_text("{}", encoding="utf-8")
-    (output_dir / "app_store_connect_validation.xml").write_text("<ok/>", encoding="utf-8")
+    _write_valid_submission_proofs(output_dir, app_path, pkg_path)
     monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")
     monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Example (TEAMID)")
     monkeypatch.setenv("ASC_API_KEY", "KEY")
@@ -226,6 +250,98 @@ def test_app_store_readiness_audit_metadata_remains_final_gate_when_technical_ga
     assert gates["app_store_connect_auth_ready"] is True
     assert gates["owner_metadata_ready"] is False
     assert gates["app_store_submission_ready"] is False
+
+
+def test_app_store_readiness_rejects_placeholder_submission_proof_files(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    app_path = tmp_path / "AI Subtitle Studio.app"
+    pkg_path = tmp_path / "AI Subtitle Studio.pkg"
+    output_dir = tmp_path / "placeholder_proofs"
+    app_path.mkdir()
+    pkg_path.write_text("pkg", encoding="utf-8")
+    output_dir.mkdir()
+    (output_dir / "app_codesign_verify.txt").write_text("codesign ok", encoding="utf-8")
+    (output_dir / "pkgutil_check_signature.txt").write_text("pkg signature ok", encoding="utf-8")
+    (output_dir / "sandbox_smoke_result.json").write_text("{}", encoding="utf-8")
+    (output_dir / "app_store_connect_validation.xml").write_text("<ok/>", encoding="utf-8")
+    monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")
+    monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Example (TEAMID)")
+    monkeypatch.setenv("ASC_API_KEY", "KEY")
+    monkeypatch.setenv("ASC_API_ISSUER", "ISSUER")
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": [
+                "Apple Distribution: Example (TEAMID)",
+                "3rd Party Mac Developer Installer: Example (TEAMID)",
+            ],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=app_path,
+        pkg_path=pkg_path,
+        output_dir=output_dir,
+    )
+    gates = report["submission_gate_summary"]
+
+    assert report["app_store_submission_ready"] is False
+    assert "strict_codesign_verification_invalid" in report["blockers"]
+    assert "pkg_signature_verification_invalid" in report["blockers"]
+    assert "sandbox_smoke_failed" in report["blockers"]
+    assert "app_store_connect_validation_failed" in report["blockers"]
+    assert gates["strict_codesign_verification_ready"] is False
+    assert gates["pkg_signature_verification_ready"] is False
+    assert gates["sandbox_smoke_ready"] is False
+    assert gates["app_store_connect_validation_ready"] is False
+
+
+def test_app_store_readiness_requires_configured_identities_to_match_keychain(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    app_path = tmp_path / "AI Subtitle Studio.app"
+    pkg_path = tmp_path / "AI Subtitle Studio.pkg"
+    output_dir = tmp_path / "identity_mismatch"
+    app_path.mkdir()
+    pkg_path.write_text("pkg", encoding="utf-8")
+    output_dir.mkdir()
+    _write_valid_submission_proofs(output_dir, app_path, pkg_path)
+    monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Wrong (TEAMID)")
+    monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Wrong (TEAMID)")
+    monkeypatch.setenv("ASC_API_KEY", "KEY")
+    monkeypatch.setenv("ASC_API_ISSUER", "ISSUER")
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": [
+                "Apple Distribution: Example (TEAMID)",
+                "3rd Party Mac Developer Installer: Example (TEAMID)",
+            ],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=app_path,
+        pkg_path=pkg_path,
+        output_dir=output_dir,
+    )
+    gates = report["submission_gate_summary"]
+
+    assert "apple_distribution_codesign_identity_not_in_keychain" in report["blockers"]
+    assert "installer_identity_not_in_keychain" in report["blockers"]
+    assert gates["apple_distribution_identity_ready"] is False
+    assert gates["installer_identity_ready"] is False
 
 
 def test_app_store_readiness_stays_blocked_when_artifacts_exist_but_signature_proof_is_missing(tmp_path, monkeypatch):

@@ -6,7 +6,7 @@ AI Subtitle Studio can be treated as a Mac App Store submission candidate.
 ## Current Status
 
 - Status: blocked. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28 and reconfirmed on 2026-06-29, but distribution identities, signed `.pkg`, strict signature proof, App Store validation, and owner metadata values are still incomplete.
-- Source app version: `04.01.22`.
+- Source app version: `04.01.25`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
 - Minimum macOS: `14.0`.
@@ -70,7 +70,7 @@ Exit gate: package signature is valid and points to the same app candidate from 
 ### Phase 4. App Store Connect Validation
 
 - Run `packaging/macos/upload_app_store_build.sh validate` or Transporter validation.
-- Upload approval has been granted by the owner for this App Store lane; do not upload until validation succeeds for the exact signed `.pkg`.
+- Upload approval has been granted by the owner for this App Store lane; do not upload until validation succeeds for the exact signed `.pkg`. Upload mode also requires `AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1`, `APP_STORE_READINESS_JSON`, exact `.pkg` binding, no readiness blockers, and all submission gates true.
 - Preserve validation output under `output/manual_verification/latest/`.
 
 Exit gate: validation succeeds for the exact `.pkg` candidate.
@@ -108,13 +108,13 @@ Exit gate: App Store Connect submission is owner-approved and all non-code mater
 
 ## Latest Owner-Input Package
 
-- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040125_20260629_1200/app_store_metadata_owner_input_package.md`
 
 Latest package state: `status=blocked`, `not_submission_proof=true`,
 `owner_input_complete=false`, `app_store_submission_ready=false`, pending
 owner-input metadata `8/8`, forbidden-claim scan `pass` with `0` matches,
-app version `04.01.22`, and sanitized source readiness snapshot with overall
-stoplight `red`.
+app version `04.01.25`, upload confirmation guard present, and sanitized source
+readiness snapshot with overall stoplight `red`.
 This package is a collection/checklist artifact only; it does not replace signed
 package proof, sandbox smoke, App Store Connect validation, upload/submission,
 or owner-approved metadata values.
@@ -142,8 +142,8 @@ real-media STT quality, or roughcut proof.
 - `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`
 - `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
 - `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`
-- `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`
-- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`
+- `output/manual_verification/latest/app_store_upload_preflight_guard_v040125_20260629_1200/app_store_readiness_audit.md`
+- `output/manual_verification/latest/app_store_metadata_owner_input_package_v040125_20260629_1200/app_store_metadata_owner_input_package.md`
 
 Latest known state: `status=blocked`, `local_packaging_ready=true`,
 `app_store_submission_ready=false`, overall stoplight `red`, blocker count
@@ -155,7 +155,8 @@ owner metadata remain red. Current blocker groups are `signed_artifacts=3`,
 environment, but validation output is still missing. The latest local identity
 check still lacks Apple Distribution and 3rd Party Mac Developer Installer
 identities, and all `8` non-code submission metadata items remain
-`owner_input_required`.
+`owner_input_required`. Upload mode is guarded by a separate preflight helper and
+will not run from approval alone.
 
 ## Owner-Approved Command Sequence
 
@@ -169,6 +170,7 @@ CODESIGN_IDENTITY="Apple Distribution: ..." packaging/macos/sign_app_bundle.sh
 packaging/macos/validate_app_bundle.sh
 INSTALLER_IDENTITY="3rd Party Mac Developer Installer: ..." packaging/macos/build_app_store_pkg.sh
 ASC_API_KEY="..." ASC_API_ISSUER="..." packaging/macos/upload_app_store_build.sh validate
+AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1 APP_STORE_READINESS_JSON="output/manual_verification/latest/app_store_upload_preflight_guard_v040125_20260629_1200/app_store_readiness_audit.json" ASC_API_KEY="..." ASC_API_ISSUER="..." packaging/macos/upload_app_store_build.sh upload
 ```
 
 ## Official References

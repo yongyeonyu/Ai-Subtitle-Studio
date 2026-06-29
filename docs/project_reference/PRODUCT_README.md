@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.01.24-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.01.24-30D158?style=for-the-badge)](../release_notes/RELEASE_v04.01.24.md)
+[![App Version](https://img.shields.io/badge/app-04.01.25-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.01.25-30D158?style=for-the-badge)](../release_notes/RELEASE_v04.01.25.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -18,7 +18,7 @@ AI Subtitle Studio is built for one primary outcome: produce highly accurate sub
 
 Current development stays on the existing Python/PyQt6 source app. Active work focuses on accuracy-first subtitle generation, editor/timeline stability, project save/reopen safety, and real-app verification on macOS Apple Silicon. Native `.swift` / `.cpp` assets and packaging scripts may still be used for bounded acceleration or packaging support, but broad native migration is not the default roadmap unless the owner explicitly reopens it.
 
-The macOS packaging scripts under `packaging/macos/` still support local `.app` validation, Swift native helper builds, local updater flows, DMG creation, notarization prep, and App Store packaging. Mac App Store packaging/signing/upload/metadata execution has owner approval for the current G0 lane, but signed package, validation, upload, and metadata proof are still required before submission can be claimed.
+The macOS packaging scripts under `packaging/macos/` still support local `.app` validation, Swift native helper builds, local updater flows, DMG creation, notarization prep, and App Store packaging. Mac App Store packaging/signing/upload/metadata execution has owner approval for the current G0 lane, but signed package, validation, upload, and metadata proof are still required before submission can be claimed. Upload mode also requires an exact readiness JSON preflight for the same package.
 
 ## Core Workflows
 
@@ -225,9 +225,9 @@ Recommended read order for a fresh continuation:
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.01.24` |
-| Latest release checkpoint | `v04.01.24` |
-| Handoff document version | `04.01.24-source-app` |
+| App version in code | `04.01.25` |
+| Latest release checkpoint | `v04.01.25` |
+| Handoff document version | `04.01.25-source-app` |
 | Active phase | `SOURCE_APP_CONTINUATION_V4_1_0` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
@@ -259,7 +259,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.01.24.md`](../release_notes/RELEASE_v04.01.24.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.01.25.md`](../release_notes/RELEASE_v04.01.25.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

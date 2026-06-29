@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.24-source-app
+Document-Version: 04.01.25-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -38,16 +38,16 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.24`.
+- App version: `04.01.25`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
 - Current readiness doc: `docs/APP_STORE_SUBMISSION_READINESS.md`.
-- Latest audit artifact: `output/manual_verification/latest/app_store_readiness_blocker_matrix_v040122_20260629_1100/app_store_readiness_audit.md`.
-- Latest metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040122_20260629_1100/app_store_metadata_owner_input_package.md`.
+- Latest audit artifact: `output/manual_verification/latest/app_store_upload_preflight_guard_v040125_20260629_1200/app_store_readiness_audit.md`.
+- Latest metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040125_20260629_1200/app_store_metadata_owner_input_package.md`.
 - Latest source quick QA baseline: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929/suite_result.md`.
 - Latest packaging evidence: `output/manual_verification/latest/app_store_owner_approval_packaging_20260628_2220/`.
-- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `17`; version lock and packaging template gates are green, while signed-artifact proof, sandbox smoke, App Store Connect validation, signing identities, and owner metadata remain red. The current blocker groups are `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, and `owner_metadata=8`. Owner approval for packaging/signing/upload/metadata execution exists, but the exact signed `.pkg`, strict App Store-candidate `codesign`, `pkgutil --check-signature`, sandbox workflow smoke, App Store Connect validation, upload/submission proof, and owner metadata values remain incomplete. The latest owner-input package is collection evidence only: `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner metadata `8/8`, and forbidden-claim scan `pass`. The latest source quick QA baseline passed with `profile=quick`, `scenario_count=1`, `failed_count=0`, scenario `editor_compact_macau`; this is source-app editor workflow baseline only and not signed package, sandbox smoke, App Store validation/upload/submission, or owner metadata proof.
+- Current audit state: `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `17`; version lock and packaging template gates are green, while signed-artifact proof, sandbox smoke, App Store Connect validation, signing identities, and owner metadata remain red. The current blocker groups are `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, and `owner_metadata=8`. Owner approval for packaging/signing/upload/metadata execution exists, but the exact signed `.pkg`, strict App Store-candidate `codesign`, `pkgutil --check-signature`, sandbox workflow smoke, App Store Connect validation, upload/submission proof, and owner metadata values remain incomplete. Upload mode now also requires `AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED=1`, `APP_STORE_READINESS_JSON`, exact `.pkg` binding, no blockers, and all submission gates true. The latest owner-input package is collection evidence only: `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner metadata `8/8`, and forbidden-claim scan `pass`. The latest source quick QA baseline passed with `profile=quick`, `scenario_count=1`, `failed_count=0`, scenario `editor_compact_macau`; this is source-app editor workflow baseline only and not signed package, sandbox smoke, App Store validation/upload/submission, or owner metadata proof.
 - Developer ID beta `.dmg` remains a separate opt-in track and is not App Store submission proof.
 
 Detailed plan:
@@ -271,8 +271,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.24"
-document_version: "04.01.24-source-app"
+app_version: "04.01.25"
+document_version: "04.01.25-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

@@ -12,6 +12,22 @@ from tools.generate_app_store_metadata_package import build_metadata_package, wr
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _write_valid_submission_proofs(output_dir: Path, app_path: Path, pkg_path: Path) -> None:
+    (output_dir / "app_codesign_verify.txt").write_text(
+        f"{app_path}: valid on disk\n{app_path}: satisfies its Designated Requirement\n",
+        encoding="utf-8",
+    )
+    (output_dir / "pkgutil_check_signature.txt").write_text(
+        f"Package \"{pkg_path}\":\n   Status: signed by a certificate trusted by Mac OS X\n",
+        encoding="utf-8",
+    )
+    (output_dir / "sandbox_smoke_result.json").write_text('{"status":"passed"}', encoding="utf-8")
+    (output_dir / "app_store_connect_validation.xml").write_text(
+        f"No errors validating {pkg_path}\n",
+        encoding="utf-8",
+    )
+
+
 def test_metadata_package_tracks_owner_inputs_without_submission_claim(tmp_path):
     package = build_metadata_package(root=ROOT, output_dir=tmp_path / "metadata_package")
 
@@ -25,6 +41,12 @@ def test_metadata_package_tracks_owner_inputs_without_submission_claim(tmp_path)
     assert package["readiness_snapshot"]["pending_owner_input_keys"] == list(NON_CODE_SUBMISSION_ITEMS)
     assert {item["status"] for item in package["owner_input_matrix"]} == {"owner_input_required"}
     assert package["forbidden_claim_scan"]["status"] == "pass"
+    assert package["readiness_snapshot"]["upload_execution_guard"]["upload_confirmation_required"] is True
+    assert (
+        package["readiness_snapshot"]["upload_execution_guard"]["upload_confirmation_env_var"]
+        == "AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED"
+    )
+    assert package["source_readiness_snapshot"]["upload_execution_guard"]["upload_mode_without_confirmation_exits"] == 64
     assert package["source_readiness_snapshot"]["signing_identity_summary"].keys() == {
         "apple_development_present",
         "apple_distribution_present",
@@ -41,10 +63,7 @@ def test_metadata_package_stays_blocked_when_technical_gates_are_green(tmp_path,
     app_path.mkdir()
     pkg_path.write_text("pkg", encoding="utf-8")
     output_dir.mkdir()
-    (output_dir / "app_codesign_verify.txt").write_text("codesign ok", encoding="utf-8")
-    (output_dir / "pkgutil_check_signature.txt").write_text("pkg signature ok", encoding="utf-8")
-    (output_dir / "sandbox_smoke_result.json").write_text("{}", encoding="utf-8")
-    (output_dir / "app_store_connect_validation.xml").write_text("<ok/>", encoding="utf-8")
+    _write_valid_submission_proofs(output_dir, app_path, pkg_path)
     monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")
     monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Example (TEAMID)")
     monkeypatch.setenv("ASC_API_KEY", "KEY")
@@ -97,6 +116,7 @@ def test_metadata_package_writes_expected_artifacts(tmp_path):
     assert payload["owner_input_complete"] is False
     assert scan["status"] == "pass"
     assert "not packaging, upload, validation, or submission proof" in summary
+    assert "Upload confirmation required" in summary
     assert "App Store ready" not in summary
     assert "Apple-approved" not in summary
     assert "fully native" not in summary

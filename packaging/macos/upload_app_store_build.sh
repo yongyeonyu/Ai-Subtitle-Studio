@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PKG_PATH="${PKG_PATH:-$ROOT_DIR/dist/macos/AI Subtitle Studio.pkg}"
 MODE="${1:-validate}"
+UPLOAD_CONFIRM_ENV="AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED"
+READINESS_JSON="${APP_STORE_READINESS_JSON:-}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "App Store upload target is macOS only." >&2
@@ -20,6 +22,21 @@ fi
 
 ACTION="--validate-app"
 if [[ "$MODE" == "upload" ]]; then
+  if [[ "${AI_SUBTITLE_STUDIO_APP_STORE_UPLOAD_CONFIRMED:-}" != "1" ]]; then
+    echo "Refusing App Store upload without ${UPLOAD_CONFIRM_ENV}=1 for this exact package." >&2
+    exit 64
+  fi
+  if [[ -z "$READINESS_JSON" ]]; then
+    echo "Refusing App Store upload without APP_STORE_READINESS_JSON pointing to the exact readiness report." >&2
+    exit 64
+  fi
+  PYTHON_BIN="${PYTHON:-$ROOT_DIR/venv/bin/python}"
+  if [[ ! -x "$PYTHON_BIN" ]]; then
+    PYTHON_BIN="python3"
+  fi
+  "$PYTHON_BIN" "$ROOT_DIR/tools/check_app_store_upload_preflight.py" \
+    --readiness-json "$READINESS_JSON" \
+    --pkg-path "$PKG_PATH"
   ACTION="--upload-app"
 fi
 

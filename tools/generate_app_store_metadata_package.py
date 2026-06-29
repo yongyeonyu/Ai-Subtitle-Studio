@@ -253,6 +253,7 @@ def _public_readiness_snapshot(readiness: dict[str, Any]) -> dict[str, Any]:
             "app_store_connect_auth_configured": bool(environment.get("app_store_connect_auth_configured")),
         },
         "distribution_tracks": readiness.get("distribution_tracks"),
+        "upload_execution_guard": readiness.get("upload_execution_guard"),
     }
 
 
@@ -324,6 +325,7 @@ def build_metadata_package(
             "pending_owner_input_total": (readiness.get("submission_content_audit") or {}).get("item_count"),
             "pending_owner_input_keys": pending_owner_input_keys,
             "distribution_tracks": readiness.get("distribution_tracks"),
+            "upload_execution_guard": readiness.get("upload_execution_guard"),
         },
         "owner_input_matrix": owner_inputs,
         "app_store_connect_metadata_fill": _metadata_fill_matrix(),
@@ -509,6 +511,8 @@ def _package_summary_md(package: dict[str, Any]) -> str:
             f"- App version: `{package['APP_VERSION']}`",
             f"- Pending owner-input items: `{readiness['pending_owner_input_count']}` / `{readiness['pending_owner_input_total']}`",
             f"- Forbidden claim scan: `{scan['status']}` with `{scan['match_count']}` matches",
+            f"- Upload confirmation required: `{bool((readiness.get('upload_execution_guard') or {}).get('upload_confirmation_required'))}`",
+            f"- Upload confirmation env: `{(readiness.get('upload_execution_guard') or {}).get('upload_confirmation_env_var')}`",
             "",
             "## Required Next Proof",
             "",
