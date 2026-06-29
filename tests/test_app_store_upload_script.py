@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.runtime.config import APP_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "packaging" / "macos" / "upload_app_store_build.sh"
@@ -51,9 +53,20 @@ def _ready_readiness_json(tmp_path: Path, package: Path) -> Path:
     readiness.write_text(
         json.dumps(
             {
+                "schema": "ai_subtitle_studio.app_store_readiness.v1",
+                "root": str(tmp_path),
+                "app_version": APP_VERSION,
                 "app_store_submission_ready": True,
                 "blockers": [],
                 "submission_gate_summary": {gate: True for gate in REQUIRED_UPLOAD_GATES},
+                "owner_metadata_values_preflight": {
+                    "ready": True,
+                    "owner_input_ready_count": 8,
+                    "owner_input_total": 8,
+                    "app_store_connect_metadata_ready_count": 8,
+                    "app_store_connect_metadata_total": 8,
+                    "forbidden_claim_scan": {"status": "pass"},
+                },
                 "artifacts": {"app_store_pkg": {"path": str(package), "is_file": True}},
             }
         ),

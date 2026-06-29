@@ -33,7 +33,52 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.25 / G0 App Store Upload Preflight Guard And Metadata Refresh
+## Current Handoff - 2026-06-29 v04.01.26 / G0 Owner Metadata Values Preflight Guard
+
+### Scope
+
+- Completed the G0 owner metadata values preflight/import guard slice.
+- Bumped source-app version and project schema from `04.01.25` to `04.01.26`.
+- Added `tools/check_app_store_owner_metadata_values.py`.
+- Extended `tools/audit_app_store_readiness.py`, `tools/generate_app_store_metadata_package.py`, `tools/check_app_store_upload_preflight.py`, and focused App Store tests.
+- Generated refreshed G0 readiness and metadata-owner-input evidence for the current app version.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.26`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.26`.
+- Readiness audit: `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.md`.
+- Metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228/app_store_metadata_owner_input_package.md`.
+- Current G0 state: `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`.
+- Blocker groups: `version_lock=0`, `packaging_template=0`, `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=16`, `unknown=0`.
+- Owner metadata values are not ready without explicit owner values JSON. The new preflight requires field values, owner approval evidence, public URL owner-control confirmation, App Store Connect metadata, screenshot signed-candidate binding, app-version match, and forbidden-copy scan pass.
+- Upload preflight now rejects minimal forged readiness JSON and requires `owner_metadata_values_preflight.ready=true` in the exact readiness report.
+- This is guard/audit/metadata package evidence only. It is not package creation, Apple Distribution signing, App Store Connect validation, upload, submission, owner metadata completion, UI/UX change, subtitle-generation change, STT/cache default change, or NLE persistence/load behavior change.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tools/check_app_store_owner_metadata_values.py tools/check_app_store_upload_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_metadata_values_preflight.py tests/test_app_store_upload_script.py tests/test_app_store_upload_preflight.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- App Store focused guards: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `37 passed`.
+- Audit generation: `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228` -> `status=blocked`, overall stoplight `red`, blocker count `25`, owner metadata group `16`.
+- Metadata package generation: `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228` -> `not_submission_proof=true`, pending owner-input metadata `8/8`, pending App Store Connect metadata `8`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.26`, `PROJECT_SCHEMA_VERSION=04.01.26`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture boundary, QE false-positive guards, and editor-workflow/product-copy wording. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G0 has owner approval to proceed, but remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, content-bound App Store Connect validation, upload/submission proof, and owner-approved metadata values JSON.
+- G2 full NLE disk-format cutover remains blocked until canonical load-owner change policy, `nle_snapshot` canonical-source policy, runtime-state persistence policy, legacy disk-shape replacement policy, and final cutover proof are implemented and reproved.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G0, collect owner-approved metadata values JSON or configure Apple Distribution / installer identities before package/upload execution.
+- If continuing G2, choose a separate owner-approved canonical load-owner or UI-structure slice and prove save/reopen/render/export parity before widening behavior.
+
+## Previous Handoff - 2026-06-29 v04.01.25 / G0 App Store Upload Preflight Guard And Metadata Refresh
 
 ### Scope
 

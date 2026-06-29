@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.25-source-app
+Document-Version: 04.01.26-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,25 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.26 G0 Owner Metadata Values Preflight Guard
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.26"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.26`.
+3. `tools/check_app_store_owner_metadata_values.py` was added to validate explicit owner metadata values JSON instead of treating owner approval or generated drafts as submission-ready metadata.
+4. Owner metadata preflight now requires app-version match, per-field values, owner approval evidence, HTTPS and owner-control confirmation for public URLs, App Store Connect record bundle binding, signed-candidate screenshot binding, and imported-copy forbidden-claim scanning.
+5. The forbidden-copy scan now covers imported owner values and rejects overclaims such as `App Store ready`, `offline-only`, `100% accurate`, `validated`, `commercial NLE replacement`, `full NLE`, `native NLE`, and `real-time editing`.
+6. `tools/audit_app_store_readiness.py` now owns the metadata readiness truth and reports both `non_code_submission_item_pending:*` and `app_store_connect_metadata_item_pending:*` blockers. With no owner values JSON, owner metadata blockers now count `16` instead of `8`.
+7. `tools/generate_app_store_metadata_package.py` now reuses the audit owner-values preflight result, writes `owner_values_preflight.json`, shows imported value status and validation errors, and keeps `not_submission_proof=true`.
+8. `tools/check_app_store_upload_preflight.py` now rejects minimal forged readiness JSON by requiring readiness schema/root/current app version and `owner_metadata_values_preflight.ready=true` with complete owner-input and App Store Connect metadata counts.
+9. Audit evidence was refreshed at `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.md`.
+10. Metadata owner-input package evidence was refreshed at `output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228/app_store_metadata_owner_input_package.md`.
+11. Current G0 remains blocked: `app_store_submission_ready=false`, blocker count `25`, blocker groups `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=16`, owner-input metadata pending `8/8`, and App Store Connect metadata pending `8`.
+12. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+13. Focused verification passed: compile check for touched App Store/version/test modules; `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `37 passed`; audit generation and metadata package generation passed; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.26` / `PROJECT_SCHEMA_VERSION=04.01.26`; `git diff --check -- .` -> pass.
+14. This slice does not build a package, sign with Apple Distribution, run App Store Connect validation, upload, submit, complete owner metadata, change UI/UX, change subtitle generation, change STT/cache defaults, or change NLE persistence/load behavior.
 
 ## v04.01.25 G0 App Store Upload Preflight Guard And Metadata Refresh
 

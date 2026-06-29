@@ -7,6 +7,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.runtime.config import APP_VERSION
+
 
 REQUIRED_UPLOAD_GATES = (
     "version_lock_ready",
@@ -48,6 +54,13 @@ def check_upload_preflight(*, readiness_json: Path, pkg_path: Path) -> dict[str,
     if not pkg_path.is_file():
         issues.append("pkg_path_missing")
 
+    if payload.get("schema") != "ai_subtitle_studio.app_store_readiness.v1":
+        issues.append("readiness_schema_mismatch")
+    if not payload.get("root"):
+        issues.append("readiness_root_missing")
+    if str(payload.get("app_version") or "") != APP_VERSION:
+        issues.append("readiness_app_version_mismatch")
+
     blockers = list(payload.get("blockers") or [])
     if blockers:
         issues.append("readiness_blockers_present")
@@ -59,6 +72,22 @@ def check_upload_preflight(*, readiness_json: Path, pkg_path: Path) -> dict[str,
     missing_gates = [gate for gate in REQUIRED_UPLOAD_GATES if gates.get(gate) is not True]
     if missing_gates:
         issues.append("submission_gates_not_ready:" + ",".join(missing_gates))
+
+    owner_values = (
+        payload.get("owner_metadata_values_preflight")
+        if isinstance(payload.get("owner_metadata_values_preflight"), dict)
+        else {}
+    )
+    if owner_values.get("ready") is not True:
+        issues.append("owner_metadata_values_preflight_not_ready")
+    if (owner_values.get("forbidden_claim_scan") or {}).get("status") != "pass":
+        issues.append("owner_metadata_forbidden_claim_scan_not_pass")
+    if int(owner_values.get("owner_input_ready_count") or 0) != int(owner_values.get("owner_input_total") or 0):
+        issues.append("owner_input_values_incomplete")
+    if int(owner_values.get("app_store_connect_metadata_ready_count") or 0) != int(
+        owner_values.get("app_store_connect_metadata_total") or 0
+    ):
+        issues.append("app_store_connect_metadata_values_incomplete")
 
     artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
     report_pkg = artifacts.get("app_store_pkg") if isinstance(artifacts.get("app_store_pkg"), dict) else {}
@@ -79,6 +108,8 @@ def check_upload_preflight(*, readiness_json: Path, pkg_path: Path) -> dict[str,
         "pkg_path": str(pkg_path),
         "app_store_submission_ready": bool(payload.get("app_store_submission_ready")),
         "blocker_count": len(blockers),
+        "app_version": str(payload.get("app_version") or ""),
+        "owner_metadata_values_ready": bool(owner_values.get("ready")),
         "required_gates": list(REQUIRED_UPLOAD_GATES),
     }
 

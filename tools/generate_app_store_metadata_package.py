@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,9 @@ from tools.audit_app_store_readiness import (
     OFFICIAL_REFERENCES,
     SUBMISSION_TARGET,
     build_readiness_report,
+)
+from tools.check_app_store_owner_metadata_values import (
+    FORBIDDEN_COPY_CLAIMS,
 )
 
 
@@ -113,20 +117,6 @@ ALLOWED_COPY_CLAIMS = (
     "Apple Silicon first macOS support matching the submitted app's minimum OS and entitlement set",
 )
 
-FORBIDDEN_COPY_CLAIMS = (
-    "App Store ready",
-    "Apple-approved",
-    "fully native",
-    "offline-only",
-    "real-time",
-    "100% accurate",
-    "supports every video format",
-    "no data leaves the device",
-    "faster than other editors",
-    "validated",
-    "DMG validation proves Mac App Store submission readiness",
-)
-
 SUBMISSION_BLOCKER_EXPLANATIONS = {
     "signed_app_bundle_missing": "No Apple Distribution signed .app candidate is available.",
     "signed_app_store_pkg_missing": "No signed Mac App Store .pkg exists.",
@@ -159,26 +149,30 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _owner_input_matrix(readiness: dict[str, Any]) -> list[dict[str, Any]]:
+def _owner_input_matrix(readiness: dict[str, Any], owner_values: dict[str, Any]) -> list[dict[str, Any]]:
     non_code = readiness.get("non_code_submission_items") or {}
+    normalized = owner_values.get("normalized_owner_inputs") or {}
     matrix: list[dict[str, Any]] = []
     source_audit_artifact = str(readiness.get("source_audit_artifact") or "")
     for key in NON_CODE_SUBMISSION_ITEMS:
         item = non_code.get(key) or {}
+        owner_entry = normalized.get(key) or {}
+        status = str(owner_entry.get("status") or item.get("status") or "owner_input_required")
         matrix.append(
             {
                 "id": key,
                 "key": key,
-                "status": item.get("status", "owner_input_required"),
+                "status": status,
                 "app_store_field": OWNER_INPUT_FIELD_HINTS[key],
                 "field_hint": OWNER_INPUT_FIELD_HINTS[key],
                 "draft": item.get("draft", ""),
                 "draft_source": str(item.get("source_doc") or ""),
                 "owner_decision_required": item.get("owner_decision_required", "Owner confirmation required."),
                 "acceptance_gate": item.get("acceptance_gate", "Owner-approved value is required before submission."),
-                "blocking": item.get("status", "owner_input_required") != "ready",
+                "blocking": status != "ready",
                 "last_verified_artifact": source_audit_artifact,
-                "owner_value": "",
+                "owner_value": str(owner_entry.get("value") or ""),
+                "owner_approval_evidence": str(owner_entry.get("evidence") or ""),
             }
         )
     return matrix
@@ -201,24 +195,31 @@ def _blocker_rows(readiness: dict[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
-def _metadata_fill_matrix() -> list[dict[str, Any]]:
-    return [
-        {
-            "id": item["key"],
-            "key": item["key"],
-            "status": item["status"],
-            "app_store_field": item["field_hint"],
-            "field_hint": item["field_hint"],
-            "draft": item["draft"],
-            "draft_source": "docs/planning_queue/ACTION_ITEMS.md and docs/APP_STORE_SUBMISSION_READINESS.md",
-            "owner_decision_required": item["owner_decision_required"],
-            "acceptance_gate": item["acceptance_gate"],
-            "blocking": item["status"] == "owner_input_required",
-            "last_verified_artifact": "",
-            "owner_value": "",
-        }
-        for item in APP_STORE_CONNECT_METADATA_FIELDS
-    ]
+def _metadata_fill_matrix(owner_values: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized = owner_values.get("normalized_app_store_connect_metadata") or {}
+    rows: list[dict[str, Any]] = []
+    for item in APP_STORE_CONNECT_METADATA_FIELDS:
+        owner_entry = normalized.get(item["key"]) or {}
+        status = str(owner_entry.get("status") or item["status"])
+        rows.append(
+            {
+                "id": item["key"],
+                "key": item["key"],
+                "status": status,
+                "app_store_field": item["field_hint"],
+                "field_hint": item["field_hint"],
+                "draft": item["draft"],
+                "draft_source": "docs/planning_queue/ACTION_ITEMS.md and docs/APP_STORE_SUBMISSION_READINESS.md",
+                "owner_decision_required": item["owner_decision_required"],
+                "acceptance_gate": item["acceptance_gate"],
+                "blocking": status != "ready",
+                "last_verified_artifact": "",
+                "owner_value": str(owner_entry.get("value") or ""),
+                "owner_approval_evidence": str(owner_entry.get("evidence") or ""),
+                "validation_errors": list(owner_entry.get("validation_errors") or []),
+            }
+        )
+    return rows
 
 
 def _public_readiness_snapshot(readiness: dict[str, Any]) -> dict[str, Any]:
@@ -252,6 +253,24 @@ def _public_readiness_snapshot(readiness: dict[str, Any]) -> dict[str, Any]:
             "installer_identity_configured": bool(environment.get("installer_identity_configured")),
             "app_store_connect_auth_configured": bool(environment.get("app_store_connect_auth_configured")),
         },
+        "owner_metadata_values_preflight": {
+            "provided": bool((readiness.get("owner_metadata_values_preflight") or {}).get("provided")),
+            "ready": bool((readiness.get("owner_metadata_values_preflight") or {}).get("ready")),
+            "issue_count": int((readiness.get("owner_metadata_values_preflight") or {}).get("issue_count") or 0),
+            "owner_input_ready_count": int(
+                (readiness.get("owner_metadata_values_preflight") or {}).get("owner_input_ready_count") or 0
+            ),
+            "owner_input_total": int(
+                (readiness.get("owner_metadata_values_preflight") or {}).get("owner_input_total") or 0
+            ),
+            "app_store_connect_metadata_ready_count": int(
+                (readiness.get("owner_metadata_values_preflight") or {}).get("app_store_connect_metadata_ready_count") or 0
+            ),
+            "app_store_connect_metadata_total": int(
+                (readiness.get("owner_metadata_values_preflight") or {}).get("app_store_connect_metadata_total") or 0
+            ),
+            "forbidden_claim_scan": (readiness.get("owner_metadata_values_preflight") or {}).get("forbidden_claim_scan"),
+        },
         "distribution_tracks": readiness.get("distribution_tracks"),
         "upload_execution_guard": readiness.get("upload_execution_guard"),
     }
@@ -265,6 +284,12 @@ def _forbidden_claim_scan(package: dict[str, Any]) -> dict[str, Any]:
         "owner_input_matrix.drafts": "\n".join(str(item.get("draft") or "") for item in package.get("owner_input_matrix") or []),
         "app_store_connect_metadata_fill.drafts": "\n".join(
             str(item.get("draft") or "") for item in package.get("app_store_connect_metadata_fill") or []
+        ),
+        "owner_input_matrix.owner_values": "\n".join(
+            str(item.get("owner_value") or "") for item in package.get("owner_input_matrix") or []
+        ),
+        "app_store_connect_metadata_fill.owner_values": "\n".join(
+            str(item.get("owner_value") or "") for item in package.get("app_store_connect_metadata_fill") or []
         ),
     }
     matches: list[dict[str, str]] = []
@@ -288,17 +313,27 @@ def build_metadata_package(
     output_dir: Path | None = None,
     app_path: Path | None = None,
     pkg_path: Path | None = None,
+    owner_values_path: Path | None = None,
 ) -> dict[str, Any]:
     root = root.expanduser().resolve()
     output_dir = output_dir or root / "output" / "manual_verification" / "latest" / "app_store_metadata_owner_input_package"
     output_dir = _resolve_path(root, output_dir)
-    readiness = build_readiness_report(root=root, app_path=app_path, pkg_path=pkg_path, output_dir=output_dir)
+    readiness = build_readiness_report(
+        root=root,
+        app_path=app_path,
+        pkg_path=pkg_path,
+        output_dir=output_dir,
+        owner_values_path=owner_values_path,
+    )
     source_audit_artifact = str(output_dir / "source_readiness_snapshot.json")
     readiness["source_audit_artifact"] = source_audit_artifact
     app_version = str((readiness.get("info_plist_template") or {}).get("config_app_version") or "")
-    owner_inputs = _owner_input_matrix(readiness)
+    owner_values = readiness.get("owner_metadata_values_preflight") or {}
+    owner_inputs = _owner_input_matrix(readiness, owner_values)
+    metadata_fill = _metadata_fill_matrix(owner_values)
     blockers = _blocker_rows(readiness)
     pending_owner_input_keys = [item["key"] for item in owner_inputs if item.get("status") != "ready"]
+    pending_metadata_keys = [item["key"] for item in metadata_fill if item.get("status") != "ready"]
     package = {
         "schema": "ai_subtitle_studio.app_store_metadata_owner_input_package.v1",
         "root": str(root),
@@ -307,7 +342,8 @@ def build_metadata_package(
         "source_audit_artifact": source_audit_artifact,
         "APP_VERSION": app_version,
         "not_submission_proof": True,
-        "owner_input_complete": not pending_owner_input_keys,
+        "owner_input_complete": bool(owner_values.get("ready")),
+        "owner_values_preflight": owner_values,
         "app": {
             "name": EXPECTED_INFO_VALUES["CFBundleDisplayName"],
             "bundle_id": EXPECTED_INFO_VALUES["CFBundleIdentifier"],
@@ -324,11 +360,13 @@ def build_metadata_package(
             "pending_owner_input_count": (readiness.get("submission_content_audit") or {}).get("pending_owner_input_count"),
             "pending_owner_input_total": (readiness.get("submission_content_audit") or {}).get("item_count"),
             "pending_owner_input_keys": pending_owner_input_keys,
+            "pending_app_store_connect_metadata_count": len(pending_metadata_keys),
+            "pending_app_store_connect_metadata_keys": pending_metadata_keys,
             "distribution_tracks": readiness.get("distribution_tracks"),
             "upload_execution_guard": readiness.get("upload_execution_guard"),
         },
         "owner_input_matrix": owner_inputs,
-        "app_store_connect_metadata_fill": _metadata_fill_matrix(),
+        "app_store_connect_metadata_fill": metadata_fill,
         "review_notes_draft": {
             "status": "draft_owner_review_required",
             "body": (
@@ -367,6 +405,7 @@ def _metadata_checklist_md(package: dict[str, Any]) -> str:
         f"- Local packaging ready: `{readiness['local_packaging_ready']}`",
         f"- Blocker count: `{readiness['blocker_count']}`",
         f"- Owner-input metadata pending: `{readiness['pending_owner_input_count']}` / `{readiness['pending_owner_input_total']}`",
+        f"- App Store Connect metadata pending: `{readiness['pending_app_store_connect_metadata_count']}`",
         "",
         "## App Identity",
         "",
@@ -510,7 +549,9 @@ def _package_summary_md(package: dict[str, Any]) -> str:
             f"- Submission target: `{package['app']['submission_target']}`",
             f"- App version: `{package['APP_VERSION']}`",
             f"- Pending owner-input items: `{readiness['pending_owner_input_count']}` / `{readiness['pending_owner_input_total']}`",
+            f"- App Store Connect metadata pending: `{readiness['pending_app_store_connect_metadata_count']}`",
             f"- Forbidden claim scan: `{scan['status']}` with `{scan['match_count']}` matches",
+            f"- Owner values preflight: `{(package.get('owner_values_preflight') or {}).get('ready')}` with `{(package.get('owner_values_preflight') or {}).get('issue_count')}` issues",
             f"- Upload confirmation required: `{bool((readiness.get('upload_execution_guard') or {}).get('upload_confirmation_required'))}`",
             f"- Upload confirmation env: `{(readiness.get('upload_execution_guard') or {}).get('upload_confirmation_env_var')}`",
             "",
@@ -534,6 +575,7 @@ def write_metadata_package(package: dict[str, Any], output_dir: Path | None = No
         "metadata_package.json": package,
         "owner_input_matrix.json": package["owner_input_matrix"],
         "app_store_connect_metadata_fill.json": package["app_store_connect_metadata_fill"],
+        "owner_values_preflight.json": package["owner_values_preflight"],
         "forbidden_claim_scan.json": package["forbidden_claim_scan"],
         "source_readiness_snapshot.json": package["source_readiness_snapshot"],
     }
@@ -568,6 +610,7 @@ def main() -> int:
     )
     parser.add_argument("--app-path", default="")
     parser.add_argument("--pkg-path", default="")
+    parser.add_argument("--owner-values-json", default=os.environ.get("APP_STORE_OWNER_METADATA_JSON", ""))
     args = parser.parse_args()
 
     root = Path(args.root).expanduser().resolve()
@@ -577,6 +620,7 @@ def main() -> int:
         output_dir=output_dir,
         app_path=Path(args.app_path).expanduser() if args.app_path else None,
         pkg_path=Path(args.pkg_path).expanduser() if args.pkg_path else None,
+        owner_values_path=Path(args.owner_values_json).expanduser() if args.owner_values_json else None,
     )
     written = write_metadata_package(package, output_dir)
     print(json.dumps({"output_dir": str(output_dir), "files": [str(path) for path in written]}, ensure_ascii=False))

@@ -14,6 +14,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 REQUIRED_PACKAGING_FILES = (
     "AI Subtitle Studio.entitlements",
@@ -183,7 +185,7 @@ def _read_text(path: Path, *, limit: int = 4000) -> str:
 
 def _target_bound(text: str, target: Path) -> bool:
     target = target.expanduser().resolve(strict=False)
-    return str(target) in text or target.name in text
+    return str(target) in text
 
 
 def _load_plist(path: Path) -> tuple[dict[str, Any], str]:
@@ -530,7 +532,11 @@ def _blocker_group(blocker: str) -> str:
         "installer_identity_not_in_keychain",
     }:
         return "signing_identities"
-    if blocker.startswith("non_code_submission_item_pending:"):
+    if (
+        blocker.startswith("non_code_submission_item_pending:")
+        or blocker.startswith("app_store_connect_metadata_item_pending:")
+        or blocker == "owner_metadata_forbidden_claims_failed"
+    ):
         return "owner_metadata"
     return "unknown"
 
@@ -571,6 +577,7 @@ def _submission_gate_summary(
     environment: dict[str, Any],
     signing_identities: dict[str, Any],
     submission_content: dict[str, Any],
+    owner_metadata_values: dict[str, Any],
     app_store_submission_ready: bool,
 ) -> dict[str, Any]:
     app_bundle_ready = bool((artifacts.get("app_bundle") or {}).get("is_dir"))
@@ -600,7 +607,8 @@ def _submission_gate_summary(
         and installer_identity.startswith("3rd Party Mac Developer Installer:")
         and installer_identity in identity_names,
         "app_store_connect_auth_ready": bool(environment.get("app_store_connect_auth_configured")),
-        "owner_metadata_ready": int(submission_content.get("pending_owner_input_count") or 0) == 0,
+        "owner_metadata_ready": int(submission_content.get("pending_owner_input_count") or 0) == 0
+        and bool(owner_metadata_values.get("ready")),
         "app_store_submission_ready": bool(app_store_submission_ready),
     }
 
@@ -652,6 +660,7 @@ def build_readiness_report(
     app_path: Path | None = None,
     pkg_path: Path | None = None,
     output_dir: Path | None = None,
+    owner_values_path: Path | None = None,
 ) -> dict[str, Any]:
     root = root.expanduser().resolve()
     app_path = app_path or (root / "dist" / "macos" / "AI Subtitle Studio.app")
@@ -665,6 +674,15 @@ def build_readiness_report(
     signing_identities = _check_local_signing_identities()
     artifacts = _check_artifacts(app_path, pkg_path, output_dir)
     app_version = _read_app_version(root)
+    if owner_values_path is None and os.environ.get("APP_STORE_OWNER_METADATA_JSON"):
+        owner_values_path = Path(os.environ["APP_STORE_OWNER_METADATA_JSON"]).expanduser()
+    from tools.check_app_store_owner_metadata_values import check_owner_metadata_values
+
+    owner_metadata_values = check_owner_metadata_values(
+        values_json=owner_values_path,
+        app_version=app_version,
+        bundle_id=EXPECTED_INFO_VALUES["CFBundleIdentifier"],
+    )
 
     blockers: list[str] = []
     blockers.extend(packaging["blockers"])
@@ -711,8 +729,19 @@ def build_readiness_report(
         blockers.append("app_store_connect_auth_not_configured")
 
     non_code = _submission_content_items(root)
+    normalized_owner_inputs = owner_metadata_values.get("normalized_owner_inputs") or {}
+    for name, item in non_code.items():
+        normalized = normalized_owner_inputs.get(name) or {}
+        if normalized.get("status") == "ready":
+            item["status"] = "ready"
+            item["owner_value_provided"] = bool(str(normalized.get("value") or "").strip())
+            item["approval_evidence_provided"] = bool(str(normalized.get("evidence") or "").strip())
     submission_content = _submission_content_summary(non_code)
-    blockers.extend(f"non_code_submission_item_pending:{name}" for name in NON_CODE_SUBMISSION_ITEMS)
+    blockers.extend(f"non_code_submission_item_pending:{name}" for name in submission_content["pending_items"])
+    metadata_pending = list(owner_metadata_values.get("missing_app_store_connect_metadata_keys") or [])
+    blockers.extend(f"app_store_connect_metadata_item_pending:{name}" for name in metadata_pending)
+    if (owner_metadata_values.get("forbidden_claim_scan") or {}).get("status") == "fail":
+        blockers.append("owner_metadata_forbidden_claims_failed")
 
     local_packaging_ready = not (
         packaging["blockers"]
@@ -731,6 +760,7 @@ def build_readiness_report(
         environment=environment,
         signing_identities=signing_identities,
         submission_content=submission_content,
+        owner_metadata_values=owner_metadata_values,
         app_store_submission_ready=app_store_submission_ready,
     )
     return {
@@ -751,6 +781,7 @@ def build_readiness_report(
             pkg_path=pkg_path,
         ),
         "upload_execution_guard": _upload_execution_guard(),
+        "owner_metadata_values_preflight": owner_metadata_values,
         "packaging": packaging,
         "entitlements": entitlements,
         "info_plist_template": info,
@@ -791,6 +822,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     entitlements = payload.get("entitlements") or {}
     tracks = payload.get("distribution_tracks") or {}
     upload_guard = payload.get("upload_execution_guard") or {}
+    owner_values = payload.get("owner_metadata_values_preflight") or {}
     non_code = payload.get("non_code_submission_items") or {}
     submission_content = payload.get("submission_content_audit") or {}
     lines = [
@@ -835,6 +867,19 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         ]
     )
     lines.extend(f"- {item}" for item in payload.get("non_destructive_next_steps") or [])
+    lines.extend(
+        [
+            "",
+            "## Owner Metadata Values Preflight",
+            "",
+            f"- Values file provided: `{bool(owner_values.get('provided'))}`",
+            f"- Values ready: `{bool(owner_values.get('ready'))}`",
+            f"- Issue count: `{owner_values.get('issue_count')}`",
+            f"- Owner-input ready: `{owner_values.get('owner_input_ready_count')}` / `{owner_values.get('owner_input_total')}`",
+            f"- App Store Connect metadata ready: `{owner_values.get('app_store_connect_metadata_ready_count')}` / `{owner_values.get('app_store_connect_metadata_total')}`",
+            f"- Forbidden claim scan: `{((owner_values.get('forbidden_claim_scan') or {}).get('status'))}`",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -964,6 +1009,7 @@ def main() -> int:
     parser.add_argument("--app-path", default="")
     parser.add_argument("--pkg-path", default="")
     parser.add_argument("--output-dir", default="output/manual_verification/latest/app_store_readiness_audit_20260627")
+    parser.add_argument("--owner-values-json", default=os.environ.get("APP_STORE_OWNER_METADATA_JSON", ""))
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir).expanduser()
@@ -973,6 +1019,7 @@ def main() -> int:
         app_path=Path(args.app_path).expanduser() if args.app_path else None,
         pkg_path=Path(args.pkg_path).expanduser() if args.pkg_path else None,
         output_dir=output_dir,
+        owner_values_path=Path(args.owner_values_json).expanduser() if args.owner_values_json else None,
     )
     _write_json(output_dir / "app_store_readiness_audit.json", payload)
     _write_text(output_dir / "app_store_readiness_audit.md", _markdown_report(payload))

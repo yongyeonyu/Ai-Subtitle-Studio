@@ -1,5 +1,35 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.26 G0 Owner Metadata Values Preflight Guard - 2026-06-29 KST
+
+- 실행 모드: source-app G0 owner metadata values preflight/import guard, imported-copy forbidden-claim scan, exact proof-path binding, upload readiness hardening, and version/schema bump.
+- 결과: pass for the bounded guard/audit/package slice. App Store submission remains blocked because signed `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, App Store Connect validation, Apple Distribution/installer identities, upload/submission proof, and owner-approved metadata values JSON are still missing.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.26.md`
+  - Readiness audit: `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.md`
+  - Readiness JSON: `output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228/app_store_readiness_audit.json`
+  - Metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228/app_store_metadata_owner_input_package.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040126-g0-owner-metadata-values-preflight-guard`
+- 실제 결과:
+  - App version updated to `04.01.26`.
+  - Project schema version updated to `04.01.26`.
+  - `tools/check_app_store_owner_metadata_values.py` validates explicit owner values JSON before owner metadata can be ready.
+  - `tools/audit_app_store_readiness.py` now keeps App Store Connect listing metadata in the owner metadata blocker group instead of counting only the previous 8 non-code items.
+  - `tools/generate_app_store_metadata_package.py` now writes `owner_values_preflight.json` and scans imported owner values for forbidden claims.
+  - `tools/check_app_store_upload_preflight.py` now rejects minimal forged readiness JSON without schema/root/current app version and `owner_metadata_values_preflight.ready=true`.
+  - Current readiness state: `status=blocked`, `local_packaging_ready=true`, `app_store_submission_ready=false`, overall stoplight `red`, blocker count `25`.
+  - Blocker groups: `version_lock=0`, `packaging_template=0`, `signed_artifacts=3`, `sandbox_smoke=1`, `app_store_connect=1`, `signing_identities=4`, `owner_metadata=16`, `unknown=0`.
+  - Metadata package remains `not_submission_proof=true`, `owner_input_complete=false`, `app_store_submission_ready=false`, pending owner-input metadata `8/8`, pending App Store Connect metadata `8`, owner values preflight `false`, forbidden-claim scan `pass`.
+  - This is guard/audit/package evidence only; it is not package creation, Apple Distribution signing, App Store Connect validation, upload, submission, owner metadata completion, UI/UX change, subtitle-generation change, STT/cache default change, or NLE persistence/load behavior change.
+- 검증:
+  - `./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tools/check_app_store_owner_metadata_values.py tools/check_app_store_upload_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_metadata_values_preflight.py tests/test_app_store_upload_script.py tests/test_app_store_upload_preflight.py core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py` -> `37 passed`.
+  - `./venv/bin/python tools/audit_app_store_readiness.py --output-dir output/manual_verification/latest/app_store_owner_metadata_values_preflight_v040126_20260629_1228` -> `status=blocked`, overall stoplight `red`, blocker count `25`.
+  - `./venv/bin/python tools/generate_app_store_metadata_package.py --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_v040126_20260629_1228` -> `not_submission_proof=true`, pending owner-input metadata `8/8`, pending App Store Connect metadata `8`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.26`, `PROJECT_SCHEMA_VERSION=04.01.26`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.25 G0 App Store Upload Preflight Guard And Metadata Refresh - 2026-06-29 KST
 
 - 실행 모드: source-app G0 App Store upload preflight guard, readiness proof-content hardening, metadata owner-input package refresh, and version/schema bump.

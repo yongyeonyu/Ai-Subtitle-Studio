@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 
 from core.runtime.config import APP_VERSION
 from tools import audit_app_store_readiness
-from tools.audit_app_store_readiness import NON_CODE_SUBMISSION_ITEMS, build_readiness_report
+from tools.audit_app_store_readiness import EXPECTED_INFO_VALUES, NON_CODE_SUBMISSION_ITEMS, build_readiness_report
+from tools.check_app_store_owner_metadata_values import OWNER_VALUES_SCHEMA
 
 
 def _write_valid_submission_proofs(output_dir: Path, app_path: Path, pkg_path: Path) -> None:
@@ -19,6 +21,56 @@ def _write_valid_submission_proofs(output_dir: Path, app_path: Path, pkg_path: P
         f"No errors validating {pkg_path}\n",
         encoding="utf-8",
     )
+
+
+def _approved(value: str, *, owner_controlled: bool = False, **extra):
+    payload = {
+        "value": value,
+        "approved": True,
+        "evidence": "owner approval 2026-06-29",
+        "owner_controlled": owner_controlled,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _owner_values_payload() -> dict:
+    return {
+        "schema": OWNER_VALUES_SCHEMA,
+        "app_version": APP_VERSION,
+        "owner_inputs": {
+            "privacy_policy_url": _approved("https://example.com/privacy", owner_controlled=True),
+            "privacy_data_type_answers": _approved("User-selected media, optional STT, diagnostics."),
+            "export_compliance_answers": _approved("Standard TLS/network behavior as configured."),
+            "mac_app_store_screenshots": _approved(
+                "Approved screenshot manifest for the signed sandboxed candidate.",
+                signed_candidate_artifact="dist/macos/AI Subtitle Studio.app",
+                submitted_binary_match=True,
+            ),
+            "support_url": _approved("https://example.com/support", owner_controlled=True),
+            "app_review_notes": _approved("Sandboxed user-selected file access and optional STT/model workflow notes."),
+            "age_rating_answers": _approved("Owner-approved age rating answers."),
+            "release_notes": _approved("Owner-approved release notes."),
+        },
+        "app_store_connect_metadata": {
+            "app_name": _approved(EXPECTED_INFO_VALUES["CFBundleDisplayName"]),
+            "app_subtitle": _approved("Subtitle generation and editing for macOS."),
+            "keywords": _approved("subtitles, captions, video, editor"),
+            "description": _approved("Create, review, save, reopen, and export subtitles."),
+            "promotional_text": _approved("", not_applicable=True),
+            "marketing_url": _approved("", not_applicable=True),
+            "app_store_connect_record": _approved(
+                f"Bundle ID {EXPECTED_INFO_VALUES['CFBundleIdentifier']}, SKU owner-approved, primary locale en-US."
+            ),
+            "pricing_and_availability": _approved("Owner-approved price tier and availability."),
+        },
+    }
+
+
+def _write_owner_values(tmp_path: Path) -> Path:
+    path = tmp_path / "owner_values.json"
+    path.write_text(json.dumps(_owner_values_payload()), encoding="utf-8")
+    return path
 
 
 def test_app_store_readiness_audit_blocks_without_submission_artifacts(tmp_path):
@@ -174,13 +226,13 @@ def test_app_store_readiness_audit_groups_blockers_and_submission_gates(tmp_path
     assert counts["sandbox_smoke"] == 1
     assert counts["app_store_connect"] == 2
     assert counts["signing_identities"] == 4
-    assert counts["owner_metadata"] == len(NON_CODE_SUBMISSION_ITEMS)
+    assert counts["owner_metadata"] == 16
     assert groups["packaging_template"]["status"] == "ready"
     assert groups["signed_artifacts"]["count"] == 4
     assert groups["sandbox_smoke"]["count"] == 1
     assert groups["app_store_connect"]["count"] == 2
     assert groups["signing_identities"]["count"] == 4
-    assert groups["owner_metadata"]["count"] == len(NON_CODE_SUBMISSION_ITEMS)
+    assert groups["owner_metadata"]["count"] == 16
     assert report["stoplight"]["overall"] == "red"
     assert report["stoplight"]["groups"]["packaging_template"] == "green"
     assert report["stoplight"]["groups"]["signed_artifacts"] == "red"
@@ -239,7 +291,7 @@ def test_app_store_readiness_audit_metadata_remains_final_gate_when_technical_ga
     assert groups["sandbox_smoke"]["count"] == 0
     assert groups["app_store_connect"]["count"] == 0
     assert groups["signing_identities"]["count"] == 0
-    assert groups["owner_metadata"]["count"] == len(NON_CODE_SUBMISSION_ITEMS)
+    assert groups["owner_metadata"]["count"] == 16
     assert gates["signed_artifacts_ready"] is True
     assert gates["strict_codesign_verification_ready"] is True
     assert gates["pkg_signature_verification_ready"] is True
@@ -250,6 +302,123 @@ def test_app_store_readiness_audit_metadata_remains_final_gate_when_technical_ga
     assert gates["app_store_connect_auth_ready"] is True
     assert gates["owner_metadata_ready"] is False
     assert gates["app_store_submission_ready"] is False
+
+
+def test_app_store_readiness_audit_owner_values_clear_metadata_gate_only(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    owner_values = _write_owner_values(tmp_path)
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": ["Apple Development: owner@example.com (TEAMID)"],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=tmp_path / "missing" / "AI Subtitle Studio.app",
+        pkg_path=tmp_path / "missing" / "AI Subtitle Studio.pkg",
+        output_dir=tmp_path / "audit",
+        owner_values_path=owner_values,
+    )
+
+    assert report["owner_metadata_values_preflight"]["ready"] is True
+    assert report["submission_content_audit"]["pending_owner_input_count"] == 0
+    assert report["blocker_group_counts"]["owner_metadata"] == 0
+    assert report["submission_gate_summary"]["owner_metadata_ready"] is True
+    assert report["app_store_submission_ready"] is False
+
+
+def test_app_store_readiness_audit_can_be_ready_with_technical_and_owner_gates_green(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    app_path = tmp_path / "AI Subtitle Studio.app"
+    pkg_path = tmp_path / "AI Subtitle Studio.pkg"
+    output_dir = tmp_path / "all_green"
+    owner_values = _write_owner_values(tmp_path)
+    app_path.mkdir()
+    pkg_path.write_text("pkg", encoding="utf-8")
+    output_dir.mkdir()
+    _write_valid_submission_proofs(output_dir, app_path, pkg_path)
+    monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")
+    monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Example (TEAMID)")
+    monkeypatch.setenv("ASC_API_KEY", "KEY")
+    monkeypatch.setenv("ASC_API_ISSUER", "ISSUER")
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": [
+                "Apple Distribution: Example (TEAMID)",
+                "3rd Party Mac Developer Installer: Example (TEAMID)",
+            ],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=app_path,
+        pkg_path=pkg_path,
+        output_dir=output_dir,
+        owner_values_path=owner_values,
+    )
+
+    assert report["blockers"] == []
+    assert report["app_store_submission_ready"] is True
+    assert report["submission_gate_summary"]["owner_metadata_ready"] is True
+    assert report["submission_gate_summary"]["app_store_submission_ready"] is True
+
+
+def test_app_store_readiness_rejects_proof_bound_only_to_same_basename(tmp_path, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    app_path = tmp_path / "candidate" / "AI Subtitle Studio.app"
+    pkg_path = tmp_path / "candidate" / "AI Subtitle Studio.pkg"
+    other_app = tmp_path / "other" / "AI Subtitle Studio.app"
+    other_pkg = tmp_path / "other" / "AI Subtitle Studio.pkg"
+    output_dir = tmp_path / "basename_only"
+    app_path.mkdir(parents=True)
+    pkg_path.write_text("pkg", encoding="utf-8")
+    other_app.mkdir(parents=True)
+    other_pkg.write_text("pkg", encoding="utf-8")
+    output_dir.mkdir()
+    _write_valid_submission_proofs(output_dir, other_app, other_pkg)
+    monkeypatch.setenv("CODESIGN_IDENTITY", "Apple Distribution: Example (TEAMID)")
+    monkeypatch.setenv("INSTALLER_IDENTITY", "3rd Party Mac Developer Installer: Example (TEAMID)")
+    monkeypatch.setenv("ASC_API_KEY", "KEY")
+    monkeypatch.setenv("ASC_API_ISSUER", "ISSUER")
+
+    def fake_security_find_identity(args):
+        return {
+            "available": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "identities": [
+                "Apple Distribution: Example (TEAMID)",
+                "3rd Party Mac Developer Installer: Example (TEAMID)",
+            ],
+        }
+
+    monkeypatch.setattr(audit_app_store_readiness, "_run_security_find_identity", fake_security_find_identity)
+
+    report = build_readiness_report(
+        root=root,
+        app_path=app_path,
+        pkg_path=pkg_path,
+        output_dir=output_dir,
+    )
+
+    assert "strict_codesign_verification_invalid" in report["blockers"]
+    assert "pkg_signature_verification_invalid" in report["blockers"]
+    assert "app_store_connect_validation_failed" in report["blockers"]
 
 
 def test_app_store_readiness_rejects_placeholder_submission_proof_files(tmp_path, monkeypatch):

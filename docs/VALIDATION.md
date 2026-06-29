@@ -88,6 +88,9 @@ submission readiness still requires exact signed-artifact and metadata proof.
 
 ./venv/bin/python tools/generate_app_store_metadata_package.py \
   --output-dir output/manual_verification/latest/app_store_metadata_owner_input_package_YYYYMMDD_HHMM
+
+./venv/bin/python tools/check_app_store_owner_metadata_values.py \
+  --values-json path/to/owner_metadata_values.json
 ```
 
 The expected blocked state until the missing proof exists is:
@@ -95,13 +98,16 @@ The expected blocked state until the missing proof exists is:
 stoplight `red`, blocker count nonzero, and blocker groups red for signed
 artifacts, sandbox smoke, App Store Connect validation, signing identities, and
 owner metadata. A `.app` or `.pkg` path alone must not count as signed proof
-without strict `codesign` and `pkgutil --check-signature` artifacts.
+without strict `codesign` and `pkgutil --check-signature` artifacts. Owner
+metadata must not become ready from approval text or generated drafts alone; it
+requires explicit owner values JSON and `tools/check_app_store_owner_metadata_values.py`
+passing.
 
 Focused guards:
 
 ```bash
-./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py
-QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_macos_bundle_runtime_paths.py
+./venv/bin/python -m py_compile tools/audit_app_store_readiness.py tools/generate_app_store_metadata_package.py tools/check_app_store_owner_metadata_values.py tools/check_app_store_upload_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_metadata_values_preflight.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py
+PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_app_store_metadata_values_preflight.py tests/test_app_store_readiness_audit.py tests/test_app_store_metadata_package.py tests/test_app_store_upload_preflight.py tests/test_app_store_upload_script.py tests/test_macos_bundle_runtime_paths.py
 ```
 
 ## G1 STT cache default review packet

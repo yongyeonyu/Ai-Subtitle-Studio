@@ -3,14 +3,26 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from core.runtime.config import APP_VERSION
 from tools.check_app_store_upload_preflight import REQUIRED_UPLOAD_GATES, check_upload_preflight
 
 
 def _ready_payload(pkg: Path) -> dict:
     return {
+        "schema": "ai_subtitle_studio.app_store_readiness.v1",
+        "root": str(pkg.parent),
+        "app_version": APP_VERSION,
         "app_store_submission_ready": True,
         "blockers": [],
         "submission_gate_summary": {gate: True for gate in REQUIRED_UPLOAD_GATES},
+        "owner_metadata_values_preflight": {
+            "ready": True,
+            "owner_input_ready_count": 8,
+            "owner_input_total": 8,
+            "app_store_connect_metadata_ready_count": 8,
+            "app_store_connect_metadata_total": 8,
+            "forbidden_claim_scan": {"status": "pass"},
+        },
         "artifacts": {
             "app_store_pkg": {
                 "path": str(pkg),
@@ -51,6 +63,30 @@ def test_upload_preflight_requires_exact_package_path(tmp_path):
 
     assert result["ready"] is False
     assert "readiness_pkg_path_mismatch" in result["issues"]
+
+
+def test_upload_preflight_rejects_minimal_forged_ready_json(tmp_path):
+    pkg = tmp_path / "AI Subtitle Studio.pkg"
+    pkg.write_text("pkg", encoding="utf-8")
+    readiness = tmp_path / "readiness.json"
+    readiness.write_text(
+        json.dumps(
+            {
+                "app_store_submission_ready": True,
+                "blockers": [],
+                "submission_gate_summary": {gate: True for gate in REQUIRED_UPLOAD_GATES},
+                "artifacts": {"app_store_pkg": {"path": str(pkg), "is_file": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = check_upload_preflight(readiness_json=readiness, pkg_path=pkg)
+
+    assert result["ready"] is False
+    assert "readiness_schema_mismatch" in result["issues"]
+    assert "readiness_root_missing" in result["issues"]
+    assert "owner_metadata_values_preflight_not_ready" in result["issues"]
 
 
 def test_upload_preflight_accepts_ready_report_for_exact_package(tmp_path):
