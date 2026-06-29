@@ -1,6 +1,9 @@
-# AIStudioNative
+# AIStudioNative Legacy Reference
 
-Swift-native macOS core package for the macOS-only migration branch.
+Historical Swift-native macOS core package reference. The current product line
+is the Python/PyQt6 source app; native migration, Swift rewrite, and separate
+native-app conversion remain opt-in unless the owner explicitly reopens that
+scope.
 
 The package starts with the data layer that must stay lossless while the app
 moves away from Python/PyQt:
@@ -22,15 +25,13 @@ moves away from Python/PyQt:
 - `AIStudioNativeCLI`: small command-line bridge used by the transitional
   Python app and by packaging smoke checks.
 
-Current migration policy:
+Archived migration policy:
 
-- New macOS-native logic should be implemented here first when it can match or
-  exceed the Python behavior.
-- Python remains a compatibility fallback until the Swift implementation has
-  tests and packaged-app verification.
-- User-facing UI should move toward SwiftUI/AppKit modules after the subtitle
-  data, media routing, STT worker, waveform/timeline, and project I/O layers are
-  stable in Swift.
+- Treat this as reference material for existing native helper code and packaging
+  smoke checks.
+- Do not use this document to start a native migration, Swift rewrite, or UI
+  conversion without a fresh owner-approved gate in
+  `docs/planning_queue/ACTION_ITEMS.md`.
 
 Useful commands:
 

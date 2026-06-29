@@ -7,6 +7,7 @@ Canonical files:
 
 - `../APP_STORE_SUBMISSION_READINESS.md`
 - `app_store_owner_input_package/README.md`
+- `apple_black_color_table.md`
 - `../PROJECT_STATE.md`
 - `../project_reference/PRODUCT_README.md`
 - `../../AGENTS.md`

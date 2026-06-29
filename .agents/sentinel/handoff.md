@@ -1,4 +1,32 @@
 # Sentinel Handoffs Index
+- `.agents/sentinel/handoffs/20260629-162922-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-162107-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-160626-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-155058-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-155000-final-cutover-gate-scout.md`
+- `.agents/sentinel/handoffs/20260629-153804-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-151512-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-151200-legacy-disk-shape-scout.md`
+- `.agents/sentinel/handoffs/20260629-144844-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-141551-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-131153-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-123958-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-121312-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-115029-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-113220-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-111507-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-105515-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-103255-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-101100-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-095530-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-094207-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-092945-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-091534-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-090214-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-084204-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-081959-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-074002-watchdog-handoff-probe.md`
+- `.agents/sentinel/handoffs/20260629-044816-handoff-scout.md`
 
 - `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260629-032124-watchdog-handoff-probe.md`

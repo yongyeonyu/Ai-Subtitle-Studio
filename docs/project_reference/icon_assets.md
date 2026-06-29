@@ -1,6 +1,8 @@
-# AI Subtitle Studio SVG Icon Assets
+# SVG Icon Assets
 
-이 폴더는 앱 UI에서 사용하는 직접 수정 가능한 SVG 아이콘 자산입니다.
+`assets/icons/`는 앱 UI에서 사용하는 직접 수정 가능한 SVG 아이콘 자산
+폴더입니다. 이 문서는 해당 자산의 개발 규칙만 설명하며 실제 SVG 파일은
+계속 `assets/icons/` 아래에 둡니다.
 
 ## 폴더
 

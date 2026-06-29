@@ -36,6 +36,9 @@ G0 lane, but signed package, validation, upload, and metadata proof remain open.
 - Product README: `project_reference/PRODUCT_README.md`
 - NLE plan: `nle_engine/NLE_Action.md`
 - App Store readiness: `APP_STORE_SUBMISSION_READINESS.md`
+- macOS packaging reference: `workflow_operations/macos_packaging.md`
+- Icon asset reference: `project_reference/icon_assets.md`
+- UI color reference: `product_behavior/apple_black_color_table.md`
 - Jammini mapping: `agent_communication/README.md`
 
 ## Folder Map
@@ -43,17 +46,17 @@ G0 lane, but signed package, validation, upload, and metadata proof remain open.
 | Folder | Role | Canonical pointers |
 | --- | --- | --- |
 | `planning_queue/` | Active queue, completed-action archive, rejected ideas, and lessons. | `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `waste_action_item.md`, `lesson_n_learned.md`, `idea.md` |
-| `workflow_operations/` | Handoff, Jammini cooperation, Antigravity role docs, watchdog and operational workflow. | `cooperation.md`, `anti_agents.md`, `../HANDOFF.md`, `../agent_communication/README.md`, `../../.agents/sentinel/` |
-| `project_reference/` | Product README, repo structure, code map, owner maps, and stable project references. | `PRODUCT_README.md`, `File_structure.txt`, `CODEMAP.md`, `LONG_FILE_OWNERSHIP_MAP.md`, `SUBTITLE_GENERATION_DOMAIN_MAP.md` |
+| `workflow_operations/` | Handoff, Jammini cooperation, Antigravity role docs, watchdog, packaging, and operational workflow. | `cooperation.md`, `anti_agents.md`, `macos_packaging.md`, `../HANDOFF.md`, `../agent_communication/README.md`, `../../.agents/sentinel/` |
+| `project_reference/` | Product README, repo structure, code map, owner maps, assets, and stable project references. | `PRODUCT_README.md`, `File_structure.txt`, `CODEMAP.md`, `LONG_FILE_OWNERSHIP_MAP.md`, `SUBTITLE_GENERATION_DOMAIN_MAP.md`, `icon_assets.md` |
 | `quality_validation/` | Validation commands, fixture rules, benchmark plans, and current result records. | `test_case.md`, `test_result.md`, `NAS_SUBTITLE_BENCHMARK_50_PLAN.md`, `NAS_SUBTITLE_BENCHMARK_RECORDING_CONTEXT.md`, `../VALIDATION.md` |
-| `product_behavior/` | User-visible behavior, submission readiness, UI/UX guardrails, and product policy. | `../APP_STORE_SUBMISSION_READINESS.md`, `../PROJECT_STATE.md`, `../../AGENTS.md` |
+| `product_behavior/` | User-visible behavior, submission readiness, UI/UX guardrails, color policy, and product policy. | `../APP_STORE_SUBMISSION_READINESS.md`, `apple_black_color_table.md`, `../PROJECT_STATE.md`, `../../AGENTS.md` |
 | `nle_engine/` | NLE/source-app transition contracts, runtime projection, Taption parity evidence, and NLE gates. | `NLE_Action.md`, `../planning_queue/COMPLETED_ACTION_ITEMS.md`, `../HANDOFF.md` |
 | `speech_stt/` | STT/VAD/LLM generation policy, latency gates, and cache/default evidence. | `../planning_queue/ACTION_ITEMS.md`, `../planning_queue/COMPLETED_ACTION_ITEMS.md`, `../quality_validation/test_result.md` |
 | `validation_evidence/` | Pointers to generated local proof artifacts. | `../../output/manual_verification/latest/`, `../../.codex_work/benchmarks/` |
 | `agent_communication/` | Taption-derived Jammini communication mapping for this repo. | `../../.agents/sentinel/handoffs/`, `../../.agents/sentinel/handoff.md` |
 | `release_notes/` | Release-note files and retention policy. | `RELEASE_v04.00.07.md` and newer |
 | `DECISIONS/` | Durable architecture decisions. | `DECISIONS/README.md` |
-| `archive_legacy/` | Historical or deprecated docs only. | Do not use for active queue or current proof. |
+| `archive_legacy/` | Historical or deprecated docs only. | `native_macos_ai_studio_native.md`; do not use for active queue or current proof. |
 
 ## Write Rules
 
@@ -62,6 +65,9 @@ G0 lane, but signed package, validation, upload, and metadata proof remain open.
 - Keep detailed proof in `quality_validation/test_result.md`, release notes, `output/manual_verification/latest/`, or specific audit reports when future decisions need it.
 - Treat docs, handoffs, and review packets as navigation and rationale. They are not behavior proof without tests, runtime artifacts, or generated evidence.
 - Put new development docs in the role folder that matches their owner area, then update this hub if a new category is created.
+- Keep module directories focused on code/assets. Development README-style
+  guidance belongs here under `docs/`, with the real source path named inside
+  the document.
 - Do not copy Taption prompts/scripts/code into this repo. Taption is a reference project; this lane must remain labeled `AI Subtitle Studio`.
 - Do not add new root development docs. `AGENTS.md` is the only root dev-doc exception.
 
@@ -77,3 +83,9 @@ G0 lane, but signed package, validation, upload, and metadata proof remain open.
 Use `.codex_work/` for local Codex scratch output and
 `output/manual_verification/latest/` for generated validation artifacts. These
 are proof surfaces, not a place to hide active queue state.
+
+Ignored local artifact folders such as `.codex_work/`, `checkpoints/`, and
+`_backup_mac_migration/` may contain README, release-note, or text files, but
+they are not canonical development-documentation sources. Do not move those
+ignored artifacts into `docs/` unless the owner explicitly asks to promote a
+specific file into tracked documentation.

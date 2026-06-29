@@ -1,3 +1,5 @@
+# Apple Black Color Table
+
 | Token | Hex / RGBA | Usage |
 | --- | --- | --- |
 | `bg` | `#090C10` | app root black |
@@ -24,4 +26,5 @@
 | `waveform bg` | `#171B14` | waveform lane base |
 | `minimap bg` | `#0D1117` | lower global canvas base |
 
-Major roughcut palette is stored in `/Users/u_mo_c/Downloads/ai_subtitle_studio/ui/ux/apple_black_palette.py` as `APPLE_BLACK_MAJOR_COLORS`.
+Major roughcut palette is stored in `ui/ux/apple_black_palette.py` as
+`APPLE_BLACK_MAJOR_COLORS`.

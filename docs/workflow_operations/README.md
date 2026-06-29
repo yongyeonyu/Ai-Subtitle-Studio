@@ -7,6 +7,7 @@ Canonical files:
 
 - `cooperation.md`
 - `anti_agents.md`
+- `macos_packaging.md`
 - `../HANDOFF.md`
 - `../agent_communication/README.md`
 - `../../.agents/sentinel/handoff.md`

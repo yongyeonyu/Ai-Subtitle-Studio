@@ -24,6 +24,12 @@
 - `packaging/`: 패키징 관련 자산
 - `config/`, `assets/`, `docs/`, `output/`: 설정, 리소스, 문서, 산출물
 
+Development documentation is centralized under `docs/`, except for the
+protected root `AGENTS.md` and physical Jammini handoff evidence under
+`.agents/sentinel/`. Module-local README-style development notes should be
+moved to the matching `docs/` role folder, while code and assets stay in their
+module directories.
+
 ## Core layer
 
 `core/`는 제품 동작의 중심입니다.

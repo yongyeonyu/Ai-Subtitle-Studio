@@ -19,6 +19,29 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.31 Development Documentation Consolidation And Legacy Queue Removal
+
+Source request: move development documents into `docs/` except `AGENTS.md`,
+organize them by folder, clean completed files/action items, consolidate
+documents, collect all remaining action items in `docs/planning_queue/ACTION_ITEMS.md`,
+and delete duplicate files.
+
+1. Moved module-local development docs into canonical `docs/` role folders:
+   `assets/icons/README.md` -> `docs/project_reference/icon_assets.md`,
+   `packaging/macos/README.md` -> `docs/workflow_operations/macos_packaging.md`,
+   `native/macos/AIStudioNative/README.md` -> `docs/archive_legacy/native_macos_ai_studio_native.md`,
+   and `ui/ux/APPLE_BLACK_COLOR_TABLE.md` -> `docs/product_behavior/apple_black_color_table.md`.
+2. Removed the stale untracked duplicate queue file `doc/ACTION_ITEMS.md` and
+   the now-empty `doc/` tree. The removed file was an older `04.00.16` duplicate
+   queue with stale `doc/*` references; it was not the canonical active queue.
+3. Kept the active queue source as `docs/planning_queue/ACTION_ITEMS.md`, which
+   already contains the current remaining G0/G1/G2/G3 gates and keeps completed
+   slices out of the active body.
+4. Updated `docs/README.md`, folder README files, `docs/ARCHITECTURE.md`, and
+   `docs/HANDOFF.md` to point to the consolidated documentation layout.
+5. No app runtime code, UI behavior, packaging behavior, STT/cache defaults, or
+   NLE runtime behavior changed.
+
 ## v04.01.31 G0 Owner Metadata Values Template Support
 
 Source request: continue remaining action items, make concrete progress toward blocked App Store metadata work, keep completed work separate, and keep the worktree clean after each completed task.

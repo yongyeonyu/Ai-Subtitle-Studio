@@ -33,7 +33,59 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.31 / G0 Owner Metadata Values Template Support
+## Current Handoff - 2026-06-29 v04.01.31 / Development Documentation Consolidation
+
+### Scope
+
+- Consolidated development documentation under `docs/` while preserving
+  protected root `AGENTS.md`.
+- Moved module-local README-style docs into role folders.
+- Removed the stale untracked duplicate `doc/ACTION_ITEMS.md` queue and the
+  empty `doc/` tree.
+- Updated docs hub/folder indexes, architecture note, completed archive, and
+  this handoff.
+- Runtime code and product behavior were unchanged.
+
+### Result
+
+- Active action queue remains `docs/planning_queue/ACTION_ITEMS.md`.
+- Completed action archive remains `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`.
+- Moved docs:
+  - `docs/project_reference/icon_assets.md`
+  - `docs/workflow_operations/macos_packaging.md`
+  - `docs/archive_legacy/native_macos_ai_studio_native.md`
+  - `docs/product_behavior/apple_black_color_table.md`
+- Removed duplicate local queue: `doc/ACTION_ITEMS.md`.
+- `.agents/sentinel/` physical handoff files were not moved because AGENTS keeps
+  them as the reliable Jammini handoff store.
+- `.codex_work/overnight_state.md` was not moved because
+  `tools/overnight_optimize.py` writes that tool-state file directly.
+
+### Evidence
+
+- `find . -maxdepth 3 ...` path review showed no tracked development `.md`
+  outside `docs/` except protected root `AGENTS.md` after excluding `.agents`,
+  `.codex_work`, `_backup_mac_migration`, `checkpoints`, and `output`.
+- `test ! -e doc && test -f docs/planning_queue/ACTION_ITEMS.md && ...` ->
+  `docs_consolidation_presence=pass`.
+- `rg -n '^### G[0-9]|^## Active Execution Groups|Status:|Parked' docs/planning_queue/ACTION_ITEMS.md`
+  confirmed the active queue still contains only G0/G1/G2/G3 plus parked
+  candidates.
+- `git diff --check -- .` -> pass.
+
+### Remaining Risks
+
+- Historical entries in `docs/HANDOFF.md` and
+  `docs/quality_validation/test_result.md` may mention old paths as historical
+  facts; those are not active queue pointers.
+- App Store signing/metadata, G1 cache default promotion, and future G2/G3
+  expansion gates remain unchanged.
+
+### Next Recommended Action
+
+- Continue from `docs/planning_queue/ACTION_ITEMS.md` for active work.
+
+## Previous Handoff - 2026-06-29 v04.01.31 / G0 Owner Metadata Values Template Support
 
 ### Scope
 

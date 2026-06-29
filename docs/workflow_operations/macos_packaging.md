@@ -1,8 +1,11 @@
 # macOS App Store Packaging
 
-This branch targets macOS only. The production package should be a signed,
+This workflow targets macOS only. The production package should be a signed,
 sandboxed `.app` bundle with the Swift WhisperKit worker and native C++ helpers
 inside the app resources or helper executable locations.
+
+Packaging scripts and command wrappers live under `packaging/macos/`; this
+document is the canonical development reference for those scripts.
 
 Current packaging goals:
 

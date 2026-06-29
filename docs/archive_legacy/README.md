@@ -2,6 +2,11 @@
 
 This folder is reserved for historical or deprecated docs.
 
+Canonical archived docs:
+
+- `native_macos_ai_studio_native.md`: historical native package reference;
+  native migration remains opt-in and is not an active queue item.
+
 Rules:
 
 - Do not place active queues, current gates, or current handoff state here.

@@ -13,6 +13,7 @@ Canonical files:
 - `CODEMAP.md`
 - `LONG_FILE_OWNERSHIP_MAP.md`
 - `SUBTITLE_GENERATION_DOMAIN_MAP.md`
+- `icon_assets.md`
 
 Guard tests and checks:
 
