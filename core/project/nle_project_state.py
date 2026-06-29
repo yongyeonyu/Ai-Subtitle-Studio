@@ -166,6 +166,95 @@ class NLEProjectState:
         return [entry.to_dict() for entry in self.operation_journal]
 
 
+def _operation_journal_entry_from_payload(row: dict[str, Any]) -> NLEOperationJournalEntry | None:
+    if not isinstance(row, dict):
+        return None
+    if str(row.get("schema") or "") != NLE_OPERATION_JOURNAL_ENTRY_SCHEMA:
+        return None
+    return NLEOperationJournalEntry(
+        sequence=_as_int(row.get("sequence"), 0),
+        operation_id=str(row.get("operation_id") or ""),
+        operation_kind=str(row.get("operation_kind") or ""),
+        operation_family=str(row.get("operation_family") or ""),
+        target_ids=tuple(str(item) for item in list(row.get("target_ids") or [])),
+        commit_boundary=str(row.get("commit_boundary") or ""),
+        commit_source=str(row.get("commit_source") or ""),
+        undo_snapshot_id=str(row.get("undo_snapshot_id") or ""),
+        projected_count=_as_int(row.get("projected_count"), 0),
+        after_invalid_duration_count=_as_int(row.get("after_invalid_duration_count"), 0),
+        after_non_monotonic_count=_as_int(row.get("after_non_monotonic_count"), 0),
+        after_overlap_count=_as_int(row.get("after_overlap_count"), 0),
+        after_max_active_segments=_as_int(row.get("after_max_active_segments"), 0),
+    )
+
+
+def nle_project_state_to_persisted_payload(
+    state: NLEProjectState,
+    *,
+    source: str = "",
+) -> dict[str, Any]:
+    if not isinstance(state, NLEProjectState):
+        raise TypeError("nle_project_state_required")
+    from core.project.nle_persistence_guard import nle_runtime_state_persistence_approval_payload
+
+    editor_rows = state.editor_rows()
+    journal_rows = state.operation_journal_rows()
+    return {
+        "schema": NLE_PROJECT_STATE_SCHEMA,
+        "persistence": nle_runtime_state_persistence_approval_payload(source=source),
+        "source_project_path": state.source_project_path,
+        "primary_fps": normalize_fps(state.primary_fps),
+        "snapshot": state.snapshot.to_dict(),
+        "editor_rows": editor_rows,
+        "editor_row_count": len(editor_rows),
+        "operation_journal": journal_rows,
+        "operation_journal_count": len(journal_rows),
+        "metadata": {
+            **dict(state.metadata or {}),
+            "persisted_runtime_state": True,
+            "default_project_authority_unchanged": True,
+            "canonical_source": "nle_snapshot",
+            "operation_journal_persisted": True,
+        },
+    }
+
+
+def nle_project_state_from_persisted_payload(
+    project: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    project_path: str = "",
+) -> NLEProjectState:
+    from core.project.nle_persistence_guard import approved_runtime_nle_project_state_payload
+    from core.project.nle_snapshot import project_copy_with_editor_rows
+
+    if not approved_runtime_nle_project_state_payload(payload):
+        raise ValueError("unapproved_runtime_nle_project_state_payload")
+    rows = [dict(row) for row in list(payload.get("editor_rows") or []) if isinstance(row, dict)]
+    project_rows = project_segments_to_editor(project, include_analysis_candidates=False)
+    assert_nle_editor_rows_consistent(rows, project_rows, primary_fps=project_primary_fps(project))
+    source = project_copy_with_editor_rows(project, rows)
+    source.pop(NLE_PROJECT_STATE_RUNTIME_KEY, None)
+    state = build_project_nle_state(source, project_path=project_path)
+    journal: list[NLEOperationJournalEntry] = []
+    for row in list(payload.get("operation_journal") or []):
+        if not isinstance(row, dict):
+            continue
+        entry = _operation_journal_entry_from_payload(row)
+        if entry is not None:
+            journal.append(entry)
+    state.operation_journal = journal[-NLE_OPERATION_JOURNAL_MAX_ENTRIES:]
+    state.metadata = {
+        **dict(state.metadata or {}),
+        "hydrated_from": "persisted_runtime_project_state",
+        "persisted_runtime_state_loaded": True,
+        "persisted_runtime_state_editor_row_count": len(rows),
+        "persisted_operation_journal_count": len(state.operation_journal),
+        "default_project_authority_unchanged": True,
+    }
+    return state
+
+
 def build_project_nle_state(project: dict[str, Any], *, project_path: str = "") -> NLEProjectState:
     source = project if isinstance(project, dict) else {}
     fps = normalize_fps(project_primary_fps(source))
@@ -195,6 +284,16 @@ def attach_project_nle_state(project: dict[str, Any], *, project_path: str = "")
     if not isinstance(project, dict):
         return project
     state = project.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    if isinstance(state, dict):
+        try:
+            project[NLE_PROJECT_STATE_RUNTIME_KEY] = nle_project_state_from_persisted_payload(
+                project,
+                state,
+                project_path=project_path,
+            )
+            return project
+        except Exception:
+            project.pop(NLE_PROJECT_STATE_RUNTIME_KEY, None)
     if not isinstance(state, NLEProjectState):
         project[NLE_PROJECT_STATE_RUNTIME_KEY] = build_project_nle_state(project, project_path=project_path)
     return project
@@ -513,6 +612,8 @@ __all__ = [
     "build_project_nle_state",
     "nle_active_selection_signature",
     "nle_media_relink_parity_signature",
+    "nle_project_state_from_persisted_payload",
+    "nle_project_state_to_persisted_payload",
     "project_nle_state",
     "project_segments_from_nle_state",
     "record_nle_operation_journal_entry",

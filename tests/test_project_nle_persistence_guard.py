@@ -8,6 +8,7 @@ from core.project.nle_persistence_guard import (
     NLE_LEGACY_CANONICAL_LOAD_OWNER,
     NLE_PERSISTENCE_GUARD_SCHEMA,
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA,
     NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
@@ -21,7 +22,7 @@ from core.project.nle_snapshot import (
     NLE_SNAPSHOT_READBACK_PARITY_SCHEMA,
     NLE_TOP_LEVEL_SHADOW_SCHEMA,
 )
-from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY
+from core.project.nle_project_state import NLEProjectState, NLE_PROJECT_STATE_RUNTIME_KEY, build_project_nle_state
 from core.project.project_context import build_editor_state, project_segments_to_editor
 from core.project.project_format import build_storage_project_payload, hydrate_project_runtime_views
 from core.project import project_io
@@ -104,6 +105,17 @@ class NLEPersistenceGuardTests(unittest.TestCase):
 
         self.assertIsInstance(state, NLEProjectState)
         self.assertEqual(report, {})
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage)
+        self.assertNotIn("nle", storage)
+        self.assertNotIn("nle_snapshot", storage)
+
+    def test_storage_builder_strips_runtime_nle_project_state_object_without_explicit_policy(self):
+        project = _legacy_project()
+        project[NLE_PROJECT_STATE_RUNTIME_KEY] = build_project_nle_state(project, project_path="")
+
+        storage = build_storage_project_payload(copy.deepcopy(project))
+
         self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
         self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage)
         self.assertNotIn("nle", storage)
@@ -429,6 +441,100 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         )
         self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
         self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+
+    def test_owner_approved_runtime_nle_project_state_persistence_roundtrips_as_opt_in_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "runtime-state-persistence-opt-in.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+                "nle_snapshot_canonical_load_source_allowed": True,
+                "legacy_editor_state_remains_canonical": False,
+                "legacy_editor_state_preserved_for_rollback": True,
+                "persist_runtime_project_state": True,
+                "runtime_project_state_persistence_allowed": True,
+                "default_project_authority_unchanged": True,
+                "legacy_disk_shape_replacement_allowed": False,
+                "final_cutover_ready": False,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            expected_text = "runtime persisted snapshot first"
+            storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = expected_text
+            storage[NLE_PROJECT_STATE_RUNTIME_KEY]["editor_rows"][0]["text"] = expected_text
+            storage[NLE_PROJECT_STATE_RUNTIME_KEY]["snapshot"]["sequences"][0]["captions"][0]["text"] = expected_text
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+            cached = read_project_file(str(project_path))
+            cached_state = cached.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            write_project_file(str(project_path), cached)
+            storage_after_cache_hit = read_project_storage_payload(str(project_path))
+
+        persisted = storage_after[NLE_PROJECT_STATE_RUNTIME_KEY]
+        self.assertIn("nle_snapshot", storage)
+        self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertEqual(storage[NLE_PROJECT_STATE_RUNTIME_KEY]["schema"], "ai_subtitle_studio.nle_project_state.v1")
+        self.assertEqual(
+            storage[NLE_PROJECT_STATE_RUNTIME_KEY]["persistence"]["schema"],
+            NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA,
+        )
+        self.assertIsInstance(loaded_state, NLEProjectState)
+        self.assertTrue(loaded_state.metadata["persisted_runtime_state_loaded"])
+        self.assertEqual(loaded_rows[0]["text"], expected_text)
+        self.assertEqual(loaded_state.editor_rows()[0]["text"], expected_text)
+        self.assertEqual(persisted["editor_rows"][0]["text"], expected_text)
+        self.assertEqual(
+            storage_after["editor_state"]["rendering"]["subtitle_canvas"]["segments"][0]["text"],
+            "first",
+        )
+        self.assertEqual(storage_after["nle_persistence"]["persist_runtime_project_state"], True)
+        self.assertEqual(storage_after["nle_persistence"]["runtime_project_state_persistence_allowed"], True)
+        self.assertEqual(storage_after["nle_persistence"]["legacy_disk_shape_replacement_allowed"], False)
+        self.assertEqual(storage_after["nle_persistence"]["final_cutover_ready"], False)
+        self.assertNotIn("nle", storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+        self.assertIsInstance(cached_state, NLEProjectState)
+        self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after_cache_hit)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after_cache_hit)
+
+    def test_snapshot_canonical_opt_in_strips_unapproved_runtime_state_dict_on_resave(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "canonical-snapshot-forged-runtime-state.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+                "nle_snapshot_canonical_load_source_allowed": True,
+                "legacy_editor_state_remains_canonical": False,
+                "legacy_editor_state_preserved_for_rollback": True,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = "snapshot canonical first"
+            storage[NLE_PROJECT_STATE_RUNTIME_KEY] = {"schema": "ai_subtitle_studio.nle_project_state.v1"}
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+
+        self.assertEqual(loaded_rows[0]["text"], "snapshot canonical first")
+        self.assertIsInstance(loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY), NLEProjectState)
+        self.assertIn(NLE_PERSISTENCE_QUARANTINE_KEY, loaded)
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
         self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
 
     def test_compatibility_only_nle_snapshot_does_not_become_canonical_load_source(self):

@@ -1,5 +1,33 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.29 G2 Runtime _nle_project_state Persistence Opt-In Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G2 owner-approved supplemental `_nle_project_state` persistence opt-in proof, cache-hit hydration guard, legacy rollback preservation, and version/schema bump.
+- 결과: pass for the bounded runtime-state persistence proof. Full NLE disk-format cutover remains blocked because legacy disk-shape replacement and final cutover proof remain incomplete.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.29.md`
+  - Audit report: `output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040129-g2-runtime-_nle_project_state-persistence-opt-in-proof`
+- 실제 결과:
+  - App version updated to `04.01.29`.
+  - Project schema version updated to `04.01.29`.
+  - `_nle_project_state` persists only when explicit runtime persistence approval, approved standalone `nle_snapshot` policy, and approved nested runtime payload are all present.
+  - Runtime object save and approved persisted-dict resave paths both preserve approved supplemental runtime state while keeping legacy `editor_state` rollback rows.
+  - Cache-hit read hydrates `_nle_project_state` back into runtime state only after rows are verified against the current project segments.
+  - Forged or unapproved persisted runtime dicts are stripped on resave.
+  - Audit state: `status=blocked`, `app_version=04.01.29`, `prep_ready=true`, `persistence_cutover_ready=false`, overall stoplight `red`, ready/blocked gates `10/2`.
+  - Ready gates added/kept: `nle_snapshot_canonical_load_source_allowed` and `runtime_project_state_persistence_allowed`.
+  - Blocked gates: `legacy_disk_shape_replacement_allowed` and `final_cutover_ready`.
+  - This is explicit supplemental runtime-state persistence proof only; it is not legacy `editor_state` replacement, final NLE disk-format cutover, UI/UX change, STT/cache default change, or App Store package/signing/upload/submission proof.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/nle_project_state.py core/project/project_io.py core/project/project_format.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py core/runtime/config.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `30 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053` -> `status=blocked`, overall stoplight `red`, ready/blocked gates `10/2`, blockers `2`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "direct_srt_rows_to_runtime_nle_state or direct_srt_readback_drift_without_overwriting_srt_rows" tests/test_editor_autosave_cleanup.py -k "direct_srt_mode or direct_srt_micro_overlap"` -> `2 passed, 140 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.29`, `PROJECT_SCHEMA_VERSION=04.01.29`.
+
 ## v04.01.28 G2 NLE Snapshot Standalone Canonical Load Opt-In Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G2 owner-approved standalone `nle_snapshot` canonical load-source opt-in proof, fail-closed compatibility/forgery/empty/ambiguity guards, legacy rollback preservation, and version/schema bump.

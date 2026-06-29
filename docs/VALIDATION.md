@@ -201,23 +201,25 @@ blocked:
 
 ```bash
 ./venv/bin/python tools/audit_nle_persistence_cutover.py \
-  --output-dir output/manual_verification/latest/nle_snapshot_canonical_load_source_YYYYMMDD_HHMM
+  --output-dir output/manual_verification/latest/nle_runtime_state_persistence_YYYYMMDD_HHMM
 ```
 
 The current expected state is audit evidence only: `status=blocked`,
 `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates
-`9/3`, current canonical owner `nle_snapshot` for explicit standalone snapshot
+`10/2`, current canonical owner `nle_snapshot` for explicit standalone snapshot
 opt-in payloads only, target candidate `nle_snapshot`,
-`nle_snapshot_canonical_load_source_allowed=ready`, and
-`not_runtime_change`, `not_disk_format_cutover`, and `not_ui_change` all true.
-The canonical opt-in guard must prove standalone `nle_snapshot` rows load and
-resave through `read_project_file()`, `project_segments_to_editor()`, and
+`nle_snapshot_canonical_load_source_allowed=ready`,
+`runtime_project_state_persistence_allowed=ready`, and
+`not_disk_format_cutover` plus `not_ui_change` true. The canonical opt-in guard
+must prove standalone `nle_snapshot` rows load and resave through
+`read_project_file()`, `project_segments_to_editor()`, and
 `write_project_file()` while legacy `editor_state` remains preserved for
-rollback. Compatibility-only, forged, empty, and ambiguous dual-owner payloads
-must fail closed to legacy rows, and top-level/runtime/readback/quarantine
-payloads must not persist. Remaining blocked gates are
-`runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`,
-and `final_cutover_ready`.
+rollback. The runtime-state guard must prove `_nle_project_state` persists only
+as an explicit owner-approved supplemental payload, hydrates on cache-hit read,
+and does not replace default project authority. Compatibility-only, forged,
+empty, and ambiguous dual-owner payloads must fail closed to legacy rows.
+Remaining blocked gates are `legacy_disk_shape_replacement_allowed` and
+`final_cutover_ready`.
 
 Focused guards:
 

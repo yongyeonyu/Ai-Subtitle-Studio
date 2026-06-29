@@ -13,9 +13,12 @@ from core.project.nle_persistence_guard import (
     NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
     NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
     approved_nle_snapshot_canonical_load_requested,
+    approved_runtime_nle_project_state_payload,
+    approved_runtime_nle_project_state_persistence_requested,
     approved_top_level_nle_canonical_load_requested,
     approved_nle_snapshot_persistence_requested,
     approved_top_level_nle_persistence_requested,
+    nle_runtime_state_persistence_approval_payload,
     nle_snapshot_canonical_load_approval_payload,
     nle_top_level_canonical_load_approval_payload,
     nle_snapshot_persistence_approval_payload,
@@ -23,7 +26,7 @@ from core.project.nle_persistence_guard import (
     strip_unapproved_nle_persistence_fields,
 )
 
-PROJECT_SCHEMA_VERSION = "04.01.28"
+PROJECT_SCHEMA_VERSION = "04.01.29"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 
@@ -253,6 +256,28 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     persist_top_level_nle = approved_top_level_nle_persistence_requested(payload)
     canonical_nle_snapshot = approved_nle_snapshot_canonical_load_requested(payload)
     canonical_top_level_nle = approved_top_level_nle_canonical_load_requested(payload)
+    persist_runtime_nle_state = approved_runtime_nle_project_state_persistence_requested(payload)
+    runtime_state_payload: dict[str, Any] | None = None
+    if persist_runtime_nle_state:
+        from core.project.nle_project_state import (
+            NLEProjectState,
+            build_project_nle_state,
+            nle_project_state_to_persisted_payload,
+        )
+
+        runtime_state = payload.get("_nle_project_state")
+        if isinstance(runtime_state, NLEProjectState):
+            runtime_state_payload = nle_project_state_to_persisted_payload(
+                runtime_state,
+                source="project_format.storage",
+            )
+        elif approved_runtime_nle_project_state_payload(runtime_state):
+            runtime_state_payload = dict(runtime_state)
+        else:
+            runtime_state_payload = nle_project_state_to_persisted_payload(
+                build_project_nle_state(payload, project_path=""),
+                source="project_format.storage",
+            )
     header = refresh_project_video_header(payload)
     payload["video"] = header
     compact_project_roughcut_payload(payload, primary_fps=project_primary_fps(payload))
@@ -335,7 +360,17 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
             policy_payload["legacy_editor_state_remains_canonical"] = False
             policy_payload["legacy_editor_state_preserved_for_rollback"] = True
             policy_payload["nle_snapshot_canonical_load_source_allowed"] = True
+        if persist_runtime_nle_state and runtime_state_payload is not None:
+            runtime_policy = nle_runtime_state_persistence_approval_payload(source="project_format.storage")
+            policy_payload["persist_runtime_project_state"] = True
+            policy_payload["runtime_project_state_persistence_allowed"] = True
+            policy_payload["runtime_project_state_schema"] = runtime_policy["runtime_project_state_schema"]
+            policy_payload["default_project_authority_unchanged"] = True
+            policy_payload["legacy_disk_shape_replacement_allowed"] = False
+            policy_payload["final_cutover_ready"] = False
         payload["nle_persistence"] = policy_payload
+    if persist_runtime_nle_state and runtime_state_payload is not None:
+        payload["_nle_project_state"] = runtime_state_payload
     editor_state = payload.get("editor_state")
     if isinstance(editor_state, dict):
         editor_state = dict(editor_state)
@@ -362,6 +397,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         "nle_persistence",
         "nle_snapshot",
         "nle",
+        "_nle_project_state",
         "roughcut_state",
         "roughcut",
         "roughcut_draft",

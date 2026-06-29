@@ -17,6 +17,7 @@ from core.project.project_format import build_storage_project_payload, hydrate_p
 from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, attach_project_nle_state
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    approved_runtime_nle_project_state_persistence_requested,
     strip_unapproved_nle_persistence_fields,
 )
 
@@ -147,7 +148,10 @@ def _attach_nle_snapshot_readback_parity(project: dict[str, Any], filepath: str)
 def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
     payload = dict(project if isinstance(project, dict) else {})
     strip_unapproved_nle_persistence_fields(payload, source="project_io.write")
+    keep_runtime_nle_state = approved_runtime_nle_project_state_persistence_requested(payload)
     for key in _PROJECT_RUNTIME_KEYS:
+        if key == NLE_PROJECT_STATE_RUNTIME_KEY and keep_runtime_nle_state:
+            continue
         payload.pop(key, None)
     try:
         from core.project.project_assets import project_uses_external_text_assets, strip_external_text_runtime_payload

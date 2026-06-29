@@ -7,6 +7,7 @@ NLE_PERSISTENCE_GUARD_SCHEMA = "ai_subtitle_studio.nle_persistence_guard.v1"
 NLE_PERSISTENCE_QUARANTINE_KEY = "_nle_persistence_quarantine"
 NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_snapshot_persistence_approval.v1"
 NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_top_level_persistence_approval.v1"
+NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_runtime_state_persistence_approval.v1"
 NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID = "owner_approved_20260628"
 NLE_LEGACY_CANONICAL_LOAD_OWNER = "legacy_editor_state"
 NLE_SNAPSHOT_CANONICAL_LOAD_OWNER = "nle_snapshot"
@@ -73,6 +74,25 @@ def approved_nle_snapshot_canonical_load_requested(project: dict[str, Any] | Non
     )
 
 
+def approved_runtime_nle_project_state_persistence_requested(project: dict[str, Any] | None) -> bool:
+    if not approved_nle_snapshot_canonical_load_requested(project):
+        return False
+    policy = project.get("nle_persistence")
+    if not isinstance(policy, dict):
+        return False
+    return (
+        bool(policy.get("persist_runtime_project_state"))
+        and bool(policy.get("runtime_project_state_persistence_allowed"))
+        and bool(policy.get("legacy_editor_state_preserved_for_rollback"))
+        and bool(policy.get("default_project_authority_unchanged"))
+        and not bool(policy.get("legacy_disk_shape_replacement_allowed"))
+        and not bool(policy.get("final_cutover_ready"))
+        and not bool(policy.get("persist_top_level_nle"))
+        and str(policy.get("canonical_load_owner") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and str(policy.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
+    )
+
+
 def approved_top_level_nle_canonical_load_requested(project: dict[str, Any] | None) -> bool:
     if not approved_top_level_nle_persistence_requested(project):
         return False
@@ -108,6 +128,22 @@ def nle_snapshot_canonical_load_approval_payload(*, source: str = "") -> dict[st
         "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
         "canonical_load_owner_change_allowed": True,
         "nle_snapshot_canonical_load_source_allowed": True,
+    }
+
+
+def nle_runtime_state_persistence_approval_payload(*, source: str = "") -> dict[str, Any]:
+    return {
+        "schema": NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        "source": str(source or "project_storage"),
+        "persist_runtime_project_state": True,
+        "runtime_project_state_persistence_allowed": True,
+        "runtime_project_state_schema": "ai_subtitle_studio.nle_project_state.v1",
+        "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "legacy_editor_state_preserved_for_rollback": True,
+        "default_project_authority_unchanged": True,
+        "legacy_disk_shape_replacement_allowed": False,
+        "final_cutover_ready": False,
     }
 
 
@@ -206,6 +242,43 @@ def _is_approved_top_level_nle_payload(value: Any) -> bool:
     )
 
 
+def _is_approved_runtime_nle_project_state_payload(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("schema") or "") != "ai_subtitle_studio.nle_project_state.v1":
+        return False
+    approval = value.get("persistence")
+    if not isinstance(approval, dict):
+        return False
+    if not (
+        str(approval.get("schema") or "") == NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA
+        and str(approval.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
+        and bool(approval.get("persist_runtime_project_state"))
+        and bool(approval.get("runtime_project_state_persistence_allowed"))
+        and str(approval.get("runtime_project_state_schema") or "") == "ai_subtitle_studio.nle_project_state.v1"
+        and str(approval.get("canonical_load_owner") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and bool(approval.get("legacy_editor_state_preserved_for_rollback"))
+        and bool(approval.get("default_project_authority_unchanged"))
+        and not bool(approval.get("legacy_disk_shape_replacement_allowed"))
+        and not bool(approval.get("final_cutover_ready"))
+    ):
+        return False
+    rows = value.get("editor_rows")
+    journal = value.get("operation_journal")
+    metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+    return (
+        isinstance(rows, list)
+        and int(value.get("editor_row_count") or 0) == len(rows)
+        and isinstance(journal, list)
+        and bool(metadata.get("persisted_runtime_state"))
+        and bool(metadata.get("default_project_authority_unchanged"))
+    )
+
+
+def approved_runtime_nle_project_state_payload(value: Any) -> bool:
+    return _is_approved_runtime_nle_project_state_payload(value)
+
+
 def _value_summary(value: Any) -> dict[str, Any]:
     summary: dict[str, Any] = {"type": type(value).__name__}
     if isinstance(value, dict):
@@ -221,7 +294,7 @@ def _value_summary(value: Any) -> dict[str, Any]:
     return summary
 
 
-def _is_unapproved_nle_payload(key: str, value: Any) -> bool:
+def _is_unapproved_nle_payload(key: str, value: Any, *, project: dict[str, Any] | None = None) -> bool:
     if key not in UNAPPROVED_NLE_PERSISTENCE_KEYS:
         return False
     if key == "nle" and _is_approved_top_level_nle_payload(value):
@@ -229,6 +302,12 @@ def _is_unapproved_nle_payload(key: str, value: Any) -> bool:
     if key == "nle_snapshot" and _is_approved_nle_snapshot_payload(value):
         return False
     if key == "_nle_project_state" and _is_runtime_nle_project_state(value):
+        return False
+    if (
+        key == "_nle_project_state"
+        and approved_runtime_nle_project_state_persistence_requested(project)
+        and _is_approved_runtime_nle_project_state_payload(value)
+    ):
         return False
     return True
 
@@ -255,7 +334,7 @@ def strip_unapproved_nle_persistence_fields(
         if key not in project:
             continue
         value = project.get(key)
-        if not _is_unapproved_nle_payload(key, value):
+        if not _is_unapproved_nle_payload(key, value, project=project):
             continue
         removed[key] = _value_summary(value)
         project.pop(key, None)
@@ -288,7 +367,7 @@ def assert_no_unapproved_nle_persistence_fields(
     blocked = [
         key
         for key in UNAPPROVED_NLE_PERSISTENCE_KEYS
-        if key in project and _is_unapproved_nle_payload(key, project.get(key))
+        if key in project and _is_unapproved_nle_payload(key, project.get(key), project=project)
     ]
     if _approved_top_level_nle_companion_missing(project):
         blocked.append("nle")
@@ -301,12 +380,15 @@ __all__ = [
     "NLE_PERSISTENCE_GUARD_SCHEMA",
     "NLE_PERSISTENCE_QUARANTINE_KEY",
     "NLE_LEGACY_CANONICAL_LOAD_OWNER",
+    "NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA",
     "NLE_SNAPSHOT_CANONICAL_LOAD_OWNER",
     "NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID",
     "NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA",
     "NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER",
     "NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA",
     "UNAPPROVED_NLE_PERSISTENCE_KEYS",
+    "approved_runtime_nle_project_state_payload",
+    "approved_runtime_nle_project_state_persistence_requested",
     "approved_nle_snapshot_persistence_requested",
     "approved_nle_snapshot_canonical_load_requested",
     "approved_nle_snapshot_payload",
@@ -314,6 +396,7 @@ __all__ = [
     "approved_top_level_nle_canonical_load_requested",
     "approved_top_level_nle_persistence_requested",
     "assert_no_unapproved_nle_persistence_fields",
+    "nle_runtime_state_persistence_approval_payload",
     "nle_snapshot_canonical_load_approval_payload",
     "nle_snapshot_persistence_approval_payload",
     "nle_top_level_canonical_load_approval_payload",

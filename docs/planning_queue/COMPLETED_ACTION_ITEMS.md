@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.28-source-app
+Document-Version: 04.01.29-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,25 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.29 G2 Runtime _nle_project_state Persistence Opt-In Proof
+
+Source request: continue remaining action items, verify and use Jammini/agents, apply the NLE structure, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route (`active_conversation_id=075ebb10-b98a-43bd-b9ee-9046675d41d7`).
+2. Jammini was assigned a bounded G2 scout task through `tools/jammini_delegate.sh`; no fresh physical handoff file arrived before implementation closed, so Dex did not claim delivered Jammini proof from chat-only status.
+3. Three sub-agent reviews were completed: 한결 architecture, 서린 strict QE, and 유진 workflow. All converged on an opt-in-only supplemental runtime-state payload, stronger persisted-dict false-positive tests, Direct SRT/roughcut/default-authority guard wording, no UI/UX change, and no final cutover wording.
+4. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.29"`.
+5. `core/project/project_format.py` was bumped to project schema version `04.01.29`.
+6. `core/project/nle_persistence_guard.py` now requires both top-level policy and nested `_nle_project_state.persistence` approval before any persisted runtime-state dict is accepted.
+7. `core/project/nle_project_state.py` now serializes/deserializes approved runtime-state payloads explicitly and rejects mismatched persisted rows before hydrating runtime state.
+8. `core/project/project_io.py` and `core/project/project_format.py` preserve `_nle_project_state` only for the explicit approved runtime persistence policy; default saves still strip runtime state.
+9. `tools/audit_nle_persistence_cutover.py` now includes `Runtime NLE Project State Persistence Opt-In` evidence and keeps legacy disk-shape replacement plus final cutover blocked.
+10. Audit evidence was refreshed at `output/manual_verification/latest/nle_runtime_state_persistence_v040129_20260629_140053/nle_persistence_cutover_audit.md`.
+11. Audit state: `status=blocked`, `app_version=04.01.29`, `prep_ready=true`, `persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates `10/2`, current canonical owner `nle_snapshot`, and blockers `legacy_disk_shape_replacement_allowed`, `final_cutover_ready`.
+12. Runtime-state opt-in proof: loaded/runtime/reloaded/storage snapshot/runtime first caption text stays `runtime persisted snapshot first`; cache-hit read/resave hydrates runtime state; legacy `editor_state` first caption text after resave remains `first`; top-level/readback/quarantine payloads do not persist.
+13. Focused verification passed: compile check for touched NLE/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `30 passed`; audit generation passed with blockers `2`; project/status guard passed; direct-SRT focused guard passed; direct version assertion -> `APP_VERSION=04.01.29` / `PROJECT_SCHEMA_VERSION=04.01.29`; `git diff --check -- .` -> pass.
+14. This slice does not make `_nle_project_state` the default project authority, replace legacy `editor_state`, alter Direct SRT precedence, alter roughcut sidecars, declare final NLE disk-format cutover, perform per-pixel NLE writes, change UI/UX labels/layout/shortcuts/colors/popups, change STT/cache defaults, build/sign/upload an App Store package, or provide App Store submission proof.
 
 ## v04.01.28 G2 NLE Snapshot Standalone Canonical Load Opt-In Proof
 
