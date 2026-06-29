@@ -6,7 +6,7 @@ AI Subtitle Studio can be treated as a Mac App Store submission candidate.
 ## Current Status
 
 - Status: blocked. Owner approval for App Store packaging/signing/upload/metadata execution was granted on 2026-06-28, but distribution identities, signed `.pkg`, App Store validation, and owner metadata values are still incomplete.
-- Source app version: `04.01.16`.
+- Source app version: `04.01.17`.
 - Bundle identifier: `com.soseolgayumossi.aisubtitlestudio`.
 - Category: `public.app-category.video`.
 - Minimum macOS: `14.0`.
@@ -45,6 +45,7 @@ Exit gate: every owner-input item is either approved or explicitly marked not ap
 - Run a current source quick QA before building packages.
 - Preserve subtitle quality gates and UI/UX behavior.
 - Record baseline in `docs/quality_validation/test_result.md` or `output/manual_verification/latest/`.
+- Latest source quick QA baseline: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929/suite_result.md` -> `profile=quick`, `scenario_count=1`, `passed=1`, `failed=0`, scenario `editor_compact_macau`.
 
 Exit gate: source-app baseline passes, and no runtime work is hidden inside packaging.
 
@@ -115,6 +116,16 @@ owner-input metadata `8/8`, and forbidden-claim scan `pass` with `0` matches.
 This package is a collection/checklist artifact only; it does not replace signed
 package proof, sandbox smoke, App Store Connect validation, upload/submission,
 or owner-approved metadata values.
+
+## Latest Source-App Baseline
+
+- `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929/suite_result.md`
+
+Latest baseline state: `profile=quick`, `scenario_count=1`, `passed=1`,
+`failed=0`, scenario `editor_compact_macau`. This is source-app editor workflow
+baseline only. It is not sandbox smoke, signed app/package proof, App Store
+Connect validation, upload/submission proof, owner metadata completion, full QA,
+real-media STT quality, or roughcut proof.
 
 ## Latest Audit Evidence
 

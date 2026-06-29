@@ -33,7 +33,46 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.16 / G0 App Store Metadata Owner-Input Package
+## Current Handoff - 2026-06-29 v04.01.17 / G0 Source Quick QA Baseline Before Packaging
+
+### Scope
+
+- Completed the G0 source quick QA baseline before packaging slice.
+- Bumped source-app version and project schema from `04.01.16` to `04.01.17`.
+- Refreshed source-app quick QA baseline and updated current docs/archive pointers.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.17`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.17`.
+- Quick QA baseline: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929/suite_result.md`.
+- Quick QA result: `profile=quick`, `scenario_count=1`, scenario `editor_compact_macau`, `passed=1`, `failed=0`, started `2026-06-29 09:30:03`, finished `2026-06-29 09:30:13`.
+- This is source-app editor workflow baseline only. It is not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, roughcut, or X5 rolling proof.
+- No signed App Store `.pkg`, sandbox smoke, App Store Connect validation, upload, submission, owner metadata completion, UI/UX change, subtitle-generation change, or NLE behavior change was performed.
+
+### Evidence
+
+- Quick QA: `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929` -> `failed_count=0`.
+- Compile check: `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- macOS bundle runtime path guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_macos_bundle_runtime_paths.py` -> `4 passed`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.17`, `PROJECT_SCHEMA_VERSION=04.01.17`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for release boundary, QE, and editor-workflow wording constraints. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G0 remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed `.pkg`, sandbox smoke, App Store Connect validation, upload/submission, and owner-approved metadata values.
+- G1 collect-cache/default promotion remains owner-review gated.
+- Any additional active-worker final-surface proof remains a separate G3 gate if selected by the queue.
+
+### Next Recommended Action
+
+- Stop after this completed action item unless the owner explicitly continues.
+- If continuing G0, provide or install the missing signing identities and owner metadata values, then rerun the readiness audit before any package/upload attempt.
+- Keep source-app QA, readiness audits, signed-package proof, App Store Connect validation, owner metadata, and generated owner-input packages as separate evidence surfaces.
+
+## Previous Handoff - 2026-06-29 v04.01.16 / G0 App Store Metadata Owner-Input Package
 
 ### Scope
 

@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.16-source-app
+Document-Version: 04.01.17-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,19 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.17 G0 Source Quick QA Baseline Before Packaging
+
+Source request: continue remaining action-item execution with Jammini plus three agents, version increment by `00.00.01`, docs update, code review/fixes, commit, main push, and stop after a completed action item.
+
+1. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.17"`.
+2. `core/project/project_format.py` was bumped to project schema version `04.01.17`.
+3. Source-app quick QA baseline was refreshed before packaging at `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929/suite_result.md`.
+4. Quick QA result: `profile=quick`, `scenario_count=1`, scenario `editor_compact_macau`, `passed_count=1`, `failed_count=0`, started `2026-06-29 09:30:03`, finished `2026-06-29 09:30:13`.
+5. The proof scope is source-app compact editor workflow baseline only: project open, snapshot capture, playhead, smart split, inline edit, timeline view controls, global-menu save/status, play/pause command, segment/diamond edit, save, and final status. It is not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, roughcut, or X5 rolling proof.
+6. Three sub-agent reviews were used as architecture/QE/editor-workflow guardrails. Jammini `--status` resolved the active route, but the current `--handoff-probe` packet did not produce a fresh physical handoff file, so `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+7. Focused verification passed: quick QA as above; compile check for touched version modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_macos_bundle_runtime_paths.py` -> `4 passed`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.17` / `PROJECT_SCHEMA_VERSION=04.01.17`; `git diff --check -- .` -> pass.
+8. This slice does not claim App Store readiness, Apple Distribution signed `.app`, signed App Store `.pkg`, `pkgutil --check-signature` pass, sandbox workflow smoke, App Store Connect validation, upload/submission completion, owner metadata completion, Developer ID DMG submission proof, UI/UX changes, subtitle-generation changes, or NLE behavior changes.
 
 ## v04.01.16 G0 App Store Metadata Owner-Input Package
 

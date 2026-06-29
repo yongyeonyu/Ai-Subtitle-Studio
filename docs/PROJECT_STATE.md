@@ -44,14 +44,14 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.16` from `core/runtime/config.py`
-- Project schema version: `04.01.16` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.16.md`
-- Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040100_20260628`
+- App version: `04.01.17` from `core/runtime/config.py`
+- Project schema version: `04.01.17` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.17.md`
+- Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929`
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_identity_metadata_blocker_v040115_20260629_0907/app_store_readiness_audit.md`
 - Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_package_v040116_20260629_0921/app_store_metadata_owner_input_package.md`
 
-`v04.01.16` is a source-app release checkpoint and owner-input collection artifact checkpoint, not App Store submission proof.
+`v04.01.17` is a source-app quick QA baseline checkpoint, not App Store submission proof.
 
 ## Active Groups
 
@@ -76,7 +76,7 @@ locations instead:
 High-value completed evidence families include Taption subtitle segment parity,
 final/preview isolation, voice-silence magnet parity, neighbor-collision guard,
 NLE runtime/session mutation adoption, save/reopen compatibility, render/export
-parity, trace-bundle retention, and `v04.01.16` source release proof.
+parity, trace-bundle retention, and `v04.01.17` source release proof.
 
 ## Must Not Break
 

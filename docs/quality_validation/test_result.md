@@ -1,5 +1,26 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.17 G0 Source Quick QA Baseline Before Packaging - 2026-06-29 KST
+
+- 실행 모드: source-app G0 quick QA baseline before packaging and version/schema bump.
+- 결과: pass for the bounded source-app baseline slice. This is source-app editor workflow baseline only; it is not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, roughcut, or X5 rolling proof.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.17.md`
+  - Quick QA baseline: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929/suite_result.md`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040117-g0-source-quick-qa-baseline-before-packaging`
+- 실제 결과:
+  - App version updated to `04.01.17`.
+  - Project schema version updated to `04.01.17`.
+  - Quick QA result: `profile=quick`, `scenario_count=1`, scenario `editor_compact_macau`, `passed_count=1`, `failed_count=0`.
+  - The quick path covered source-app compact editor automation: project open, snapshots, playhead, smart split, inline edit, timeline view controls, global menu save/status, play/pause command, segment/diamond edit, save, and final status.
+- 검증:
+  - `AI_SUBTITLE_STUDIO_QA_USE_SOURCE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/qa_suite_runner.py quick --output-dir output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929` -> `failed_count=0`.
+  - `./venv/bin/python -m py_compile core/runtime/config.py core/project/project_format.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_macos_bundle_runtime_paths.py` -> `4 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.17`, `PROJECT_SCHEMA_VERSION=04.01.17`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.16 G0 App Store Metadata Owner-Input Package - 2026-06-29 KST
 
 - 실행 모드: source-app G0 Mac App Store metadata owner-input package generator, false-positive guard tests, and version/schema bump.
