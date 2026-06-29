@@ -12,6 +12,7 @@ from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
     NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
     NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
+    approved_final_cutover_requested,
     approved_legacy_disk_shape_replacement_requested,
     approved_nle_snapshot_canonical_load_requested,
     approved_runtime_nle_project_state_payload,
@@ -19,6 +20,7 @@ from core.project.nle_persistence_guard import (
     approved_top_level_nle_canonical_load_requested,
     approved_nle_snapshot_persistence_requested,
     approved_top_level_nle_persistence_requested,
+    nle_final_cutover_approval_payload,
     nle_legacy_disk_shape_replacement_approval_payload,
     nle_runtime_state_persistence_approval_payload,
     nle_snapshot_canonical_load_approval_payload,
@@ -28,7 +30,7 @@ from core.project.nle_persistence_guard import (
     strip_unapproved_nle_persistence_fields,
 )
 
-PROJECT_SCHEMA_VERSION = "04.01.30"
+PROJECT_SCHEMA_VERSION = "04.01.31"
 PROJECT_STORAGE_SCHEMA = "ai_subtitle_studio.project.v5"
 PROJECT_VIDEO_SCHEMA = "ai_subtitle_studio.project.video_header.v1"
 
@@ -258,7 +260,8 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
     persist_top_level_nle = approved_top_level_nle_persistence_requested(payload)
     canonical_nle_snapshot = approved_nle_snapshot_canonical_load_requested(payload)
     canonical_top_level_nle = approved_top_level_nle_canonical_load_requested(payload)
-    replace_legacy_disk_shape = approved_legacy_disk_shape_replacement_requested(payload)
+    final_cutover = approved_final_cutover_requested(payload)
+    replace_legacy_disk_shape = approved_legacy_disk_shape_replacement_requested(payload) or final_cutover
     legacy_replacement_rows: list[dict[str, Any]] | None = None
     persist_runtime_nle_state = (
         approved_runtime_nle_project_state_persistence_requested(payload)
@@ -383,9 +386,9 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
             policy_payload["persist_runtime_project_state"] = True
             policy_payload["runtime_project_state_persistence_allowed"] = True
             policy_payload["runtime_project_state_schema"] = runtime_policy["runtime_project_state_schema"]
-            policy_payload["default_project_authority_unchanged"] = True
+            policy_payload["default_project_authority_unchanged"] = not bool(final_cutover)
             policy_payload["legacy_disk_shape_replacement_allowed"] = bool(replace_legacy_disk_shape)
-            policy_payload["final_cutover_ready"] = False
+            policy_payload["final_cutover_ready"] = bool(final_cutover)
         if replace_legacy_disk_shape:
             replacement_policy = nle_legacy_disk_shape_replacement_approval_payload(source="project_format.storage")
             policy_payload["legacy_editor_state_preserved_for_rollback"] = True
@@ -395,6 +398,14 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
             ]
             policy_payload["legacy_disk_shape_replacement_schema"] = replacement_policy["schema"]
             policy_payload["default_project_authority"] = "legacy_compatible_editor_state_projection"
+        if final_cutover:
+            final_policy = nle_final_cutover_approval_payload(source="project_format.storage")
+            policy_payload["final_cutover_schema"] = final_policy["schema"]
+            policy_payload["final_cutover_ready"] = True
+            policy_payload["default_project_authority"] = final_policy["default_project_authority"]
+            policy_payload["default_project_authority_changed"] = True
+            policy_payload["default_project_authority_unchanged"] = False
+            policy_payload["legacy_editor_state_compatibility_key_preserved"] = True
         payload["nle_persistence"] = policy_payload
     if persist_runtime_nle_state and runtime_state_payload is not None:
         payload["_nle_project_state"] = runtime_state_payload
@@ -407,6 +418,7 @@ def build_storage_project_payload(project: dict[str, Any]) -> dict[str, Any]:
                 payload,
                 editor_state,
                 legacy_replacement_rows,
+                final_cutover_ready=final_cutover,
             )
         payload["editor_state"] = editor_state
     ordered: dict[str, Any] = {}
@@ -454,6 +466,8 @@ def _replace_legacy_editor_state_subtitle_rows(
     project: dict[str, Any],
     editor_state: dict[str, Any],
     rows: list[dict[str, Any]],
+    *,
+    final_cutover_ready: bool = False,
 ) -> dict[str, Any]:
     from core.project.project_context import build_editor_state
 
@@ -481,13 +495,15 @@ def _replace_legacy_editor_state_subtitle_rows(
         "schema": "ai_subtitle_studio.legacy_editor_state_projection.v1",
         "source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
         "row_count": len([row for row in list(rows or []) if isinstance(row, dict)]),
-        "final_cutover_ready": False,
+        "final_cutover_ready": bool(final_cutover_ready),
     }
     rebuilt.setdefault("subtitles", {})["legacy_disk_shape_replaced"] = True
     rebuilt.setdefault("subtitles", {})["projection_source"] = NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+    rebuilt.setdefault("subtitles", {})["legacy_editor_state_compatibility_key_preserved"] = bool(final_cutover_ready)
     canvas = rebuilt.setdefault("rendering", {}).setdefault("subtitle_canvas", {})
     canvas["legacy_disk_shape_replaced"] = True
     canvas["projection_source"] = NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+    canvas["legacy_editor_state_compatibility_key_preserved"] = bool(final_cutover_ready)
     return rebuilt
 
 

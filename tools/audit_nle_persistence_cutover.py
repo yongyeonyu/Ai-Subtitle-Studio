@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.project.nle_persistence_guard import (
+    NLE_FINAL_CUTOVER_APPROVAL_SCHEMA,
     NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
     NLE_LEGACY_CANONICAL_LOAD_OWNER,
     NLE_PERSISTENCE_QUARANTINE_KEY,
@@ -1003,6 +1004,190 @@ def _legacy_disk_shape_replacement_opt_in_check(work_dir: Path) -> dict[str, Any
     }
 
 
+def _final_cutover_ready_check(work_dir: Path) -> dict[str, Any]:
+    project_path = work_dir / "final-cutover-ready-opt-in.aissproj"
+    project = _legacy_project()
+    project["nle_persistence"] = {
+        "persist_snapshot": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "canonical_load_owner_change_allowed": True,
+        "nle_snapshot_canonical_load_source_allowed": True,
+        "legacy_editor_state_remains_canonical": False,
+        "legacy_editor_state_preserved_for_rollback": True,
+        "persist_runtime_project_state": True,
+        "runtime_project_state_persistence_allowed": True,
+        "default_project_authority_unchanged": False,
+        "default_project_authority_changed": True,
+        "default_project_authority": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "legacy_disk_shape_replacement_allowed": True,
+        "legacy_editor_state_rows_replaced": True,
+        "legacy_editor_state_projection_source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "legacy_disk_shape_replacement_schema": NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+        "legacy_editor_state_compatibility_key_preserved": True,
+        "final_cutover_ready": True,
+        "final_cutover_schema": NLE_FINAL_CUTOVER_APPROVAL_SCHEMA,
+    }
+    final_text = "final cutover canonical first"
+    write_project_file(str(project_path), project)
+    storage = read_project_storage_payload(str(project_path))
+    storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = final_text
+    project_path.write_bytes(project_io._pack_project_payload(storage))
+    clear_project_file_cache(str(project_path))
+
+    loaded = read_project_file(str(project_path))
+    loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+    runtime_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    runtime_rows = runtime_state.editor_rows() if isinstance(runtime_state, NLEProjectState) else []
+    write_project_file(str(project_path), loaded)
+    storage_after = read_project_storage_payload(str(project_path))
+    cached = read_project_file(str(project_path))
+    cached_runtime_state = cached.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+    write_project_file(str(project_path), cached)
+    storage_after_cache_hit = read_project_storage_payload(str(project_path))
+    clear_project_file_cache(str(project_path))
+    reloaded = read_project_file(str(project_path))
+    reloaded_rows = project_segments_to_editor(reloaded, include_analysis_candidates=False)
+
+    policy_after = storage_after.get("nle_persistence") if isinstance(storage_after.get("nle_persistence"), dict) else {}
+    snapshot_after = storage_after.get("nle_snapshot") if isinstance(storage_after.get("nle_snapshot"), dict) else {}
+    runtime_after = (
+        storage_after.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+        if isinstance(storage_after.get(NLE_PROJECT_STATE_RUNTIME_KEY), dict)
+        else {}
+    )
+    editor_state_after = storage_after.get("editor_state") if isinstance(storage_after.get("editor_state"), dict) else {}
+    editor_state_after_rows = project_segments_to_editor(
+        {"editor_state": editor_state_after, "video": storage_after.get("video") or {}},
+        include_analysis_candidates=False,
+    )
+    snapshot_after_rows = _editor_rows_from_top_level_nle_payload(snapshot_after)
+    runtime_after_rows = runtime_after.get("editor_rows") if isinstance(runtime_after.get("editor_rows"), list) else []
+
+    loaded_signature = _row_signature(loaded_rows, include_id=False)
+    runtime_signature = _row_signature(runtime_rows, include_id=False)
+    reloaded_signature = _row_signature(reloaded_rows, include_id=False)
+    snapshot_signature = _row_signature(snapshot_after_rows, include_id=False)
+    runtime_after_signature = _row_signature(runtime_after_rows, include_id=False)
+    editor_state_after_signature = _row_signature(editor_state_after_rows, include_id=False)
+    subtitle_meta = editor_state_after.get("subtitles") if isinstance(editor_state_after.get("subtitles"), dict) else {}
+    canvas = (
+        editor_state_after.get("rendering", {}).get("subtitle_canvas", {})
+        if isinstance(editor_state_after.get("rendering"), dict)
+        else {}
+    )
+
+    forged = _legacy_project()
+    forged["nle_persistence"] = {
+        "persist_snapshot": True,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "canonical_load_owner_change_allowed": True,
+        "nle_snapshot_canonical_load_source_allowed": True,
+        "legacy_editor_state_remains_canonical": False,
+        "legacy_editor_state_preserved_for_rollback": True,
+        "persist_runtime_project_state": True,
+        "runtime_project_state_persistence_allowed": True,
+        "default_project_authority_unchanged": False,
+        "default_project_authority_changed": True,
+        "default_project_authority": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "legacy_disk_shape_replacement_allowed": True,
+        "legacy_editor_state_rows_replaced": True,
+        "legacy_editor_state_projection_source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "legacy_disk_shape_replacement_schema": NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+        "legacy_editor_state_compatibility_key_preserved": True,
+        "final_cutover_ready": True,
+    }
+    forged_path = work_dir / "forged-final-cutover-ready.aissproj"
+    write_project_file(str(forged_path), forged)
+    forged_storage = read_project_storage_payload(str(forged_path))
+    forged_policy = (
+        forged_storage.get("nle_persistence") if isinstance(forged_storage.get("nle_persistence"), dict) else {}
+    )
+    direct_srt = build_direct_srt_precedence_report(output_dir=work_dir / "direct_srt_precedence")
+
+    ready = (
+        str(policy_after.get("final_cutover_schema") or "") == NLE_FINAL_CUTOVER_APPROVAL_SCHEMA
+        and bool(policy_after.get("final_cutover_ready"))
+        and str(policy_after.get("canonical_load_owner") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and str(policy_after.get("default_project_authority") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and bool(policy_after.get("default_project_authority_changed"))
+        and not bool(policy_after.get("default_project_authority_unchanged"))
+        and bool(policy_after.get("legacy_editor_state_compatibility_key_preserved"))
+        and bool(policy_after.get("legacy_editor_state_preserved_for_rollback"))
+        and bool(policy_after.get("legacy_disk_shape_replacement_allowed"))
+        and bool(policy_after.get("legacy_editor_state_rows_replaced"))
+        and isinstance(runtime_state, NLEProjectState)
+        and isinstance(cached_runtime_state, NLEProjectState)
+        and _first_caption_text(loaded_rows) == final_text
+        and _first_caption_text(runtime_rows) == final_text
+        and _first_caption_text(reloaded_rows) == final_text
+        and _first_caption_text(snapshot_after_rows) == final_text
+        and _first_caption_text(runtime_after_rows) == final_text
+        and _first_caption_text(editor_state_after_rows) == final_text
+        and loaded_signature
+        == runtime_signature
+        == reloaded_signature
+        == snapshot_signature
+        == runtime_after_signature
+        == editor_state_after_signature
+        and bool(editor_state_after.get("legacy_disk_shape_replacement"))
+        and bool(subtitle_meta.get("legacy_editor_state_compatibility_key_preserved"))
+        and bool(canvas.get("legacy_editor_state_compatibility_key_preserved"))
+        and "nle" not in storage_after
+        and NLE_SNAPSHOT_READBACK_PARITY_KEY not in storage_after
+        and NLE_PERSISTENCE_QUARANTINE_KEY not in storage_after
+        and NLE_PROJECT_STATE_RUNTIME_KEY in storage_after
+        and NLE_PROJECT_STATE_RUNTIME_KEY in storage_after_cache_hit
+        and not bool(forged_policy.get("final_cutover_ready"))
+        and str(forged_policy.get("final_cutover_schema") or "") != NLE_FINAL_CUTOVER_APPROVAL_SCHEMA
+        and bool(direct_srt.get("passed"))
+    )
+    return {
+        "ready": ready,
+        "status": "ready" if ready else "blocked",
+        "explicit_opt_in": True,
+        "final_cutover_ready": bool(policy_after.get("final_cutover_ready")),
+        "final_cutover_schema": str(policy_after.get("final_cutover_schema") or ""),
+        "canonical_load_owner": str(policy_after.get("canonical_load_owner") or ""),
+        "default_project_authority": str(policy_after.get("default_project_authority") or ""),
+        "default_project_authority_changed": bool(policy_after.get("default_project_authority_changed")),
+        "default_project_authority_unchanged": bool(policy_after.get("default_project_authority_unchanged")),
+        "legacy_disk_shape_replacement_allowed": bool(policy_after.get("legacy_disk_shape_replacement_allowed")),
+        "legacy_editor_state_rows_replaced": bool(policy_after.get("legacy_editor_state_rows_replaced")),
+        "legacy_editor_state_preserved_for_rollback": bool(
+            policy_after.get("legacy_editor_state_preserved_for_rollback")
+        ),
+        "legacy_editor_state_compatibility_key_preserved": bool(
+            policy_after.get("legacy_editor_state_compatibility_key_preserved")
+        ),
+        "editor_state_key_present": "editor_state" in storage_after,
+        "editor_state_is_compatibility_projection": bool(
+            subtitle_meta.get("legacy_editor_state_compatibility_key_preserved")
+        ),
+        "loaded_first_caption_text": _first_caption_text(loaded_rows),
+        "runtime_first_caption_text": _first_caption_text(runtime_rows),
+        "reloaded_first_caption_text": _first_caption_text(reloaded_rows),
+        "storage_snapshot_first_caption_text": _first_caption_text(snapshot_after_rows),
+        "storage_runtime_first_caption_text": _first_caption_text(runtime_after_rows),
+        "legacy_editor_state_first_caption_text_after_resave": _first_caption_text(editor_state_after_rows),
+        "loaded_signature_matches_runtime": loaded_signature == runtime_signature,
+        "loaded_signature_matches_reloaded": loaded_signature == reloaded_signature,
+        "legacy_editor_state_matches_snapshot": editor_state_after_signature == snapshot_signature,
+        "storage_runtime_matches_snapshot": runtime_after_signature == snapshot_signature,
+        "cache_hit_runtime_state_hydrated": isinstance(cached_runtime_state, NLEProjectState),
+        "cache_hit_storage_has_runtime_nle_key": NLE_PROJECT_STATE_RUNTIME_KEY in storage_after_cache_hit,
+        "storage_after_has_top_level_nle": "nle" in storage_after,
+        "storage_after_has_runtime_nle_key": NLE_PROJECT_STATE_RUNTIME_KEY in storage_after,
+        "storage_after_has_readback_report": NLE_SNAPSHOT_READBACK_PARITY_KEY in storage_after,
+        "storage_after_has_quarantine": NLE_PERSISTENCE_QUARANTINE_KEY in storage_after,
+        "forged_policy_blocked": not bool(forged_policy.get("final_cutover_ready"))
+        and str(forged_policy.get("final_cutover_schema") or "") != NLE_FINAL_CUTOVER_APPROVAL_SCHEMA,
+        "direct_srt_precedence_preserved": bool(direct_srt.get("passed")),
+        "blocked_gates_remaining": [],
+    }
+
+
 def _canonical_load_owner_rollback_boundary_check(work_dir: Path) -> dict[str, Any]:
     project_path = work_dir / "canonical-load-owner-rollback-boundary.aissproj"
     project = _legacy_project()
@@ -1585,11 +1770,6 @@ def _canonical_load_owner_gate_matrix(
         if isinstance(checks.get("nle_snapshot_canonical_load_source"), dict)
         else {}
     )
-    snapshot_canonical = (
-        checks.get("nle_snapshot_canonical_load_source")
-        if isinstance(checks.get("nle_snapshot_canonical_load_source"), dict)
-        else {}
-    )
     runtime_persistence = (
         checks.get("runtime_project_state_persistence_opt_in")
         if isinstance(checks.get("runtime_project_state_persistence_opt_in"), dict)
@@ -1600,9 +1780,9 @@ def _canonical_load_owner_gate_matrix(
         if isinstance(checks.get("legacy_disk_shape_replacement_opt_in"), dict)
         else {}
     )
-    legacy_shape_replacement = (
-        checks.get("legacy_disk_shape_replacement_opt_in")
-        if isinstance(checks.get("legacy_disk_shape_replacement_opt_in"), dict)
+    final_cutover = (
+        checks.get("final_cutover_ready")
+        if isinstance(checks.get("final_cutover_ready"), dict)
         else {}
     )
     roughcut = checks.get("roughcut_sidecar_readback") if isinstance(checks.get("roughcut_sidecar_readback"), dict) else {}
@@ -1645,7 +1825,22 @@ def _canonical_load_owner_gate_matrix(
         and bool(legacy_shape_replacement.get("default_project_authority_unchanged"))
         and bool(legacy_shape_replacement.get("direct_srt_precedence_preserved"))
         and bool(legacy_shape_replacement.get("forged_policy_blocked")),
-        "final_cutover_ready": bool(persistence_cutover_ready),
+        "final_cutover_ready": bool(persistence_cutover_ready)
+        and bool(final_cutover.get("ready"))
+        and bool(final_cutover.get("explicit_opt_in"))
+        and bool(final_cutover.get("final_cutover_ready"))
+        and bool(final_cutover.get("default_project_authority_changed"))
+        and not bool(final_cutover.get("default_project_authority_unchanged"))
+        and bool(final_cutover.get("legacy_editor_state_compatibility_key_preserved"))
+        and bool(final_cutover.get("editor_state_key_present"))
+        and bool(final_cutover.get("editor_state_is_compatibility_projection"))
+        and bool(final_cutover.get("cache_hit_runtime_state_hydrated"))
+        and bool(final_cutover.get("cache_hit_storage_has_runtime_nle_key"))
+        and bool(final_cutover.get("forged_policy_blocked"))
+        and bool(final_cutover.get("direct_srt_precedence_preserved"))
+        and not bool(final_cutover.get("storage_after_has_top_level_nle"))
+        and not bool(final_cutover.get("storage_after_has_readback_report"))
+        and not bool(final_cutover.get("storage_after_has_quarantine")),
     }
     gates = [
         {
@@ -1672,7 +1867,7 @@ def _canonical_load_owner_gate_matrix(
         "blocked_gate_count": len(blocked_gate_ids),
         "blocked_gate_ids": blocked_gate_ids,
         "not_runtime_change": not bool(gate_values["runtime_project_state_persistence_allowed"]),
-        "not_disk_format_cutover": True,
+        "not_disk_format_cutover": not bool(persistence_cutover_ready),
         "not_ui_change": True,
     }
 
@@ -1698,6 +1893,9 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     )
     legacy_disk_shape_replacement_opt_in = _legacy_disk_shape_replacement_opt_in_check(
         out_dir / "legacy_disk_shape_replacement_opt_in_fixture"
+    )
+    final_cutover_ready_check = _final_cutover_ready_check(
+        out_dir / "final_cutover_ready_fixture"
     )
     canonical_load_owner_rollback_boundary = _canonical_load_owner_rollback_boundary_check(
         out_dir / "canonical_load_owner_rollback_boundary_fixture"
@@ -1728,6 +1926,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "nle_snapshot_canonical_load_source": nle_snapshot_canonical_load_source,
         "runtime_project_state_persistence_opt_in": runtime_project_state_persistence_opt_in,
         "legacy_disk_shape_replacement_opt_in": legacy_disk_shape_replacement_opt_in,
+        "final_cutover_ready": final_cutover_ready_check,
         "canonical_load_owner_rollback_boundary": canonical_load_owner_rollback_boundary,
         "corrupted_snapshot_readback": corrupted_snapshot,
         "roughcut_sidecar_readback": roughcut_sidecar,
@@ -1784,6 +1983,22 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and not legacy_disk_shape_replacement_opt_in["storage_after_has_readback_report"]
         and not legacy_disk_shape_replacement_opt_in["storage_after_has_quarantine"]
         and not legacy_disk_shape_replacement_opt_in["final_cutover_ready"]
+        and final_cutover_ready_check["ready"]
+        and final_cutover_ready_check["default_project_authority_changed"]
+        and not final_cutover_ready_check["default_project_authority_unchanged"]
+        and final_cutover_ready_check["legacy_editor_state_compatibility_key_preserved"]
+        and final_cutover_ready_check["legacy_editor_state_rows_replaced"]
+        and final_cutover_ready_check["legacy_editor_state_matches_snapshot"]
+        and final_cutover_ready_check["editor_state_key_present"]
+        and final_cutover_ready_check["editor_state_is_compatibility_projection"]
+        and final_cutover_ready_check["storage_after_has_runtime_nle_key"]
+        and final_cutover_ready_check["cache_hit_runtime_state_hydrated"]
+        and final_cutover_ready_check["cache_hit_storage_has_runtime_nle_key"]
+        and final_cutover_ready_check["forged_policy_blocked"]
+        and final_cutover_ready_check["direct_srt_precedence_preserved"]
+        and not final_cutover_ready_check["storage_after_has_top_level_nle"]
+        and not final_cutover_ready_check["storage_after_has_readback_report"]
+        and not final_cutover_ready_check["storage_after_has_quarantine"]
         and canonical_load_owner_rollback_boundary["ready"]
         and not top_level_nle_compatibility_projection["runtime_report_persisted_after_resave"]
         and not top_level_nle_compatibility_projection["runtime_state_persisted_after_resave"]
@@ -1806,12 +2021,14 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         and render_export_parity["stable"]
         and render_export_parity["storage_clean"]
     )
-    blockers = [
-        "final_cutover_ready",
-    ]
+    blockers = []
+    if not final_cutover_ready_check["ready"]:
+        blockers.append("final_cutover_ready")
     if not top_level_nle_compatibility_projection["gap_coverage_ready"]:
-        blockers.insert(1, CUTOVER_GAP_COVERAGE_BLOCKER)
-    persistence_cutover_ready = False
+        blockers.append(CUTOVER_GAP_COVERAGE_BLOCKER)
+    if not prep_ready:
+        blockers.append("cutover_prep_incomplete")
+    persistence_cutover_ready = bool(prep_ready and not blockers)
     canonical_load_owner_gate_matrix = _canonical_load_owner_gate_matrix(
         checks=checks,
         operation_roundtrip_all_passed=operation_roundtrip_all_passed,
@@ -1822,7 +2039,7 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
     return {
         "schema": SCHEMA,
         "app_version": APP_VERSION,
-        "status": "blocked",
+        "status": "ready" if persistence_cutover_ready else "blocked",
         "prep_ready": prep_ready,
         "persistence_cutover_ready": persistence_cutover_ready,
         "blockers": blockers,
@@ -1846,14 +2063,12 @@ def build_nle_persistence_cutover_report(*, output_dir: Path | None = None) -> d
         "nle_snapshot_canonical_load_source_ready": bool(nle_snapshot_canonical_load_source["ready"]),
         "runtime_project_state_persistence_opt_in_ready": bool(runtime_project_state_persistence_opt_in["ready"]),
         "legacy_disk_shape_replacement_opt_in_ready": bool(legacy_disk_shape_replacement_opt_in["ready"]),
-        "remaining_full_cutover_gates": [
-            "declaring final disk-format cutover ready",
-        ],
+        "final_cutover_ready": bool(final_cutover_ready_check["ready"]),
+        "remaining_full_cutover_gates": [] if persistence_cutover_ready else list(blockers),
         "next_safe_steps": [
-            "keep top-level nle canonical load opt-in explicit and owner-approved only",
-            "keep nle_snapshot standalone load-source opt-in explicit and owner-approved only",
-            "keep persisted runtime-state payloads explicit, non-default, and tied to standalone nle_snapshot opt-in",
-            "keep legacy disk-shape replacement explicit and final-cutover blocked until owner approval",
+            "run the full source-app QA suite before any release claim",
+            "keep editor_state as a compatibility projection key until explicit removal approval exists",
+            "keep App Store packaging, signing, upload, and metadata proof separate from this source-app persistence audit",
         ],
     }
 
@@ -1892,6 +2107,11 @@ def _markdown_report(payload: dict[str, Any]) -> str:
     legacy_shape_replacement = (
         checks.get("legacy_disk_shape_replacement_opt_in")
         if isinstance(checks.get("legacy_disk_shape_replacement_opt_in"), dict)
+        else {}
+    )
+    final_cutover = (
+        checks.get("final_cutover_ready")
+        if isinstance(checks.get("final_cutover_ready"), dict)
         else {}
     )
     rollback = (
@@ -2035,7 +2255,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "",
         "## Legacy Disk Shape Replacement Opt-In",
         "",
-        "Explicit owner-approved opt-in evidence only. This proves legacy-compatible `editor_state` rows can be regenerated from the approved standalone `nle_snapshot` canonical source while the `editor_state` key remains present for compatibility. Direct SRT precedence and roughcut sidecars stay separate proof surfaces, and final cutover remains blocked.",
+        "Explicit owner-approved opt-in evidence only. This proves legacy-compatible `editor_state` rows can be regenerated from the approved standalone `nle_snapshot` canonical source while the `editor_state` key remains present for compatibility. Direct SRT precedence and roughcut sidecars stay separate proof surfaces, and this legacy-only fixture keeps final policy disabled.",
         "",
         f"- Ready: `{bool(legacy_shape_replacement.get('ready'))}`",
         f"- Status: `{legacy_shape_replacement.get('status')}`",
@@ -2055,6 +2275,30 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         f"- Direct SRT precedence preserved: `{bool(legacy_shape_replacement.get('direct_srt_precedence_preserved'))}`",
         f"- Storage after has top-level/runtime/readback/quarantine: `{bool(legacy_shape_replacement.get('storage_after_has_top_level_nle'))}/{bool(legacy_shape_replacement.get('storage_after_has_runtime_nle_key'))}/{bool(legacy_shape_replacement.get('storage_after_has_readback_report'))}/{bool(legacy_shape_replacement.get('storage_after_has_quarantine'))}`",
         f"- Remaining blocked gates: `{', '.join(legacy_shape_replacement.get('blocked_gates_remaining') or [])}`",
+        "",
+        "## Final Cutover Ready Opt-In",
+        "",
+        "Explicit owner-approved source-app project persistence load-owner proof only. This declares `nle_snapshot` authority for the approved payload while retaining the `editor_state` compatibility key; compatibility key retained does not mean dual canonical ownership. It is not UI/UX, STT, package signing, upload, or App Store submission proof.",
+        "",
+        f"- Ready: `{bool(final_cutover.get('ready'))}`",
+        f"- Status: `{final_cutover.get('status')}`",
+        f"- Explicit opt-in: `{bool(final_cutover.get('explicit_opt_in'))}`",
+        f"- Final schema: `{final_cutover.get('final_cutover_schema')}`",
+        f"- Final policy allowed: `{bool(final_cutover.get('final_cutover_ready'))}`",
+        f"- Canonical load owner: `{final_cutover.get('canonical_load_owner')}`",
+        f"- Default project authority: `{final_cutover.get('default_project_authority')}`",
+        f"- Default authority changed/unchanged: `{bool(final_cutover.get('default_project_authority_changed'))}` / `{bool(final_cutover.get('default_project_authority_unchanged'))}`",
+        f"- Compatibility editor_state key preserved: `{bool(final_cutover.get('legacy_editor_state_compatibility_key_preserved'))}`",
+        f"- Editor state key present/compatibility projection: `{bool(final_cutover.get('editor_state_key_present'))}` / `{bool(final_cutover.get('editor_state_is_compatibility_projection'))}`",
+        f"- Loaded/runtime/reloaded first caption text: `{final_cutover.get('loaded_first_caption_text')}` / `{final_cutover.get('runtime_first_caption_text')}` / `{final_cutover.get('reloaded_first_caption_text')}`",
+        f"- Storage snapshot/runtime/editor_state first caption text: `{final_cutover.get('storage_snapshot_first_caption_text')}` / `{final_cutover.get('storage_runtime_first_caption_text')}` / `{final_cutover.get('legacy_editor_state_first_caption_text_after_resave')}`",
+        f"- Editor state matches snapshot: `{bool(final_cutover.get('legacy_editor_state_matches_snapshot'))}`",
+        f"- Storage runtime matches snapshot: `{bool(final_cutover.get('storage_runtime_matches_snapshot'))}`",
+        f"- Cache-hit runtime/storage ready: `{bool(final_cutover.get('cache_hit_runtime_state_hydrated'))}` / `{bool(final_cutover.get('cache_hit_storage_has_runtime_nle_key'))}`",
+        f"- Forged policy blocked: `{bool(final_cutover.get('forged_policy_blocked'))}`",
+        f"- Direct SRT precedence preserved: `{bool(final_cutover.get('direct_srt_precedence_preserved'))}`",
+        f"- Storage after has top-level/runtime/readback/quarantine: `{bool(final_cutover.get('storage_after_has_top_level_nle'))}/{bool(final_cutover.get('storage_after_has_runtime_nle_key'))}/{bool(final_cutover.get('storage_after_has_readback_report'))}/{bool(final_cutover.get('storage_after_has_quarantine'))}`",
+        f"- Remaining blocked gates: `{', '.join(final_cutover.get('blocked_gates_remaining') or [])}`",
         "",
         "## Canonical Load-Owner Rollback Boundary",
         "",
@@ -2078,7 +2322,7 @@ def _markdown_report(payload: dict[str, Any]) -> str:
         "",
         "## Canonical Load-Owner Gate Matrix",
         "",
-        "This matrix is a cutover preflight only. It proves explicit top-level nle, standalone nle_snapshot load-source, supplemental runtime-state persistence, and legacy-compatible editor_state projection opt-ins, but does not declare final disk-format cutover or change UI/UX.",
+        "This matrix is a source-app persistence preflight only. It proves explicit top-level nle, standalone nle_snapshot load-source, supplemental runtime-state persistence, legacy-compatible editor_state projection, and final policy opt-ins, but does not change UI/UX or prove App Store readiness.",
         "",
     ]
     gate_matrix = payload.get("canonical_load_owner_gate_matrix") if isinstance(payload.get("canonical_load_owner_gate_matrix"), dict) else {}

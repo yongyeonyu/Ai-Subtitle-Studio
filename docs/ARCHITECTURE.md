@@ -9,8 +9,8 @@
 - `tools/qa_suite_runner.py`: 저장소 표준 검증 진입점
 - `tools/appctl.py`: 실행 중 앱 상태/제어 보조 도구
 - `tools/generate_stt_cache_default_review_packet.py`: G1 STT collect-cache default review packet generator; runtime defaults stay unchanged.
-- `tools/generate_nle_canonical_load_owner_review_packet.py`: G2 NLE canonical load-owner review packet generator; project load ownership stays legacy until a separate approved cutover.
-- `tools/audit_nle_persistence_cutover.py`: G2 NLE persistence audit; now proves explicit top-level `nle` caption plus gap compatibility projection separately from the default legacy project load path while keeping canonical load ownership blocked.
+- `tools/generate_nle_canonical_load_owner_review_packet.py`: G2 NLE canonical load-owner review packet generator for historical owner-review packets.
+- `tools/audit_nle_persistence_cutover.py`: G2 NLE persistence audit; now proves explicit top-level `nle` compatibility projection, snapshot canonical load-source, supplemental runtime-state persistence, legacy-compatible `editor_state` projection, and final source-app persistence load-owner opt-in while keeping UI/App Store/STT proof separate.
 
 루트 `config.py`는 없고, 앱 기본 런타임 설정의 중심은 `core/runtime/config.py`입니다.
 

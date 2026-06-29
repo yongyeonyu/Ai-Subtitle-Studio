@@ -17,6 +17,7 @@ from core.project.project_format import build_storage_project_payload, hydrate_p
 from core.project.nle_project_state import NLE_PROJECT_STATE_RUNTIME_KEY, attach_project_nle_state
 from core.project.nle_persistence_guard import (
     NLE_PERSISTENCE_QUARANTINE_KEY,
+    approved_final_cutover_requested,
     approved_legacy_disk_shape_replacement_requested,
     approved_runtime_nle_project_state_persistence_requested,
     strip_unapproved_nle_persistence_fields,
@@ -152,6 +153,7 @@ def _project_payload_for_disk(project: dict[str, Any]) -> dict[str, Any]:
     keep_runtime_nle_state = (
         approved_runtime_nle_project_state_persistence_requested(payload)
         or approved_legacy_disk_shape_replacement_requested(payload)
+        or approved_final_cutover_requested(payload)
     )
     for key in _PROJECT_RUNTIME_KEYS:
         if key == NLE_PROJECT_STATE_RUNTIME_KEY and keep_runtime_nle_state:

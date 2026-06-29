@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.30-source-app
+Document-Version: 04.01.31-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-29
 Updated-By: Codex
@@ -18,6 +18,26 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.31 G2 Final Cutover Ready Opt-In Proof
+
+Source request: continue remaining action items, verify and use Jammini/agents, apply the NLE structure, record completed items separately, review/fix, keep the worktree clean after a completed task, commit, and push main.
+
+1. `tools/jammini_watchdog.sh --status` resolved the active Antigravity route (`active_conversation_id=075ebb10-b98a-43bd-b9ee-9046675d41d7`).
+2. `tools/jammini_watchdog.sh --handoff-probe` sent probe `20260629-144844`, but no fresh physical handoff file was visible; Dex did not claim delivered Jammini proof from chat-only status.
+3. Jammini was assigned a bounded G2 final cutover gate scout through `tools/jammini_delegate.sh`; no physical result file was consumed before implementation closed.
+4. Three sub-agent reviews were completed: 한결 architecture, 서린 strict QE, and 유진 workflow. Their feedback required a distinct final-cutover approval schema, cache-hit/save-reopen/export/roughcut/Direct SRT proof, forged-policy fail-closed evidence, compatibility `editor_state` key retention, and wording that avoids App Store/UI/STT overclaims.
+5. `core/runtime/config.py` was bumped to `APP_VERSION = "04.01.31"`.
+6. `core/project/project_format.py` was bumped to project schema version `04.01.31`.
+7. `core/project/nle_persistence_guard.py` now requires `ai_subtitle_studio.nle_final_cutover_approval.v1` plus the approved snapshot canonical load policy, runtime persistence permission, legacy-compatible `editor_state` projection permission, rollback preservation, `default_project_authority=nle_snapshot`, and compatibility-key retention before `final_cutover_ready` is accepted.
+8. `core/project/project_format.py` now writes the approved final policy only for that explicit payload, keeps `editor_state` present as a compatibility projection, sets `default_project_authority_changed=true`, and preserves `_nle_project_state` for the approved final path.
+9. `core/project/project_io.py` preserves `_nle_project_state` for the explicit final policy only when the runtime payload itself remains approved.
+10. `tools/audit_nle_persistence_cutover.py` now includes `Final Cutover Ready Opt-In` evidence and lets the canonical load-owner gate matrix become green only when the final fixture, forged-policy guard, cache-hit guard, Direct SRT precedence, roughcut/readback/render/export guards, and compatibility-key checks all pass.
+11. Audit evidence was refreshed at `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md`.
+12. Audit state: `status=ready`, `app_version=04.01.31`, `prep_ready=true`, `persistence_cutover_ready=true`, `blockers=[]`, overall stoplight `green`, ready/blocked gates `12/0`, current canonical owner `nle_snapshot`, and `not_runtime_change/not_disk_format_cutover/not_ui_change=false/false/true`.
+13. Final proof: loaded/runtime/reloaded/storage snapshot/runtime/editor_state first caption text stays `final cutover canonical first`; `editor_state` remains present as a compatibility projection and does not create dual canonical ownership; cache-hit read/resave hydrates runtime state; forged final policy is blocked; Direct SRT precedence is preserved; top-level/readback/quarantine payloads do not persist.
+14. Focused verification passed: compile check for touched NLE/version/test modules; `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `34 passed`; audit generation passed with `status=ready`, `blockers=[]`, and ready/blocked gates `12/0`; project/status guard -> `66 passed, 80 deselected`; direct version assertion -> `APP_VERSION=04.01.31` / `PROJECT_SCHEMA_VERSION=04.01.31`; `git diff --check -- .` -> pass.
+15. This slice does not remove the `editor_state` compatibility key, perform per-pixel NLE writes, change UI/UX labels/layout/shortcuts/colors/popups, change STT/cache defaults, run full QA, build/sign/upload an App Store package, complete owner metadata, or provide App Store submission proof.
 
 ## v04.01.30 G2 Legacy Disk Shape Replacement Opt-In Proof
 

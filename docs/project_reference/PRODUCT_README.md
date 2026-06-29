@@ -4,8 +4,8 @@
 
 Accuracy-first desktop subtitle production for long-form video, rough cuts, speaker-aware editing, and repeatable subtitle workflows.
 
-[![App Version](https://img.shields.io/badge/app-04.01.30-0A84FF?style=for-the-badge)](#)
-[![Release](https://img.shields.io/badge/release-v04.01.30-30D158?style=for-the-badge)](../release_notes/RELEASE_v04.01.30.md)
+[![App Version](https://img.shields.io/badge/app-04.01.31-0A84FF?style=for-the-badge)](#)
+[![Release](https://img.shields.io/badge/release-v04.01.31-30D158?style=for-the-badge)](../release_notes/RELEASE_v04.01.31.md)
 [![Python](https://img.shields.io/badge/python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](#)
 [![PyQt6](https://img.shields.io/badge/ui-PyQt6-41CD52?style=for-the-badge)](#)
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-555?style=for-the-badge)](#)
@@ -63,7 +63,7 @@ The macOS packaging scripts under `packaging/macos/` still support local `.app` 
 - Playhead cut-boundary magnet behavior is now an explicit right-click option so normal scrubbing can stay fast while precise automatic cut snapping remains available on demand.
 - Live STT previews now stay in timeline/STT preview lanes only; the editor text pane and playback subtitle overlay remain reserved for committed subtitle segments.
 - G3 live NLE runtime observability can be verified through `tools/remote_verify.py live-nle-proof`, which records compact `guided-subtitle-status` samples, JSONL observations, and optional existing-window snapshots without adding a new visible UI lane or exposing raw STT/VAD row text. The current proof gate requires repeated pre-final observations and generation completion; real-media quality/speed proof remains separate. The current source checkpoint also stops `nle_save_export_final_overlap` from causing repeated deferred-save retries while keeping that strict final-overlap guard active.
-- The current G2 NLE checkpoint adds explicit supplemental `_nle_project_state` persistence opt-in proof: approved runtime state can persist only when paired with owner-approved standalone `nle_snapshot` load-source policy, while legacy `editor_state` remains preserved for rollback. No visible UI/UX change, legacy disk-shape replacement, or final disk-format cutover is claimed by this checkpoint.
+- The current G2 NLE checkpoint adds explicit final source-app project persistence load-owner opt-in proof: approved payloads can declare `default_project_authority=nle_snapshot` only under the distinct final schema while `editor_state` remains present as a compatibility projection. No visible UI/UX change, per-pixel NLE writes, STT/cache default change, full QA, or App Store submission proof is claimed by this checkpoint.
 - Cut-boundary helper rows can still be saved into project metadata for verification and timing work, but follower-checked provisional lines and terminal helper boundaries are hidden from the normal editor UI after confirmation.
 - Roughcut Codex CLI calls now use wider context and longer timeouts, then fall back to local-rule draft generation if the Codex CLI times out.
 - Post-generation roughcut save now persists only the roughcut draft/state first, then explicitly returns the editor to an interactive state before heavier follow-up cleanup continues.
@@ -225,9 +225,9 @@ Recommended read order for a fresh continuation:
 
 | Item | Value |
 | --- | --- |
-| App version in code | `04.01.30` |
-| Latest release checkpoint | `v04.01.30` |
-| Handoff document version | `04.01.30-source-app` |
+| App version in code | `04.01.31` |
+| Latest release checkpoint | `v04.01.31` |
+| Handoff document version | `04.01.31-source-app` |
 | Active phase | `SOURCE_APP_CONTINUATION_V4_1_0` |
 | Next planned phase | None |
 | Product priority | Accuracy before speed |
@@ -259,7 +259,7 @@ PY
 
 ## Release Notes
 
-The current release checkpoint is [`RELEASE_v04.01.30.md`](../release_notes/RELEASE_v04.01.30.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
+The current release checkpoint is [`RELEASE_v04.01.31.md`](../release_notes/RELEASE_v04.01.31.md). The repository keeps only the most recent release notes needed for handoff continuity, and the five handoff documents should summarize only the current state plus the immediately previous release relationship.
 
 ## Security
 

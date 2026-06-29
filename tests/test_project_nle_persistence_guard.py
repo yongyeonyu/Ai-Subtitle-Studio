@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from core.project.nle_persistence_guard import (
+    NLE_FINAL_CUTOVER_APPROVAL_SCHEMA,
     NLE_LEGACY_CANONICAL_LOAD_OWNER,
     NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
     NLE_PERSISTENCE_GUARD_SCHEMA,
@@ -15,6 +16,7 @@ from core.project.nle_persistence_guard import (
     NLE_SNAPSHOT_PERSISTENCE_APPROVAL_SCHEMA,
     NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER,
     NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA,
+    approved_final_cutover_requested,
     approved_legacy_disk_shape_replacement_requested,
     assert_no_unapproved_nle_persistence_fields,
     strip_unapproved_nle_persistence_fields,
@@ -600,6 +602,124 @@ class NLEPersistenceGuardTests(unittest.TestCase):
         self.assertTrue(storage_after["nle_persistence"]["legacy_editor_state_preserved_for_rollback"])
         self.assertTrue(storage_after["nle_persistence"]["default_project_authority_unchanged"])
         self.assertFalse(storage_after["nle_persistence"]["final_cutover_ready"])
+        self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
+        self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after_cache_hit)
+        self.assertNotIn("nle", storage_after)
+        self.assertNotIn(NLE_SNAPSHOT_READBACK_PARITY_KEY, storage_after)
+        self.assertNotIn(NLE_PERSISTENCE_QUARANTINE_KEY, storage_after)
+
+    def test_final_cutover_requires_distinct_owner_policy(self):
+        project = _legacy_project()
+        project["nle_persistence"] = {
+            "persist_snapshot": True,
+            "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+            "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+            "canonical_load_owner_change_allowed": True,
+            "nle_snapshot_canonical_load_source_allowed": True,
+            "legacy_editor_state_remains_canonical": False,
+            "legacy_editor_state_preserved_for_rollback": True,
+            "persist_runtime_project_state": True,
+            "runtime_project_state_persistence_allowed": True,
+            "default_project_authority_unchanged": False,
+            "default_project_authority_changed": True,
+            "default_project_authority": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+            "legacy_disk_shape_replacement_allowed": True,
+            "legacy_editor_state_rows_replaced": True,
+            "legacy_editor_state_projection_source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+            "legacy_disk_shape_replacement_schema": NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+            "legacy_editor_state_compatibility_key_preserved": True,
+            "final_cutover_ready": True,
+        }
+
+        storage = build_storage_project_payload(copy.deepcopy(project))
+
+        self.assertFalse(approved_final_cutover_requested(project))
+        self.assertNotEqual(
+            storage["nle_persistence"].get("final_cutover_schema"),
+            NLE_FINAL_CUTOVER_APPROVAL_SCHEMA,
+        )
+        self.assertFalse(storage["nle_persistence"].get("final_cutover_ready", False))
+        self.assertNotIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage)
+        self.assertEqual(
+            storage["editor_state"]["rendering"]["subtitle_canvas"]["segments"][0]["text"],
+            "first",
+        )
+
+    def test_owner_approved_final_cutover_declares_snapshot_authority_with_compatibility_editor_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = Path(tmp) / "final-cutover-ready-opt-in.aissproj"
+            project = _legacy_project()
+            project["nle_persistence"] = {
+                "persist_snapshot": True,
+                "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+                "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "canonical_load_owner_change_allowed": True,
+                "nle_snapshot_canonical_load_source_allowed": True,
+                "legacy_editor_state_remains_canonical": False,
+                "legacy_editor_state_preserved_for_rollback": True,
+                "persist_runtime_project_state": True,
+                "runtime_project_state_persistence_allowed": True,
+                "default_project_authority_unchanged": False,
+                "default_project_authority_changed": True,
+                "default_project_authority": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "legacy_disk_shape_replacement_allowed": True,
+                "legacy_editor_state_rows_replaced": True,
+                "legacy_editor_state_projection_source": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+                "legacy_disk_shape_replacement_schema": NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA,
+                "legacy_editor_state_compatibility_key_preserved": True,
+                "final_cutover_ready": True,
+                "final_cutover_schema": NLE_FINAL_CUTOVER_APPROVAL_SCHEMA,
+            }
+            storage = build_storage_project_payload(copy.deepcopy(project))
+            expected_text = "final cutover canonical first"
+            storage["nle_snapshot"]["sequences"][0]["captions"][0]["text"] = expected_text
+            project_path.write_bytes(project_io._pack_project_payload(storage))
+
+            clear_project_file_cache(str(project_path))
+            loaded = read_project_file(str(project_path))
+            loaded_rows = project_segments_to_editor(loaded, include_analysis_candidates=False)
+            loaded_state = loaded.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            write_project_file(str(project_path), loaded)
+            storage_after = read_project_storage_payload(str(project_path))
+            cached = read_project_file(str(project_path))
+            cached_state = cached.get(NLE_PROJECT_STATE_RUNTIME_KEY)
+            write_project_file(str(project_path), cached)
+            storage_after_cache_hit = read_project_storage_payload(str(project_path))
+            clear_project_file_cache(str(project_path))
+            reloaded = read_project_file(str(project_path))
+            reloaded_rows = project_segments_to_editor(reloaded, include_analysis_candidates=False)
+
+        editor_state_rows = project_segments_to_editor(
+            {"editor_state": storage_after.get("editor_state") or {}, "video": storage_after.get("video") or {}},
+            include_analysis_candidates=False,
+        )
+        policy = storage_after["nle_persistence"]
+        self.assertTrue(approved_final_cutover_requested(storage_after))
+        self.assertEqual(policy["final_cutover_schema"], NLE_FINAL_CUTOVER_APPROVAL_SCHEMA)
+        self.assertTrue(policy["final_cutover_ready"])
+        self.assertEqual(policy["default_project_authority"], NLE_SNAPSHOT_CANONICAL_LOAD_OWNER)
+        self.assertTrue(policy["default_project_authority_changed"])
+        self.assertFalse(policy["default_project_authority_unchanged"])
+        self.assertTrue(policy["legacy_editor_state_compatibility_key_preserved"])
+        self.assertTrue(policy["legacy_editor_state_preserved_for_rollback"])
+        self.assertTrue(policy["legacy_disk_shape_replacement_allowed"])
+        self.assertEqual(loaded_rows[0]["text"], expected_text)
+        self.assertEqual(reloaded_rows[0]["text"], expected_text)
+        self.assertEqual(editor_state_rows[0]["text"], expected_text)
+        self.assertEqual(_row_signature(editor_state_rows), _row_signature(reloaded_rows))
+        self.assertIsInstance(loaded_state, NLEProjectState)
+        self.assertIsInstance(cached_state, NLEProjectState)
+        self.assertTrue(storage_after["editor_state"]["legacy_disk_shape_replacement"]["final_cutover_ready"])
+        self.assertTrue(storage_after["editor_state"]["subtitles"]["legacy_editor_state_compatibility_key_preserved"])
+        self.assertTrue(
+            storage_after["editor_state"]["rendering"]["subtitle_canvas"][
+                "legacy_editor_state_compatibility_key_preserved"
+            ]
+        )
+        self.assertEqual(
+            storage_after["nle_snapshot"]["sequences"][0]["captions"][0]["text"],
+            expected_text,
+        )
         self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after)
         self.assertIn(NLE_PROJECT_STATE_RUNTIME_KEY, storage_after_cache_hit)
         self.assertNotIn("nle", storage_after)

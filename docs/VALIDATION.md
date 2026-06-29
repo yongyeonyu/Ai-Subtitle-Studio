@@ -193,25 +193,26 @@ Focused guards:
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_nle_canonical_load_owner_review_packet.py tests/test_nle_persistence_cutover_audit.py
 ```
 
-## G2 NLE canonical load opt-in / gate matrix audit
+## G2 NLE final cutover-ready opt-in / gate matrix audit
 
 For canonical load-owner preflight work, run the persistence cutover audit
-directly and require the gate matrix to stay explicit about what is still
-blocked:
+directly and require the gate matrix to prove every source-app persistence
+load-owner guard before reporting ready:
 
 ```bash
 ./venv/bin/python tools/audit_nle_persistence_cutover.py \
-  --output-dir output/manual_verification/latest/nle_legacy_disk_shape_replacement_YYYYMMDD_HHMM
+  --output-dir output/manual_verification/latest/nle_final_cutover_ready_YYYYMMDD_HHMM
 ```
 
-The current expected state is audit evidence only: `status=blocked`,
-`persistence_cutover_ready=false`, `overall_stoplight=red`, ready/blocked gates
-`11/1`, current canonical owner `nle_snapshot` for explicit standalone snapshot
-opt-in payloads only, target candidate `nle_snapshot`,
+The current expected state is explicit source-app persistence evidence only:
+`status=ready`, `persistence_cutover_ready=true`, blockers `[]`,
+`overall_stoplight=green`, ready/blocked gates `12/0`, current canonical owner
+`nle_snapshot` for explicit final-policy payloads only, target candidate
+`nle_snapshot`,
 `nle_snapshot_canonical_load_source_allowed=ready`,
 `runtime_project_state_persistence_allowed=ready`,
-`legacy_disk_shape_replacement_allowed=ready`, and
-`not_disk_format_cutover` plus `not_ui_change` true. The canonical opt-in guard
+`legacy_disk_shape_replacement_allowed=ready`, and `final_cutover_ready=ready`.
+The canonical opt-in guard
 must prove standalone `nle_snapshot` rows load and resave through
 `read_project_file()`, `project_segments_to_editor()`, and
 `write_project_file()` while legacy `editor_state` remains preserved for
@@ -222,12 +223,17 @@ empty, and ambiguous dual-owner payloads must fail closed to legacy rows.
 The legacy disk-shape replacement guard must prove legacy-compatible
 `editor_state` rows can be regenerated from approved `nle_snapshot` rows only
 under the distinct owner-approved replacement policy, while Direct SRT
-precedence is preserved. The remaining blocked gate is `final_cutover_ready`.
+precedence is preserved. The final guard must prove the distinct final schema,
+`default_project_authority=nle_snapshot`, compatibility `editor_state` key
+retention, cache-hit hydration, forged-policy blocking, Direct SRT precedence,
+roughcut/readback/render/export guards, and no top-level/readback/quarantine
+persistence. This is not UI/UX, STT/cache, full QA, package signing/upload, or
+App Store submission proof.
 
 Focused guards:
 
 ```bash
-./venv/bin/python -m py_compile core/project/nle_snapshot.py core/project/nle_persistence_guard.py core/project/project_io.py core/project/project_format.py core/runtime/config.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py
+./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/project_io.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py tests/test_macos_bundle_runtime_paths.py
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py
 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"
 ```

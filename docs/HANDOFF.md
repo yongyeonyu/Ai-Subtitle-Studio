@@ -33,7 +33,50 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-29 v04.01.30 / G2 Legacy Disk Shape Replacement Opt-In Proof
+## Current Handoff - 2026-06-29 v04.01.31 / G2 Final Cutover Ready Opt-In Proof
+
+### Scope
+
+- Completed the G2 final cutover-ready opt-in proof slice for source-app project persistence load ownership.
+- Bumped source-app version and project schema from `04.01.30` to `04.01.31`.
+- Extended `core/project/nle_persistence_guard.py`, `core/project/project_io.py`, and `core/project/project_format.py`.
+- Extended `tools/audit_nle_persistence_cutover.py` and focused NLE persistence tests.
+- Generated refreshed NLE persistence cutover evidence for the current app version.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.31`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.31`.
+- NLE audit: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md`.
+- Current G2 final policy state: `status=ready`, `prep_ready=true`, `persistence_cutover_ready=true`, blockers `[]`, overall stoplight `green`, ready/blocked gates `12/0`.
+- `final_cutover_ready` is now ready only for the distinct owner-approved final policy tied to standalone `nle_snapshot` canonical source.
+- Loaded/runtime/reloaded/storage snapshot/runtime/editor_state first caption text remains `final cutover canonical first`; cache-hit read/resave hydrates runtime state; forged final policy is blocked; Direct SRT precedence is preserved.
+- `editor_state` remains present as a compatibility projection. This does not mean dual canonical ownership and does not remove the compatibility key.
+- This is explicit source-app persistence load-owner proof only. It is not per-pixel NLE writes, UI/UX change, STT/cache default change, full QA, signed package, upload, owner metadata completion, or App Store submission proof.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/project_io.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+- Focused NLE guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `34 passed`.
+- Audit generation: `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156` -> `status=ready`, ready/blocked gates `12/0`, blockers `[]`.
+- Project/status guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.31`, `PROJECT_SCHEMA_VERSION=04.01.31`.
+- `git diff --check -- .` -> pass.
+- Three sub-agent reviews were collected for architecture boundary, QE false-positive guards, and editor-workflow wording. Jammini `--status` resolved the active route and Jammini received a bounded scout task, but no fresh physical Jammini result file arrived before this slice closed; `.agents/sentinel/handoffs/20260629-070211-watchdog-handoff-probe.md` remains the latest physical route proof.
+
+### Remaining Risks
+
+- G0 has owner approval to proceed, but remains blocked on Apple Distribution and 3rd Party Mac Developer Installer identities, signed App Store `.pkg`, strict content-bound `codesign`, content-bound `pkgutil --check-signature`, sandbox smoke, content-bound App Store Connect validation, upload/submission proof, and owner-approved metadata values JSON.
+- G1 collect-cache/default promotion remains owner-review gated; any future default change must be one cache at a time with a rollback commit boundary and focused same-fixture proof.
+- G2 future editor-owner expansion, per-pixel NLE writes, and any UI/UX-visible editing behavior still require separate owner-approved proof.
+
+### Next Recommended Action
+
+- Continue remaining active groups from `docs/planning_queue/ACTION_ITEMS.md`: G0 package/signing/metadata blockers, G1 cache/default owner review, or G3 additional active-worker proof if selected.
+- If continuing G0, collect owner-approved metadata values JSON or configure Apple Distribution / installer identities before package/upload execution.
+- If continuing G2, keep `editor_state` compatibility-key removal and per-pixel write behavior out of scope until a new explicit gate exists.
+
+## Previous Handoff - 2026-06-29 v04.01.30 / G2 Legacy Disk Shape Replacement Opt-In Proof
 
 ### Scope
 

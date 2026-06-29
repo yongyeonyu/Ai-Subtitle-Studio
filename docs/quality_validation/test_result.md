@@ -1,5 +1,32 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.31 G2 Final Cutover Ready Opt-In Proof - 2026-06-29 KST
+
+- 실행 모드: source-app G2 owner-approved final project persistence load-owner opt-in proof, forged-policy guard, cache-hit hydration guard, Direct SRT precedence guard, compatibility `editor_state` projection guard, and version/schema bump.
+- 결과: pass for the bounded final cutover-ready proof. The NLE persistence audit reports ready for the explicit approved payload, while UI/UX, STT/cache defaults, full QA, package signing/upload, owner metadata, and App Store submission remain separate proof surfaces.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.31.md`
+  - Audit report: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md`
+  - Audit JSON: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.json`
+  - Completed archive: `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040131-g2-final-cutover-ready-opt-in-proof`
+- 실제 결과:
+  - App version updated to `04.01.31`.
+  - Project schema version updated to `04.01.31`.
+  - Final source-app project persistence load-owner policy is accepted only when the distinct final schema and all approved snapshot/runtime/legacy-projection policy flags are present.
+  - `default_project_authority=nle_snapshot` is declared for the approved payload; the `editor_state` key remains present as a compatibility projection and does not mean dual canonical ownership.
+  - Cache-hit read/resave hydrates approved runtime state and preserves `_nle_project_state` only for the explicit approved payload.
+  - Forged final policy is blocked, Direct SRT precedence is preserved, and top-level/readback/quarantine payloads do not persist.
+  - Audit state: `status=ready`, `app_version=04.01.31`, `prep_ready=true`, `persistence_cutover_ready=true`, blockers `[]`, overall stoplight `green`, ready/blocked gates `12/0`.
+  - Ready gates added/kept: `nle_snapshot_canonical_load_source_allowed`, `runtime_project_state_persistence_allowed`, `legacy_disk_shape_replacement_allowed`, and `final_cutover_ready`.
+  - This is explicit source-app persistence load-owner proof only; it is not `editor_state` key removal, per-pixel NLE writes, UI/UX change, STT/cache default change, full QA, or App Store package/signing/upload/submission proof.
+- 검증:
+  - `./venv/bin/python -m py_compile core/project/nle_persistence_guard.py core/project/project_format.py core/project/project_io.py tools/audit_nle_persistence_cutover.py tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py core/runtime/config.py tests/test_macos_bundle_runtime_paths.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_nle_persistence_guard.py tests/test_nle_persistence_cutover_audit.py tests/test_macos_bundle_runtime_paths.py` -> `34 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python tools/audit_nle_persistence_cutover.py --output-dir output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156` -> `status=ready`, overall stoplight `green`, ready/blocked gates `12/0`, blockers `[]`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 80 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.31`, `PROJECT_SCHEMA_VERSION=04.01.31`.
+  - `git diff --check -- .` -> pass.
+
 ## v04.01.30 G2 Legacy Disk Shape Replacement Opt-In Proof - 2026-06-29 KST
 
 - 실행 모드: source-app G2 owner-approved legacy-compatible `editor_state` row replacement opt-in proof, forged-policy guard, cache-hit hydration guard, Direct SRT precedence guard, and version/schema bump.

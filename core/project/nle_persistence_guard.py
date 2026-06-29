@@ -11,6 +11,7 @@ NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_runtime_
 NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA = (
     "ai_subtitle_studio.nle_legacy_disk_shape_replacement_approval.v1"
 )
+NLE_FINAL_CUTOVER_APPROVAL_SCHEMA = "ai_subtitle_studio.nle_final_cutover_approval.v1"
 NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID = "owner_approved_20260628"
 NLE_LEGACY_CANONICAL_LOAD_OWNER = "legacy_editor_state"
 NLE_SNAPSHOT_CANONICAL_LOAD_OWNER = "nle_snapshot"
@@ -119,6 +120,33 @@ def approved_legacy_disk_shape_replacement_requested(project: dict[str, Any] | N
     )
 
 
+def approved_final_cutover_requested(project: dict[str, Any] | None) -> bool:
+    if not approved_nle_snapshot_canonical_load_requested(project):
+        return False
+    policy = project.get("nle_persistence")
+    if not isinstance(policy, dict):
+        return False
+    return (
+        bool(policy.get("persist_runtime_project_state"))
+        and bool(policy.get("runtime_project_state_persistence_allowed"))
+        and bool(policy.get("legacy_disk_shape_replacement_allowed"))
+        and bool(policy.get("legacy_editor_state_rows_replaced"))
+        and bool(policy.get("legacy_editor_state_preserved_for_rollback"))
+        and bool(policy.get("legacy_editor_state_compatibility_key_preserved"))
+        and bool(policy.get("default_project_authority_changed"))
+        and not bool(policy.get("default_project_authority_unchanged"))
+        and bool(policy.get("final_cutover_ready"))
+        and not bool(policy.get("persist_top_level_nle"))
+        and str(policy.get("canonical_load_owner") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and str(policy.get("default_project_authority") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and str(policy.get("approval") or "") == NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID
+        and str(policy.get("legacy_disk_shape_replacement_schema") or "")
+        == NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA
+        and str(policy.get("legacy_editor_state_projection_source") or "") == NLE_SNAPSHOT_CANONICAL_LOAD_OWNER
+        and str(policy.get("final_cutover_schema") or "") == NLE_FINAL_CUTOVER_APPROVAL_SCHEMA
+    )
+
+
 def approved_top_level_nle_canonical_load_requested(project: dict[str, Any] | None) -> bool:
     if not approved_top_level_nle_persistence_requested(project):
         return False
@@ -185,6 +213,21 @@ def nle_legacy_disk_shape_replacement_approval_payload(*, source: str = "") -> d
         "default_project_authority_unchanged": True,
         "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
         "final_cutover_ready": False,
+    }
+
+
+def nle_final_cutover_approval_payload(*, source: str = "") -> dict[str, Any]:
+    return {
+        "schema": NLE_FINAL_CUTOVER_APPROVAL_SCHEMA,
+        "approval": NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID,
+        "source": str(source or "project_storage"),
+        "final_cutover_ready": True,
+        "default_project_authority": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
+        "default_project_authority_changed": True,
+        "default_project_authority_unchanged": False,
+        "legacy_editor_state_compatibility_key_preserved": True,
+        "legacy_editor_state_preserved_for_rollback": True,
+        "canonical_load_owner": NLE_SNAPSHOT_CANONICAL_LOAD_OWNER,
     }
 
 
@@ -349,6 +392,7 @@ def _is_unapproved_nle_payload(key: str, value: Any, *, project: dict[str, Any] 
         and (
             approved_runtime_nle_project_state_persistence_requested(project)
             or approved_legacy_disk_shape_replacement_requested(project)
+            or approved_final_cutover_requested(project)
         )
         and _is_approved_runtime_nle_project_state_payload(value)
     ):
@@ -425,6 +469,7 @@ __all__ = [
     "NLE_PERSISTENCE_QUARANTINE_KEY",
     "NLE_LEGACY_CANONICAL_LOAD_OWNER",
     "NLE_LEGACY_DISK_SHAPE_REPLACEMENT_APPROVAL_SCHEMA",
+    "NLE_FINAL_CUTOVER_APPROVAL_SCHEMA",
     "NLE_RUNTIME_STATE_PERSISTENCE_APPROVAL_SCHEMA",
     "NLE_SNAPSHOT_CANONICAL_LOAD_OWNER",
     "NLE_SNAPSHOT_PERSISTENCE_APPROVAL_ID",
@@ -432,6 +477,7 @@ __all__ = [
     "NLE_TOP_LEVEL_CANONICAL_LOAD_OWNER",
     "NLE_TOP_LEVEL_PERSISTENCE_APPROVAL_SCHEMA",
     "UNAPPROVED_NLE_PERSISTENCE_KEYS",
+    "approved_final_cutover_requested",
     "approved_legacy_disk_shape_replacement_requested",
     "approved_runtime_nle_project_state_payload",
     "approved_runtime_nle_project_state_persistence_requested",
@@ -442,6 +488,7 @@ __all__ = [
     "approved_top_level_nle_canonical_load_requested",
     "approved_top_level_nle_persistence_requested",
     "assert_no_unapproved_nle_persistence_fields",
+    "nle_final_cutover_approval_payload",
     "nle_legacy_disk_shape_replacement_approval_payload",
     "nle_runtime_state_persistence_approval_payload",
     "nle_snapshot_canonical_load_approval_payload",
