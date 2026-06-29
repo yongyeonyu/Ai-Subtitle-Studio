@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
-from PyQt6.QtGui import QAction
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QAction, QColor, QPainter, QPen
+from PyQt6.QtCore import QRect, QSize, QTimer, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QSplitterHandle,
     QTabWidget,
     QTableWidget,
     QTextEdit,
@@ -40,6 +41,96 @@ from ui.roughcut.roughcut_style_panel import DEFAULT_ROUGHCUT_EXPORT_STYLE, Roug
 from ui.roughcut.roughcut_table import RoughcutTableMixin
 from ui.roughcut.roughcut_title_panel import RoughcutTitlePanel
 from ui.style import COLORS, button_style, label_style, line_icon, panel_style
+
+
+class _RoughcutResizeHandle(QSplitterHandle):
+    def __init__(self, orientation: Qt.Orientation, parent: QSplitter, marker: str, object_name: str):
+        super().__init__(orientation, parent)
+        self._marker = marker
+        self._hovered = False
+        self._marker_anchor: QWidget | None = None
+        self.setObjectName(object_name)
+        self.setAccessibleName(object_name)
+        self.setMouseTracking(True)
+        self.setToolTip("드래그해서 프레임 크기 조절")
+        self.setCursor(
+            Qt.CursorShape.SplitHCursor
+            if orientation == Qt.Orientation.Horizontal
+            else Qt.CursorShape.SplitVCursor
+        )
+
+    def sizeHint(self) -> QSize:
+        if self.orientation() == Qt.Orientation.Horizontal:
+            return QSize(28, 96)
+        return QSize(96, 28)
+
+    def set_marker_anchor(self, anchor: QWidget) -> None:
+        self._marker_anchor = anchor
+        self.update()
+
+    def enterEvent(self, event):  # noqa: N802 - Qt override
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802 - Qt override
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):  # noqa: N802 - Qt override
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#0F1518"))
+        border_pen = QPen(QColor("#00C8FF" if self._hovered else "#2D3942"))
+        border_pen.setWidth(1)
+        painter.setPen(border_pen)
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        painter.setPen(QColor("#00C8FF" if self._hovered else "#DCE3EA"))
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(14)
+        painter.setFont(font)
+        painter.drawText(self._marker_rect(), Qt.AlignmentFlag.AlignCenter, self._marker)
+        painter.end()
+
+    def _marker_rect(self) -> QRect:
+        if self._marker_anchor is None:
+            return self.rect()
+        anchor_center = self.mapFromGlobal(self._marker_anchor.mapToGlobal(self._marker_anchor.rect().center()))
+        if self.orientation() == Qt.Orientation.Horizontal:
+            marker_height = 28
+            y_pos = max(0, min(self.height() - marker_height, anchor_center.y() - marker_height // 2))
+            return QRect(0, y_pos, self.width(), marker_height)
+        marker_width = 28
+        x_pos = max(0, min(self.width() - marker_width, anchor_center.x() - marker_width // 2))
+        return QRect(x_pos, 0, marker_width, self.height())
+
+
+class _RoughcutFrameSplitter(QSplitter):
+    def __init__(self, orientation: Qt.Orientation, marker: str, handle_object_name: str, parent: QWidget | None = None):
+        super().__init__(orientation, parent)
+        self._marker = marker
+        self._handle_object_name = handle_object_name
+        self.setChildrenCollapsible(False)
+        self.setHandleWidth(28)
+
+    def createHandle(self) -> QSplitterHandle:  # noqa: N802 - Qt override
+        return _RoughcutResizeHandle(self.orientation(), self, self._marker, self._handle_object_name)
+
+    def refresh_handle_metadata(self) -> None:
+        handle = self.handle(1)
+        if handle is None:
+            return
+        handle.setObjectName(self._handle_object_name)
+        handle.setAccessibleName(self._handle_object_name)
+
+    def resize_handle(self) -> _RoughcutResizeHandle | None:
+        handle = self.handle(1)
+        if isinstance(handle, _RoughcutResizeHandle):
+            return handle
+        return None
 
 
 class RoughcutWidget(
@@ -148,34 +239,72 @@ class RoughcutWidget(
         root.setSpacing(6)
         self.safety_filter_combo = self._build_safety_filter_combo()
 
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_splitter.setChildrenCollapsible(False)
-        main_splitter.setStyleSheet("QSplitter::handle { background: #0F1518; width: 2px; }")
+        main_splitter = _RoughcutFrameSplitter(
+            Qt.Orientation.Horizontal,
+            "ㅓ",
+            "roughcut_width_resize_handle",
+        )
+        self.roughcut_frame_splitter = main_splitter
         root.addWidget(main_splitter, stretch=1)
 
         self.roughcut_frame = QFrame()
-        self.roughcut_frame.setStyleSheet(panel_style("surface"))
+        self.roughcut_frame.setObjectName("RoughcutScenarioMaterialHost")
+        self.roughcut_frame.setStyleSheet(
+            f"QFrame#RoughcutScenarioMaterialHost {{ background: {COLORS['surface']}; border: none; border-radius: 0px; }}"
+        )
         left_lay = QVBoxLayout(self.roughcut_frame)
         left_lay.setContentsMargins(6, 6, 6, 6)
         left_lay.setSpacing(6)
+        self.scenario_box = self._build_frame_only_box("scenario_box", "#F5F7FA")
+        self.material_box = self._build_frame_only_box("material_box", "#0A84FF")
+        left_lay.addWidget(self.scenario_box, stretch=1)
+        left_lay.addWidget(self.material_box, stretch=1)
+
+        self._legacy_left_host = self._build_hidden_legacy_host(self.roughcut_frame)
+        legacy_left_lay = QVBoxLayout(self._legacy_left_host)
+        legacy_left_lay.setContentsMargins(0, 0, 0, 0)
+        legacy_left_lay.setSpacing(0)
         self.candidate_preview_frame = self._build_candidate_preview_frame()
-        left_lay.addWidget(self.candidate_preview_frame, stretch=0)
+        legacy_left_lay.addWidget(self.candidate_preview_frame)
         self.major_panel = RoughcutMajorPanel()
         self.major_panel.minorSelected.connect(self._select_chapter_id_from_major_panel)
         self.major_panel.previewRequested.connect(self._preview_chapter_id_from_major_panel)
         self.major_panel.segmentOrderChanged.connect(self._on_major_segment_order_changed)
         self.major_panel.chapterOrderChanged.connect(self._on_major_chapter_order_changed)
         self.table = self._build_table()
-        left_lay.addWidget(self.major_panel, stretch=1)
+        legacy_left_lay.addWidget(self.major_panel)
         main_splitter.addWidget(self.roughcut_frame)
 
         side = QFrame()
-        side.setStyleSheet(panel_style("surface"))
+        side.setObjectName("RoughcutVideoSettingsHost")
+        side.setStyleSheet(
+            f"QFrame#RoughcutVideoSettingsHost {{ background: {COLORS['surface']}; border: none; border-radius: 0px; }}"
+        )
+        self.roughcut_side_frame = side
         side.setMinimumWidth(396)
         side.setMaximumWidth(468)
         side_lay = QVBoxLayout(side)
         side_lay.setContentsMargins(6, 6, 6, 6)
         side_lay.setSpacing(6)
+        self.video_box = self._build_frame_only_box("video_box", "#FFD60A")
+        self.settings_box = self._build_frame_only_box("settings_box", "#FF453A")
+        self.right_frame_splitter = _RoughcutFrameSplitter(
+            Qt.Orientation.Vertical,
+            "ㅏ",
+            "roughcut_height_resize_handle",
+        )
+        self.right_frame_splitter.addWidget(self.video_box)
+        self.right_frame_splitter.addWidget(self.settings_box)
+        self.right_frame_splitter.setStretchFactor(0, 3)
+        self.right_frame_splitter.setStretchFactor(1, 5)
+        self.right_frame_splitter.setSizes([360, 660])
+        self.right_frame_splitter.refresh_handle_metadata()
+        side_lay.addWidget(self.right_frame_splitter, stretch=1)
+
+        self._legacy_side_host = self._build_hidden_legacy_host(side)
+        legacy_side_lay = QVBoxLayout(self._legacy_side_host)
+        legacy_side_lay.setContentsMargins(0, 0, 0, 0)
+        legacy_side_lay.setSpacing(0)
         self.video_bridge_frame = QFrame()
         self.video_bridge_frame.setStyleSheet("QFrame { background: #0A0F12; border: 1px solid #2D3942; border-radius: 8px; }")
         self.video_bridge_layout = QVBoxLayout(self.video_bridge_frame)
@@ -198,9 +327,9 @@ class RoughcutWidget(
         self.video_bridge_layout.addWidget(self.video_bridge_title_lbl)
         self.video_bridge_layout.addWidget(self.video_bridge_hint_lbl)
         self.video_bridge_layout.addWidget(self.video_host, stretch=1)
-        side_lay.addWidget(self.video_bridge_frame, stretch=3)
+        legacy_side_lay.addWidget(self.video_bridge_frame)
         self.player_menu_frame = self._build_player_menu_frame()
-        side_lay.addWidget(self.player_menu_frame, stretch=0)
+        legacy_side_lay.addWidget(self.player_menu_frame)
 
         self.bottom_panel = self._build_bottom_panel()
         self.bottom_tabs = RoughcutBottomPanel(self.bottom_panel)
@@ -217,13 +346,39 @@ class RoughcutWidget(
         self.title_panel.refreshRequested.connect(self._refresh_title_suggestions)
         self.style_panel.styleSaved.connect(self._save_roughcut_export_style)
         self.bottom_tabs.tabs.addTab(self.log_panel, "로그")
-        side_lay.addWidget(self.bottom_tabs, stretch=5)
+        legacy_side_lay.addWidget(self.bottom_tabs)
         main_splitter.addWidget(side)
         main_splitter.setStretchFactor(0, 6)
         main_splitter.setStretchFactor(1, 2)
         main_splitter.setSizes([1640, 420])
+        main_splitter.refresh_handle_metadata()
+        width_handle = main_splitter.resize_handle()
+        height_handle = self.right_frame_splitter.resize_handle()
+        if width_handle is not None and height_handle is not None:
+            width_handle.set_marker_anchor(height_handle)
+            height_handle.set_marker_anchor(width_handle)
 
         self._set_empty_state()
+
+    def _build_frame_only_box(self, object_name: str, border_color: str) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName(object_name)
+        frame.setStyleSheet(
+            "QFrame { "
+            "background: #0A0F12; "
+            f"border: 2px solid {border_color}; "
+            "border-radius: 8px; "
+            "}"
+        )
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        return frame
+
+    def _build_hidden_legacy_host(self, parent: QWidget) -> QWidget:
+        host = QWidget(parent)
+        host.setObjectName("roughcutLegacyHiddenHost")
+        host.setFixedSize(0, 0)
+        host.hide()
+        return host
 
     def _build_candidate_preview_frame(self) -> QWidget:
         frame = QFrame()

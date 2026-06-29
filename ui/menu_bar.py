@@ -476,15 +476,30 @@ class GlobalMenuBar(QWidget):
             "QToolButton { "
             f"background: {bg}; color: {text}; border: 1px solid {accent}; "
             f"border-radius: 10px; padding: {MENU_TEXT_UNDER_ICON_PADDING}; font-size: 11px; font-weight: 700; "
+            "outline: none; "
             "} "
             f"QToolButton:hover {{ background: {hover}; color: #F7FBFF; border-color: {accent}; }} "
+            f"QToolButton:focus {{ background: {bg}; color: {text}; border: 1px solid {accent}; outline: none; }} "
             f"QToolButton:pressed {{ background: {pressed}; color: #FFFFFF; border: 1px solid {accent}; padding: {MENU_TEXT_UNDER_ICON_PADDING}; }} "
             "QToolButton:disabled { color: #66727D; background: #11171C; border-color: #22303A; }"
         )
 
+    def _prepare_menu_button(self, btn: QToolButton, accent: str, emphasis: str) -> QToolButton:
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setProperty("menuAccent", accent)
+        btn.setProperty("menuEmphasis", emphasis)
+        self._apply_menu_button_style(btn)
+        self._tool_buttons.append(btn)
+        return btn
+
     def _apply_menu_button_style(self, btn, *, checked: bool = False):
         accent = str(btn.property("menuAccent") or COLORS["accent"])
         emphasis = str(btn.property("menuEmphasis") or "toolbar")
+        signature = f"{accent}|{emphasis}|{int(bool(checked))}"
+        if str(btn.property("menuStyleSignature") or "") == signature:
+            return
+        btn.setProperty("menuStyleSignature", signature)
         btn.setStyleSheet(self._menu_button_style(accent, checked=checked, emphasis=emphasis))
 
     def _small_button(self, text, icon_name, slot, color=None):
@@ -496,12 +511,8 @@ class GlobalMenuBar(QWidget):
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(MENU_SMALL_WIDTH)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setProperty("menuAccent", accent)
-        btn.setProperty("menuEmphasis", "toolbar")
-        self._apply_menu_button_style(btn)
+        self._prepare_menu_button(btn, accent, "toolbar")
         btn.clicked.connect(slot)
-        self._tool_buttons.append(btn)
         return btn
 
     def _wide_button(self, text, icon_name, slot, *, kind="toolbar", min_width=MENU_WIDE_WIDTH, accent=MENU_RIGHT_ACCENT):
@@ -513,13 +524,9 @@ class GlobalMenuBar(QWidget):
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(min_width)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setProperty("menuAccent", accent)
-        btn.setProperty("menuEmphasis", "toolbar")
-        self._apply_menu_button_style(btn)
+        self._prepare_menu_button(btn, accent, "toolbar")
         btn.setProperty("expandedMinWidth", min_width)
         btn.clicked.connect(slot)
-        self._tool_buttons.append(btn)
         return btn
 
     def _action_button(self, text, icon_name, slot, *, accent=MENU_CENTER_ACCENT):
@@ -531,12 +538,8 @@ class GlobalMenuBar(QWidget):
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         btn.setFixedHeight(MENU_BUTTON_HEIGHT)
         btn.setFixedWidth(MENU_ACTION_WIDTH)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setProperty("menuAccent", accent)
-        btn.setProperty("menuEmphasis", "action")
-        self._apply_menu_button_style(btn)
+        self._prepare_menu_button(btn, accent, "action")
         btn.clicked.connect(slot)
-        self._tool_buttons.append(btn)
         return btn
 
     def _button_badge_text(self, icon_name: str, text: str) -> str:

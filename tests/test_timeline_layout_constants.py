@@ -195,7 +195,7 @@ class TimelineLayoutConstantsTests(unittest.TestCase):
 
             border = timeline._focus_border
             clearance = timeline.rect().bottom() - border.geometry().bottom()
-            self.assertEqual(TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE, 0)
+            self.assertEqual(TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE, FOCUS_BORDER_WIDTH)
             self.assertEqual(clearance, TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE)
         finally:
             timeline.close()

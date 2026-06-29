@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtWidgets import QApplication, QWidget
 
@@ -65,6 +66,13 @@ class GlobalMenuBarSubtitleOutputTests(unittest.TestCase):
         self.assertTrue(bar.btn_precision_refine.isEnabled())
         self.assertEqual(bar.btn_precision_refine.property("qmlAccent"), MENU_PRECISION_COMPLETE_ACCENT)
         self.assertEqual(bar.btn_precision_refine.toolTip(), "정밀 자막 작업 완료")
+
+    def test_global_menu_buttons_do_not_draw_default_focus_box(self):
+        _, _editor, bar = self._make_bar()
+
+        for button in bar._tool_buttons:
+            self.assertEqual(button.focusPolicy(), Qt.FocusPolicy.NoFocus)
+            self.assertIn("outline: none", button.styleSheet())
 
     def test_precision_button_confirms_before_starting_editor_refine(self):
         _, editor, bar = self._make_bar()

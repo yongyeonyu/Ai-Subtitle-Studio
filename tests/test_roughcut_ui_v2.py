@@ -37,6 +37,49 @@ class RoughcutUiV2Tests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_roughcut_page_shows_frame_only_boxes_while_legacy_controls_stay_hidden(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1280, 720)
+            widget.show()
+            self.app.processEvents()
+
+            for name in ("scenario_box", "material_box", "video_box", "settings_box"):
+                box = widget.findChild(QWidget, name)
+                self.assertIsNotNone(box)
+                self.assertTrue(box.isVisible())
+
+            self.assertFalse(widget.candidate_preview_frame.isVisible())
+            self.assertFalse(widget.major_panel.isVisible())
+            self.assertFalse(widget.video_bridge_frame.isVisible())
+            self.assertFalse(widget.player_menu_frame.isVisible())
+            self.assertFalse(widget.bottom_tabs.isVisible())
+            self.assertTrue(hasattr(widget, "table"))
+            self.assertTrue(hasattr(widget, "export_menu_btn"))
+            self.assertIn("border: none", widget.roughcut_frame.styleSheet())
+            self.assertIn("border: none", widget.roughcut_side_frame.styleSheet())
+
+            width_handle = widget.roughcut_frame_splitter.handle(1)
+            height_handle = widget.right_frame_splitter.handle(1)
+            self.assertEqual(width_handle.objectName(), "roughcut_width_resize_handle")
+            self.assertEqual(height_handle.objectName(), "roughcut_height_resize_handle")
+            self.assertEqual(getattr(width_handle, "_marker", ""), "ㅓ")
+            self.assertEqual(getattr(height_handle, "_marker", ""), "ㅏ")
+            self.assertIs(getattr(width_handle, "_marker_anchor", None), height_handle)
+            self.assertIs(getattr(height_handle, "_marker_anchor", None), width_handle)
+            self.assertGreaterEqual(width_handle.sizeHint().width(), 28)
+            self.assertGreaterEqual(height_handle.sizeHint().height(), 28)
+
+            widget.roughcut_frame_splitter.setSizes([900, 320])
+            widget.right_frame_splitter.setSizes([180, 420])
+            self.app.processEvents()
+            self.assertEqual(len(widget.roughcut_frame_splitter.sizes()), 2)
+            self.assertEqual(len(widget.right_frame_splitter.sizes()), 2)
+            self.assertGreater(widget.roughcut_frame_splitter.sizes()[1], 0)
+            self.assertGreater(widget.right_frame_splitter.sizes()[0], 0)
+        finally:
+            widget.close()
+
     def test_major_log_and_title_panels_render_without_removing_legacy_table(self):
         widget = RoughcutWidget()
         try:

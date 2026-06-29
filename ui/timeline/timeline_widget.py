@@ -35,7 +35,7 @@ from ui.style import COLORS, button_style
 from core.settings import load_settings, save_settings
 from core.frame_time import frame_count, frame_to_sec, normalize_fps, sec_to_nearest_frame, snap_sec_to_frame
 
-TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE = 0
+TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE = FOCUS_BORDER_WIDTH
 
 
 def _scan_boundary_sec_value(item) -> float:
@@ -864,16 +864,19 @@ class TimelineWidget(TimelineTimeWindowMixin, QWidget):
         border = getattr(self, "_focus_border", None)
         if border is None:
             return
-        # 변경 금지: 하단 마진에는 포커스 박스의 파란 선 하나만 들어가야 한다.
-        # 별도 하단선을 추가하지 말고 박스 높이만 border 두께만큼 줄인다.
-        border.setGeometry(
+        # 하단 인접 글로벌 메뉴에 포커스 박스가 붙으면 마지막 픽셀이 잘려 보인다.
+        # 별도 하단선을 추가하지 말고 박스 자체를 border 두께만큼 안쪽으로 넣는다.
+        next_geometry = QRect(
             0,
             0,
             max(1, self.width()),
             max(1, self.height() - TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE),
         )
+        if border.geometry() != next_geometry:
+            border.setGeometry(next_geometry)
         visible = self._has_timeline_focus()
-        border.setVisible(visible)
+        if border.isVisible() != visible:
+            border.setVisible(visible)
         if visible:
             border.raise_()
 
@@ -924,9 +927,9 @@ class TimelineWidget(TimelineTimeWindowMixin, QWidget):
             left = inset
             top = inset
             right = max(left, self.width() - FOCUS_BORDER_WIDTH)
-            # 변경 금지: paintEvent의 백업 포커스 라인도 같은 좌표 정책을
-            # 써야 QSS 테두리와 서로 어긋나거나 하단에서 잘리지 않는다.
-            bottom = max(top, self.height() - FOCUS_BORDER_WIDTH)
+            # paintEvent의 백업 포커스 라인도 같은 좌표 정책을 써야 QSS
+            # 테두리와 어긋나거나 하단에서 잘리지 않는다.
+            bottom = max(top, self.height() - FOCUS_BORDER_WIDTH - TIMELINE_FOCUS_BORDER_BOTTOM_CLEARANCE)
             painter.drawLine(left, top, right, top)
             painter.drawLine(left, bottom, right, bottom)
             painter.drawLine(left, top, left, bottom)
