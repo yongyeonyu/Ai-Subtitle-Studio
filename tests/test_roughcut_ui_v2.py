@@ -70,6 +70,11 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(widget.material_card_preview_view.accessibleName(), "중분류 카드 Miro UML 미리보기")
             self.assertEqual(widget.material_card_preview_order, [1, 2, 3, 4, 5])
             self.assertEqual(len(widget.material_card_preview_nodes), 5)
+            self.assertEqual({node["y"] for node in widget.material_card_preview_nodes}, {58})
+            self.assertEqual(
+                [node["x"] for node in widget.material_card_preview_nodes],
+                [28, 206, 384, 562, 740],
+            )
             for index, node in enumerate(widget.material_card_preview_nodes, start=1):
                 self.assertEqual(node["id"], f"middle_segment_preview_node_{index:02d}")
                 self.assertLessEqual(node["width"], 132)

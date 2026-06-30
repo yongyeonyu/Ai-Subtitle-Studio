@@ -576,12 +576,12 @@ class RoughcutWidget(
         lay.addWidget(self.material_card_preview_view, stretch=1)
 
     def _material_preview_slot_positions(self) -> tuple[tuple[int, int], ...]:
-        return (
-            (28, 24),
-            (206, 72),
-            (384, 24),
-            (562, 72),
-            (740, 24),
+        start_x = 28
+        step_x = 178
+        row_y = 58
+        return tuple(
+            (start_x + (index * step_x), row_y)
+            for index in range(_ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT)
         )
 
     def _populate_material_miro_uml_preview_scene(self) -> None:
