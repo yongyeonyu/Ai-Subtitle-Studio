@@ -1,4 +1,7 @@
 # Sentinel Handoffs Index
+- `.agents/sentinel/handoffs/20260701-014800-refactoring-alignment-scout.md`
+- `.agents/sentinel/handoffs/20260701-014518-refactoring-plan-scout.md`
+- `.agents/sentinel/handoffs/20260701-013236-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260630-235823-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260630-013331-roughcut-full-plan-recheck.md`
 - `.agents/sentinel/handoffs/20260630-013300-watchdog-handoff-probe.md`

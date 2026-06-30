@@ -46,7 +46,7 @@ G0 lane, but signed package, validation, upload, and metadata proof remain open.
 | Folder | Role | Canonical pointers |
 | --- | --- | --- |
 | `planning_queue/` | Active queue, completed-action archive, rejected ideas, and lessons. | `ACTION_ITEMS.md`, `COMPLETED_ACTION_ITEMS.md`, `waste_action_item.md`, `lesson_n_learned.md`, `idea.md` |
-| `workflow_operations/` | Handoff, Jammini cooperation, Antigravity role docs, watchdog, packaging, and operational workflow. | `cooperation.md`, `anti_agents.md`, `macos_packaging.md`, `../HANDOFF.md`, `../agent_communication/README.md`, `../../.agents/sentinel/` |
+| `workflow_operations/` | Handoff, Jammini cooperation, Antigravity role docs, watchdog, packaging, refactoring coordination, and operational workflow. | `cooperation.md`, `anti_agents.md`, `macos_packaging.md`, `refactoring_plan.md`, `../HANDOFF.md`, `../agent_communication/README.md`, `../../.agents/sentinel/` |
 | `project_reference/` | Product README, repo structure, code map, owner maps, assets, and stable project references. | `PRODUCT_README.md`, `File_structure.txt`, `CODEMAP.md`, `LONG_FILE_OWNERSHIP_MAP.md`, `SUBTITLE_GENERATION_DOMAIN_MAP.md`, `icon_assets.md` |
 | `quality_validation/` | Validation commands, fixture rules, benchmark plans, and current result records. | `test_case.md`, `test_result.md`, `NAS_SUBTITLE_BENCHMARK_50_PLAN.md`, `NAS_SUBTITLE_BENCHMARK_RECORDING_CONTEXT.md`, `../VALIDATION.md` |
 | `product_behavior/` | User-visible behavior, submission readiness, UI/UX guardrails, color policy, and product policy. | `../APP_STORE_SUBMISSION_READINESS.md`, `apple_black_color_table.md`, `../PROJECT_STATE.md`, `../../AGENTS.md` |

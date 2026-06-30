@@ -1516,6 +1516,61 @@ Rollback:
 - If transcript-linked editing directly mutates media/subtitle rows without NLE preflight, disable transcript apply and keep it as suggestion-only.
 - If shortform caption/templates introduce cloud/account/social upload behavior or a second caption authority, keep the shortform slice local-preview-only until separately approved.
 
+### G4 Addendum: Storyboard Recommendation and Split/Merge Assist Engine
+
+Goal:
+
+- Add a non-destructive storyboard assistant that recommends the next useful card from the current storyboard connection state.
+- Add a non-destructive assistant that recommends middle-segment split/merge candidates from the current storyboard, subtitles, timing, topic/tag metadata, and cut-boundary context.
+- Prefer deterministic scoring first; use LLM only as an optional explanation, rationale, or top-N rerank helper.
+
+Dex/Jammini recommendation:
+
+- Do not make LLM the primary decision owner.
+- Build a deterministic candidate scorer first, then let LLM explain or lightly rerank the top candidates.
+- Keep all recommendations preview-only until the owner explicitly inserts/applies them.
+- Split/merge recommendations must never mutate editor rows, final subtitles, export output, or source media without an approved NLE commit boundary.
+- Existing Jammini scout basis: `.agents/sentinel/handoffs/20260629-152728-roughcut-recommendation-scout.md`, `.agents/sentinel/handoffs/20260629-152434-roughcut-split-merge-scout.md`, and `.agents/sentinel/handoffs/20260629-155855-initial-seeds-rewrite-scout.md`.
+
+Next-card recommendation:
+
+- Inputs: current storyboard graph, selected scenario lane, current card, unused/available cards, source time range, duration, topic, tags, subtitle snippet/summary, story role, manual relation scores, VAD/RMS/cut-boundary hints where available.
+- Output: ranked next-card suggestions with score, reason, relation type, and stale/review state.
+- Default scoring: topic/tag similarity, subtitle semantic continuity, speaker/subject continuity, time proximity, manual relation weight, duration fit, cut-boundary safety, and scenario-lane balance.
+- LLM role: generate readable rationale, alternative story-intent labels, and optional rerank of the deterministic top-N only.
+- Recommendation cards can be inserted/appended only by explicit user action.
+
+Split/merge recommendation:
+
+- Inputs: current storyboard graph, long cards, dense subtitle regions, silence/VAD gaps, cut-boundary confidence, topic shifts, duplicate/near-duplicate cards, manual relation links, and current scenario duration.
+- Split recommendations: suggest safe split points near subtitle boundaries, silence gaps, strong topic shifts, or high-confidence cut boundaries.
+- Merge recommendations: suggest adjacent or strongly related cards only when subtitle order, timing, topic continuity, and preview continuity are safe.
+- LLM role: explain why a split/merge may improve story flow; it must not choose unsafe timing or bypass NLE validation.
+- All split/merge suggestions stay preview-only until explicit user commit.
+
+Safety and authority:
+
+- Recommendations must not overwrite manual storyboard order, accepted notebooks, final subtitle rows, scenario exports, or original media.
+- If user-edited storyboard state exists, recommendations must be shown as suggestions, not auto-applied.
+- Any accepted split/merge/write-back must route through existing NLE commit/rollback guards.
+- Raw subtitle text, full paths, prompts, and full LLM responses must not be written to default logs.
+
+Validation:
+
+- Test deterministic next-card ranking with fixed fixture cards and manual relation scores.
+- Test LLM-disabled mode: recommendations still work with deterministic scoring only.
+- Test LLM-enabled mode: LLM can only explain/rerank top-N and cannot introduce unavailable card ids.
+- Test split suggestion near subtitle boundary, silence gap, and unsafe active-subtitle midpoint.
+- Test merge suggestion rejects invalid duration, overlap, non-monotonic rows, stale references, and preview/STT pending rows.
+- Test GUI remains responsive while recommendation analysis runs.
+- Test save/reopen preserves accepted recommendation state and marks stale recommendations after source changes.
+
+Rollback:
+
+- If recommendation ranking overrides manual owner-authored order or relation scores, disable automatic ranking write-back and keep suggestions read-only.
+- If LLM output creates unavailable card ids, unsafe split points, subtitle drift, or hidden write paths, disable LLM assist and keep deterministic scoring only.
+- If split/merge recommendation can bypass NLE rollback guards, disable recommendation apply and keep split/merge suggestions display-only.
+
 ## Parked Candidates
 
 No parked candidates are currently open. Any new candidate must create a fresh
