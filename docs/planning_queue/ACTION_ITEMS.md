@@ -1,7 +1,7 @@
 <!--
 Document-Version: 04.01.32-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-Last-Updated: 2026-06-29
+Last-Updated: 2026-06-30
 Updated-By: Codex
 Purpose: Grouped active execution plan, release gates, QA gates, and rollback rules.
 -->
@@ -287,6 +287,8 @@ Current baseline:
 - The current page has visible legacy content such as `LLM 후보`, `핵심 메뉴`, `현재 상태`, `후보 / 필터`, `내보내기`, `보조 참조`, logs, guide/detail text, and auxiliary tabs. The owner requested that existing UI elements inside the roughcut boxes be removed from the screen for the next scenario-composer direction.
 - Existing major/minor roughcut cards already support drag/drop ordering, thumbnail preview hooks, subtitle snippets, candidate selection, ordered preview, save/reopen, and export paths. These functions must remain callable even if the old visible controls are hidden.
 - Existing roughcut detail/table paths already expose chapter title/tag user edits through roughcut-local edit state. The next slice should promote that seed into an explicit middle-segment topic/tag metadata contract instead of inventing a second metadata owner.
+- Completed narrow implementation slice: the first `재료박스` preview now renders five compact PyQt6 2D node/card frames and supports mouse drag/drop reorder into a preview-only order state. Archive pointer: `COMPLETED_ACTION_ITEMS.md` -> `v04.01.32 G4 Material Preview Node Drag Reorder Slice`.
+- Remaining G4 work after that slice: bind real editor-generated middle segments, commit approved reorder/split/merge/trim operations through NLE boundaries, persist real scenario/practice notebook state on save/reopen, render real thumbnails/subtitle/topic/tag data, and synchronize scenario playback/export.
 
 Owner-approved region contract:
 
@@ -400,6 +402,19 @@ Detailed plan:
      - Cards expose density modes: compact title/time/tag, normal subtitle preview, expanded video preview/details.
      - Grid snapping, auto-align, fit-to-selection, zoom, pan, and minimap/overview are planned as usability helpers; they must never change NLE order until the user commits.
      - Card order changes must be visible as both physical position and explicit connector/order labels, so visual arrangement cannot silently disagree with NLE sequence order.
+   - First middle-segment card implementation rules:
+     - Implement the card data contract before styling the card: stable segment id, source row ids, source start/end, duration, scenario/order label, topic, tags, subtitle snippet/body, preview thumbnail reference, review state, dirty state, and NLE sync status.
+     - Treat the first `재료박스` view as a material inventory, not as the final scenario timeline. Moving or selecting cards is preview/selection state until an explicit scenario/NLE commit boundary is crossed.
+     - Use a media-bin plus storyboard-card hybrid: each card must show a thumbnail/preview area, compact time/duration header, topic/title, wrapped subtitle text, tag chips, and review/status badges.
+     - Keep text readable before decorative layout. Long subtitles must wrap and grow the card vertically; no title, tag, timecode, or subtitle text may overflow or hide behind controls.
+     - Keep drag/drop affordance explicit: show drag handle or cursor, ghost/placeholder target, snap target, and order label. Hover, drag-over, and preview states must not write NLE rows.
+     - Do not start with a fully freeform canvas as the only view. The first slice uses a stable storyboard/grid/list card layout; node connectors and free placement are secondary modes after card data, selection, and refresh are stable.
+     - Do not put a live video player in every card. Use cached thumbnails or lightweight preview frames first; open/attach active video preview only for the selected card or explicit preview action.
+     - Card UI must be virtualization/lazy-load friendly from the first slice: thumbnail generation, tag rendering, selection paint, and subtitle wrapping cannot block scrolling or roughcut/editor navigation.
+     - Provide selected, hover, stale/review-required, dirty, and NLE-sync-pending visual states from the first visible card slice so later sync bugs are diagnosable.
+     - Use reference apps as layout constraints, not feature scope expansion. Do not add cloud boards, comments, account sync, plugin ecosystems, web canvases, or database-builder behavior.
+     - Before the first card implementation PR/slice is accepted, leave a short benchmark-decision artifact under `output/manual_verification/latest/` or `docs/planning_queue/` mapping each adopted card rule to the relevant reference family: NLE media bin, storyboard/corkboard, whiteboard/node, or property-card board.
+     - Focused tests for the first slice must cover data-to-card rendering, long subtitle wrapping, tag chip display, selected/stale/dirty states, editor-to-roughcut refresh, no hidden legacy layout overlap, and at least 100 synthetic cards without creating 100 live video players.
    - Non-goals from references:
      - Do not add cloud collaboration, remote comments, account sync, browser embeds, plugin ecosystems, or generic database builders.
      - Do not make freeform canvas position the canonical source of subtitle order. NLE commit state remains the source of truth.

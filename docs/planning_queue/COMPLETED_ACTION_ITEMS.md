@@ -19,6 +19,40 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.32 G4 Material Preview Node Drag Reorder Slice
+
+Source request: implement drag/drop order changing for the roughcut middle-segment
+material frame, clean up the corresponding action-item state, and leave the
+worktree clean.
+
+1. Added a preview-only PyQt6 2D `QGraphicsView` node canvas for the `재료박스`
+   middle-segment frame, keeping the first five placeholder nodes compact and
+   limited to the owner-approved visible placeholders `미리보기` and
+   `중분류 주제`.
+2. Implemented mouse drag/drop ordering on the preview nodes. Dropping a node on
+   a new slot updates `material_card_preview_order`, records
+   `material_card_preview_last_reorder`, and redraws the node order.
+3. Kept the reorder operation explicitly `preview_only`; it does not write NLE
+   rows, final subtitle rows, roughcut export state, project persistence, or
+   source media/SRT artifacts.
+4. Preserved the previous hidden legacy roughcut functions, player controls,
+   automation command surface, save/export helper references, and frame-resize
+   handles.
+5. Focused verification passed: `./venv/bin/python -m py_compile
+   ui/roughcut/roughcut_widget.py tests/test_roughcut_ui_v2.py`,
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"`,
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py`,
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_app_command_bridge.py -k "roughcut"`, and
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_project_segment_reload.py -k "roughcut or open_project_file"`.
+6. This slice does not complete real editor-generated segment binding,
+   NLE-backed commit/write-back, project save/reopen of real scenario order,
+   split/merge/trim operations, topic/tag editing, or scenario playback/export
+   synchronization. Those remain active G4 work.
+
 ## v04.01.32 Code Review, Version Release, And Agent Bootstrap Refresh
 
 Source request: code review and fix, clean worktree, push main, bump version,

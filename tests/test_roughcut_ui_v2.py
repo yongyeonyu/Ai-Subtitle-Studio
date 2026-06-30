@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QPointF, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QListView, QWidget
 
@@ -28,7 +28,11 @@ from core.roughcut.models import (
 )
 from core.video_codec import roughcut_render_mode
 from ui.main.app_command_bridge import execute_app_command
-from ui.roughcut.roughcut_widget import RoughcutWidget
+from ui.roughcut.roughcut_widget import (
+    _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT,
+    _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH,
+    RoughcutWidget,
+)
 from ui.settings.settings_gap import GapSettingsDialog
 from ui.settings.settings_advanced import AdvancedSettingsDialog
 from ui.settings.settings_ai import SettingsDialog
@@ -61,11 +65,47 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertTrue(hasattr(widget, "export_menu_btn"))
             self.assertIn("border: none", widget.roughcut_frame.styleSheet())
             self.assertIn("border: none", widget.roughcut_side_frame.styleSheet())
+            self.assertEqual(widget.roughcut_side_frame.maximumWidth(), 468)
+            self.assertTrue(widget.material_card_preview_view.isVisible())
+            self.assertEqual(widget.material_card_preview_view.accessibleName(), "중분류 카드 Miro UML 미리보기")
+            self.assertEqual(widget.material_card_preview_order, [1, 2, 3, 4, 5])
+            self.assertEqual(len(widget.material_card_preview_nodes), 5)
+            for index, node in enumerate(widget.material_card_preview_nodes, start=1):
+                self.assertEqual(node["id"], f"middle_segment_preview_node_{index:02d}")
+                self.assertLessEqual(node["width"], 132)
+                self.assertLessEqual(node["height"], 92)
+                self.assertEqual(node["labels"], ("미리보기", "중분류 주제"))
+            scene_text = "\n".join(
+                item.toPlainText()
+                for item in widget.material_card_preview_scene.items()
+                if hasattr(item, "toPlainText")
+            )
+            self.assertIn("미리보기", scene_text)
+            self.assertIn("중분류 주제", scene_text)
+            self.assertNotIn("태그", scene_text)
+            self.assertNotIn("자막 줄바꿈 영역", scene_text)
+            self.assertNotIn("상태 / NLE Sync", scene_text)
             self.assertIn("#2D3942", widget.video_box.styleSheet())
             self.assertNotIn("#FFD60A", widget.video_box.styleSheet())
             self.assertTrue(widget.video_host.isVisible())
+            self.assertEqual(widget.video_host.minimumHeight(), 173)
+            self.assertGreaterEqual(widget.video_box.height(), 320)
             self.assertTrue(widget.roughcut_player_seek_slider.isVisible())
             self.assertTrue(widget.btn_roughcut_video_play.isVisible())
+            for video_button, tooltip in (
+                (widget.btn_roughcut_video_prev, "이전"),
+                (widget.btn_roughcut_video_play, "재생"),
+                (widget.btn_roughcut_video_stop, "정지"),
+                (widget.btn_roughcut_video_next, "다음"),
+            ):
+                self.assertEqual(video_button.text(), "")
+                self.assertEqual(video_button.toolTip(), tooltip)
+                self.assertLessEqual(video_button.width(), 48)
+                self.assertLessEqual(video_button.height(), 30)
+            self.assertFalse(widget.roughcut_video_title_lbl.isVisible())
+            self.assertFalse(widget.roughcut_video_state_lbl.isVisible())
+            self.assertEqual(widget.roughcut_video_title_lbl.text(), "비디오")
+            self.assertEqual(widget.roughcut_video_state_lbl.text(), "대기")
 
             width_handle = widget.roughcut_frame_splitter.handle(1)
             height_handle = widget.right_frame_splitter.handle(1)
@@ -73,10 +113,66 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(height_handle.objectName(), "roughcut_height_resize_handle")
             self.assertEqual(getattr(width_handle, "_marker", ""), "ㅓ")
             self.assertEqual(getattr(height_handle, "_marker", ""), "ㅏ")
-            self.assertIs(getattr(width_handle, "_marker_anchor", None), height_handle)
+            self.assertIs(getattr(width_handle, "_marker_anchor", None), widget.material_box)
+            self.assertEqual(getattr(width_handle, "_marker_anchor_edge", ""), "top")
             self.assertIs(getattr(height_handle, "_marker_anchor", None), width_handle)
-            self.assertGreaterEqual(width_handle.sizeHint().width(), 28)
-            self.assertGreaterEqual(height_handle.sizeHint().height(), 28)
+            self.assertEqual(width_handle.sizeHint().width(), 6)
+            self.assertEqual(width_handle.sizeHint().height(), 6)
+            self.assertEqual(height_handle.sizeHint().width(), 6)
+            self.assertEqual(height_handle.sizeHint().height(), 6)
+
+            width_marker = widget.findChild(QWidget, "roughcut_width_resize_handle_visual")
+            height_marker = widget.findChild(QWidget, "roughcut_height_resize_handle_visual")
+            self.assertIsNotNone(width_marker)
+            self.assertIsNotNone(height_marker)
+            self.assertTrue(width_marker.isVisible())
+            self.assertTrue(height_marker.isVisible())
+            self.assertEqual(width_marker.size().width(), 30)
+            self.assertEqual(width_marker.size().height(), 30)
+            self.assertEqual(height_marker.size().width(), 30)
+            self.assertEqual(height_marker.size().height(), 30)
+            widget._sync_roughcut_handle_markers()
+            self.app.processEvents()
+            material_right_x = widget.material_box.mapTo(widget, QPoint(widget.material_box.width(), 0)).x()
+            settings_top_left = widget.settings_box.mapTo(widget, QPoint(0, 0))
+            video_bottom_y = widget.video_box.mapTo(widget, QPoint(0, widget.video_box.height())).y()
+            width_marker_stem_x = width_marker.x() + 24
+            height_marker_stem_x = height_marker.x() + 6
+            height_marker_stem_y = height_marker.y() + 15
+            center_between_video_and_settings = (video_bottom_y + settings_top_left.y()) // 2
+            self.assertLessEqual(abs(width_marker_stem_x - material_right_x), 2)
+            self.assertLessEqual(abs(height_marker_stem_x - settings_top_left.x()), 2)
+            self.assertLessEqual(abs(height_marker_stem_y - center_between_video_and_settings), 2)
+            self.assertGreater(height_marker_stem_x, width_marker_stem_x)
+            left_gap = widget.material_box.y() - (widget.scenario_box.y() + widget.scenario_box.height())
+            right_gap = widget.settings_box.y() - (widget.video_box.y() + widget.video_box.height())
+            self.assertEqual(left_gap, right_gap)
+
+            before_width_marker_drag = list(widget.roughcut_frame_splitter.sizes())
+            width_marker_center = width_marker.rect().center()
+            QTest.mousePress(width_marker, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, width_marker_center)
+            QTest.mouseMove(width_marker, width_marker_center + QPoint(-80, 0), delay=1)
+            self.app.processEvents()
+            QTest.mouseRelease(
+                width_marker,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                width_marker_center + QPoint(-80, 0),
+            )
+            self.assertNotEqual(widget.roughcut_frame_splitter.sizes(), before_width_marker_drag)
+
+            before_height_marker_drag = list(widget.right_frame_splitter.sizes())
+            height_marker_center = height_marker.rect().center()
+            QTest.mousePress(height_marker, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, height_marker_center)
+            QTest.mouseMove(height_marker, height_marker_center + QPoint(0, 80), delay=1)
+            self.app.processEvents()
+            QTest.mouseRelease(
+                height_marker,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                height_marker_center + QPoint(0, 80),
+            )
+            self.assertNotEqual(widget.right_frame_splitter.sizes(), before_height_marker_drag)
 
             widget.roughcut_frame_splitter.setSizes([900, 320])
             widget.right_frame_splitter.setSizes([180, 420])
@@ -85,6 +181,53 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(len(widget.right_frame_splitter.sizes()), 2)
             self.assertGreater(widget.roughcut_frame_splitter.sizes()[1], 0)
             self.assertGreater(widget.right_frame_splitter.sizes()[0], 0)
+        finally:
+            widget.close()
+
+    def test_material_preview_nodes_support_drag_drop_order_change_without_nle_commit(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1600, 900)
+            widget.show()
+            self.app.processEvents()
+
+            view = widget.material_card_preview_view
+            first_node = widget._material_card_preview_groups["middle_segment_preview_node_01"]
+            start = view.mapFromScene(first_node.sceneBoundingRect().center())
+            last_slot_x, last_slot_y = widget._material_preview_slot_positions()[-1]
+            end_scene = QPointF(
+                last_slot_x + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH / 2),
+                last_slot_y + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2),
+            )
+            end = view.mapFromScene(end_scene)
+
+            QTest.mousePress(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+            QTest.mouseMove(view.viewport(), end, delay=1)
+            self.app.processEvents()
+            QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+            self.app.processEvents()
+
+            self.assertEqual(widget.material_card_preview_order, [2, 3, 4, 5, 1])
+            self.assertEqual(
+                widget.material_card_preview_last_reorder,
+                {
+                    "node_id": "middle_segment_preview_node_01",
+                    "old_order": [1, 2, 3, 4, 5],
+                    "new_order": [2, 3, 4, 5, 1],
+                    "target_slot": 5,
+                    "commit": "preview_only",
+                },
+            )
+            self.assertEqual(
+                [node["id"] for node in widget.material_card_preview_nodes],
+                [
+                    "middle_segment_preview_node_02",
+                    "middle_segment_preview_node_03",
+                    "middle_segment_preview_node_04",
+                    "middle_segment_preview_node_05",
+                    "middle_segment_preview_node_01",
+                ],
+            )
         finally:
             widget.close()
 

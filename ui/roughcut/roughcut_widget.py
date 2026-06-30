@@ -5,12 +5,14 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
-from PyQt6.QtGui import QAction, QColor, QPainter, QPen
-from PyQt6.QtCore import QRect, QSize, QTimer, Qt
+from PyQt6.QtGui import QAction, QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, QTimer, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QFrame,
+    QGraphicsScene,
+    QGraphicsView,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -44,12 +46,29 @@ from ui.roughcut.roughcut_title_panel import RoughcutTitlePanel
 from ui.style import COLORS, button_style, label_style, line_icon, panel_style
 
 
+_ROUGHCUT_FRAME_BOX_GAP = 6
+_ROUGHCUT_FRAME_FLOATING_HANDLE_SIZE = 30
+_ROUGHCUT_FRAME_MARKER_STROKE = 2
+_ROUGHCUT_FRAME_MARKER_COLOR = COLORS["text"]
+_ROUGHCUT_WIDTH_MARKER_STEM_X = 24
+_ROUGHCUT_HEIGHT_MARKER_STEM_X = 6
+_ROUGHCUT_VIDEO_DEFAULT_HEIGHT = 414
+_ROUGHCUT_SETTINGS_DEFAULT_HEIGHT = 606
+_ROUGHCUT_VIDEO_HOST_MIN_HEIGHT = 173
+_ROUGHCUT_VIDEO_CONTROL_HEIGHT = 26
+_ROUGHCUT_VIDEO_CONTROL_WIDTH = 32
+_ROUGHCUT_VIDEO_PLAY_CONTROL_WIDTH = 36
+_ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT = 5
+_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH = 132
+_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT = 92
+
+
 class _RoughcutResizeHandle(QSplitterHandle):
     def __init__(self, orientation: Qt.Orientation, parent: QSplitter, marker: str, object_name: str):
         super().__init__(orientation, parent)
         self._marker = marker
-        self._hovered = False
         self._marker_anchor: QWidget | None = None
+        self._marker_anchor_edge = "center"
         self.setObjectName(object_name)
         self.setAccessibleName(object_name)
         self.setMouseTracking(True)
@@ -61,52 +80,15 @@ class _RoughcutResizeHandle(QSplitterHandle):
         )
 
     def sizeHint(self) -> QSize:
-        if self.orientation() == Qt.Orientation.Horizontal:
-            return QSize(28, 96)
-        return QSize(96, 28)
+        return QSize(_ROUGHCUT_FRAME_BOX_GAP, _ROUGHCUT_FRAME_BOX_GAP)
 
-    def set_marker_anchor(self, anchor: QWidget) -> None:
+    def set_marker_anchor(self, anchor: QWidget, edge: str = "center") -> None:
         self._marker_anchor = anchor
+        self._marker_anchor_edge = edge
         self.update()
-
-    def enterEvent(self, event):  # noqa: N802 - Qt override
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):  # noqa: N802 - Qt override
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
 
     def paintEvent(self, event):  # noqa: N802 - Qt override
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#0F1518"))
-        border_pen = QPen(QColor("#00C8FF" if self._hovered else "#2D3942"))
-        border_pen.setWidth(1)
-        painter.setPen(border_pen)
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
-        painter.setPen(QColor("#00C8FF" if self._hovered else "#DCE3EA"))
-        font = painter.font()
-        font.setBold(True)
-        font.setPointSize(14)
-        painter.setFont(font)
-        painter.drawText(self._marker_rect(), Qt.AlignmentFlag.AlignCenter, self._marker)
-        painter.end()
-
-    def _marker_rect(self) -> QRect:
-        if self._marker_anchor is None:
-            return self.rect()
-        anchor_center = self.mapFromGlobal(self._marker_anchor.mapToGlobal(self._marker_anchor.rect().center()))
-        if self.orientation() == Qt.Orientation.Horizontal:
-            marker_height = 28
-            y_pos = max(0, min(self.height() - marker_height, anchor_center.y() - marker_height // 2))
-            return QRect(0, y_pos, self.width(), marker_height)
-        marker_width = 28
-        x_pos = max(0, min(self.width() - marker_width, anchor_center.x() - marker_width // 2))
-        return QRect(x_pos, 0, marker_width, self.height())
+        return
 
 
 class _RoughcutFrameSplitter(QSplitter):
@@ -115,7 +97,7 @@ class _RoughcutFrameSplitter(QSplitter):
         self._marker = marker
         self._handle_object_name = handle_object_name
         self.setChildrenCollapsible(False)
-        self.setHandleWidth(28)
+        self.setHandleWidth(_ROUGHCUT_FRAME_BOX_GAP)
 
     def createHandle(self) -> QSplitterHandle:  # noqa: N802 - Qt override
         return _RoughcutResizeHandle(self.orientation(), self, self._marker, self._handle_object_name)
@@ -132,6 +114,129 @@ class _RoughcutFrameSplitter(QSplitter):
         if isinstance(handle, _RoughcutResizeHandle):
             return handle
         return None
+
+
+class _RoughcutFloatingHandleMarker(QWidget):
+    def __init__(self, marker: str, orientation: Qt.Orientation, splitter: QSplitter, parent: QWidget):
+        super().__init__(parent)
+        self._marker = marker
+        self._orientation = orientation
+        self._splitter = splitter
+        self._drag_origin: QPoint | None = None
+        self._drag_start_sizes: list[int] | None = None
+        self.setObjectName(
+            "roughcut_width_resize_handle_visual"
+            if orientation == Qt.Orientation.Horizontal
+            else "roughcut_height_resize_handle_visual"
+        )
+        self.setAccessibleName(self.objectName())
+        self.setFixedSize(_ROUGHCUT_FRAME_FLOATING_HANDLE_SIZE, _ROUGHCUT_FRAME_FLOATING_HANDLE_SIZE)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setMouseTracking(True)
+        self.setToolTip("드래그해서 프레임 크기 조절")
+        self.setCursor(
+            Qt.CursorShape.SplitHCursor
+            if orientation == Qt.Orientation.Horizontal
+            else Qt.CursorShape.SplitVCursor
+        )
+
+    def paintEvent(self, event):  # noqa: N802 - Qt override
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(_ROUGHCUT_FRAME_MARKER_COLOR))
+        pen.setWidth(_ROUGHCUT_FRAME_MARKER_STROKE)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        if self._marker == "ㅓ":
+            painter.drawLine(_ROUGHCUT_WIDTH_MARKER_STEM_X, 7, _ROUGHCUT_WIDTH_MARKER_STEM_X, 23)
+            painter.drawLine(8, 15, _ROUGHCUT_WIDTH_MARKER_STEM_X, 15)
+        else:
+            painter.drawLine(_ROUGHCUT_HEIGHT_MARKER_STEM_X, 7, _ROUGHCUT_HEIGHT_MARKER_STEM_X, 23)
+            painter.drawLine(_ROUGHCUT_HEIGHT_MARKER_STEM_X, 15, 22, 15)
+        painter.end()
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt override
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._drag_origin = self._event_global_pos(event)
+        self._drag_start_sizes = list(self._splitter.sizes())
+        event.accept()
+
+    def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        if self._drag_origin is None or not self._drag_start_sizes or len(self._drag_start_sizes) < 2:
+            super().mouseMoveEvent(event)
+            return
+        current = self._event_global_pos(event)
+        delta = current - self._drag_origin
+        offset = delta.x() if self._orientation == Qt.Orientation.Horizontal else delta.y()
+        total = max(2, sum(self._drag_start_sizes[:2]))
+        first = max(1, min(total - 1, self._drag_start_sizes[0] + offset))
+        self._splitter.setSizes([first, total - first])
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_sync_roughcut_handle_markers"):
+            parent._sync_roughcut_handle_markers()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        self._drag_origin = None
+        self._drag_start_sizes = None
+        event.accept()
+
+    def _event_global_pos(self, event) -> QPoint:
+        if hasattr(event, "globalPosition"):
+            return event.globalPosition().toPoint()
+        return event.globalPos()
+
+
+class _RoughcutMaterialPreviewView(QGraphicsView):
+    def __init__(self, scene: QGraphicsScene, owner: "RoughcutWidget"):
+        super().__init__(scene)
+        self._owner = owner
+        self._drag_node_id = ""
+        self._drag_offset = QPointF()
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt override
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        scene_pos = self.mapToScene(event.position().toPoint())
+        node_id = self._owner._material_preview_node_id_at_scene_pos(scene_pos)
+        if not node_id:
+            super().mousePressEvent(event)
+            return
+        group = self._owner._material_card_preview_groups.get(node_id)
+        if group is None:
+            super().mousePressEvent(event)
+            return
+        self._drag_node_id = node_id
+        self._drag_offset = scene_pos - group.pos()
+        self._owner._begin_material_preview_node_drag(node_id)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        if not self._drag_node_id:
+            super().mouseMoveEvent(event)
+            return
+        scene_pos = self.mapToScene(event.position().toPoint())
+        self._owner._drag_material_preview_node_to(self._drag_node_id, scene_pos - self._drag_offset)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        if not self._drag_node_id:
+            super().mouseReleaseEvent(event)
+            return
+        node_id = self._drag_node_id
+        scene_pos = self.mapToScene(event.position().toPoint())
+        self._drag_node_id = ""
+        self._drag_offset = QPointF()
+        self._owner._finish_material_preview_node_drag(node_id, scene_pos)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        event.accept()
 
 
 class RoughcutWidget(
@@ -261,6 +366,7 @@ class RoughcutWidget(
         left_lay.setSpacing(6)
         self.scenario_box = self._build_frame_only_box("scenario_box", "#F5F7FA")
         self.material_box = self._build_frame_only_box("material_box", "#0A84FF")
+        self._build_material_card_preview_surface(self.material_box)
         left_lay.addWidget(self.scenario_box, stretch=1)
         left_lay.addWidget(self.material_box, stretch=1)
 
@@ -300,9 +406,9 @@ class RoughcutWidget(
         )
         self.right_frame_splitter.addWidget(self.video_box)
         self.right_frame_splitter.addWidget(self.settings_box)
-        self.right_frame_splitter.setStretchFactor(0, 3)
+        self.right_frame_splitter.setStretchFactor(0, 4)
         self.right_frame_splitter.setStretchFactor(1, 5)
-        self.right_frame_splitter.setSizes([360, 660])
+        self.right_frame_splitter.setSizes([_ROUGHCUT_VIDEO_DEFAULT_HEIGHT, _ROUGHCUT_SETTINGS_DEFAULT_HEIGHT])
         self.right_frame_splitter.refresh_handle_metadata()
         side_lay.addWidget(self.right_frame_splitter, stretch=1)
 
@@ -360,16 +466,82 @@ class RoughcutWidget(
         width_handle = main_splitter.resize_handle()
         height_handle = self.right_frame_splitter.resize_handle()
         if width_handle is not None and height_handle is not None:
-            width_handle.set_marker_anchor(height_handle)
+            width_handle.set_marker_anchor(self.material_box, edge="top")
             height_handle.set_marker_anchor(width_handle)
+        self.width_handle_marker = _RoughcutFloatingHandleMarker("ㅓ", Qt.Orientation.Horizontal, main_splitter, self)
+        self.height_handle_marker = _RoughcutFloatingHandleMarker("ㅏ", Qt.Orientation.Vertical, self.right_frame_splitter, self)
+        self.width_handle_marker.show()
+        self.height_handle_marker.show()
+        main_splitter.splitterMoved.connect(lambda *_args: self._sync_roughcut_handle_markers())
+        self.right_frame_splitter.splitterMoved.connect(lambda *_args: self._sync_roughcut_handle_markers())
+        QTimer.singleShot(0, self._sync_roughcut_handle_markers)
 
         self._set_empty_state()
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._sync_roughcut_handle_markers()
+
+    def _roughcut_left_handle_center_y(self) -> int:
+        scenario_box = getattr(self, "scenario_box", None)
+        material_box = getattr(self, "material_box", None)
+        width_handle = getattr(getattr(self, "roughcut_frame_splitter", None), "handle", lambda _index: None)(1)
+        if scenario_box is not None and material_box is not None:
+            scenario_bottom_y = scenario_box.mapTo(self, QPoint(0, scenario_box.height())).y()
+            material_top_y = material_box.mapTo(self, QPoint(0, 0)).y()
+            return (scenario_bottom_y + material_top_y) // 2
+        if width_handle is not None:
+            return width_handle.mapTo(self, width_handle.rect().center()).y()
+        return self.height() // 2
+
+    def _sync_roughcut_handle_markers(self) -> None:
+        width_marker = getattr(self, "width_handle_marker", None)
+        height_marker = getattr(self, "height_handle_marker", None)
+        main_splitter = getattr(self, "roughcut_frame_splitter", None)
+        right_splitter = getattr(self, "right_frame_splitter", None)
+        if width_marker is None or height_marker is None or main_splitter is None or right_splitter is None:
+            return
+        width_handle = main_splitter.handle(1)
+        height_handle = right_splitter.handle(1)
+        if width_handle is None or height_handle is None:
+            return
+        split_x = width_handle.mapTo(self, width_handle.rect().center()).x()
+        material_gap_center_y = self._roughcut_left_handle_center_y()
+        material_box = getattr(self, "material_box", None)
+        if material_box is not None:
+            width_corner_x = material_box.mapTo(self, QPoint(material_box.width(), 0)).x()
+        else:
+            width_corner_x = split_x
+        width_marker.move(
+            width_corner_x - _ROUGHCUT_WIDTH_MARKER_STEM_X,
+            material_gap_center_y - (width_marker.height() // 2),
+        )
+
+        settings_box = getattr(self, "settings_box", None)
+        if settings_box is not None:
+            height_corner = settings_box.mapTo(self, QPoint(0, 0))
+            video_box = getattr(self, "video_box", None)
+            if video_box is not None:
+                video_bottom_y = video_box.mapTo(self, QPoint(0, video_box.height())).y()
+                height_y = (video_bottom_y + height_corner.y()) // 2
+            else:
+                height_y = height_corner.y()
+            height_x = height_corner.x() - _ROUGHCUT_HEIGHT_MARKER_STEM_X
+        else:
+            height_x = split_x + _ROUGHCUT_FRAME_BOX_GAP
+            height_y = height_handle.mapTo(self, height_handle.rect().center()).y()
+        height_marker.move(
+            height_x,
+            height_y - (height_marker.height() // 2),
+        )
+        width_marker.raise_()
+        height_marker.raise_()
 
     def _build_frame_only_box(self, object_name: str, border_color: str) -> QFrame:
         frame = QFrame()
         frame.setObjectName(object_name)
         frame.setStyleSheet(
-            "QFrame { "
+            f"QFrame#{object_name} {{ "
             "background: #0A0F12; "
             f"border: 2px solid {border_color}; "
             "border-radius: 8px; "
@@ -378,27 +550,194 @@ class RoughcutWidget(
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         return frame
 
+    def _build_material_card_preview_surface(self, frame: QFrame) -> None:
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(0)
+
+        self.material_card_preview_scene = QGraphicsScene(frame)
+        self.material_card_preview_scene.setSceneRect(0, 0, 900, 230)
+        self.material_card_preview_order = list(range(1, _ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT + 1))
+        self.material_card_preview_last_reorder: dict[str, object] = {}
+        self._material_card_preview_groups: dict[str, object] = {}
+        self.material_card_preview_view = _RoughcutMaterialPreviewView(self.material_card_preview_scene, self)
+        self.material_card_preview_view.setObjectName("roughcutMaterialMiroUmlPreview")
+        self.material_card_preview_view.setAccessibleName("중분류 카드 Miro UML 미리보기")
+        self.material_card_preview_view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.material_card_preview_view.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.material_card_preview_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.material_card_preview_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.material_card_preview_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.material_card_preview_view.setStyleSheet(
+            "QGraphicsView#roughcutMaterialMiroUmlPreview { background: transparent; border: none; }"
+        )
+        self.material_card_preview_nodes: list[dict[str, object]] = []
+        self._populate_material_miro_uml_preview_scene()
+        lay.addWidget(self.material_card_preview_view, stretch=1)
+
+    def _material_preview_slot_positions(self) -> tuple[tuple[int, int], ...]:
+        return (
+            (28, 24),
+            (206, 72),
+            (384, 24),
+            (562, 72),
+            (740, 24),
+        )
+
+    def _populate_material_miro_uml_preview_scene(self) -> None:
+        scene = self.material_card_preview_scene
+        scene.clear()
+        node_positions = self._material_preview_slot_positions()
+        connector_pen = QPen(QColor("#5A6A76"))
+        connector_pen.setWidth(2)
+        connector_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        connector_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        preview_font = QFont()
+        preview_font.setPointSize(9)
+        preview_font.setBold(True)
+        topic_font = QFont()
+        topic_font.setPointSize(10)
+        topic_font.setBold(True)
+        self.material_card_preview_nodes.clear()
+        self._material_card_preview_groups.clear()
+        previous_center: tuple[float, float] | None = None
+        for x_pos, y_pos in node_positions:
+            center = (
+                x_pos + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH / 2),
+                y_pos + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2),
+            )
+            if previous_center is not None:
+                scene.addLine(previous_center[0] + 8, previous_center[1], center[0] - 8, center[1], connector_pen)
+            previous_center = center
+
+        for slot_index, node_number in enumerate(self.material_card_preview_order, start=1):
+            x_pos, y_pos = node_positions[slot_index - 1]
+            node_id = f"middle_segment_preview_node_{node_number:02d}"
+            node_path = QPainterPath()
+            node_path.addRoundedRect(
+                QRectF(
+                    0,
+                    0,
+                    _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH,
+                    _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT,
+                ),
+                8,
+                8,
+            )
+            node = scene.addPath(node_path, QPen(QColor("#2D3942"), 1), QBrush(QColor("#0F1518")))
+            node.setData(0, node_id)
+
+            preview_path = QPainterPath()
+            preview_path.addRoundedRect(
+                QRectF(10, 10, _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH - 20, 46),
+                6,
+                6,
+            )
+            preview = scene.addPath(preview_path, QPen(QColor("#1D2730"), 1), QBrush(QColor("#05080A")))
+            preview.setData(0, f"middle_segment_preview_slot_{slot_index:02d}")
+
+            preview_text = scene.addText("미리보기", preview_font)
+            preview_text.setDefaultTextColor(QColor("#8A949E"))
+            preview_rect = preview_text.boundingRect()
+            preview_text.setPos(
+                (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH - preview_rect.width()) / 2,
+                24,
+            )
+
+            topic_text = scene.addText("중분류 주제", topic_font)
+            topic_text.setDefaultTextColor(QColor("#DCE3EA"))
+            topic_text.setPos(10, 62)
+
+            group = scene.createItemGroup([node, preview, preview_text, topic_text])
+            group.setData(0, node_id)
+            group.setPos(x_pos, y_pos)
+            group.setZValue(2)
+            group.setCursor(Qt.CursorShape.OpenHandCursor)
+            self._material_card_preview_groups[node_id] = group
+
+            self.material_card_preview_nodes.append(
+                {
+                    "id": node_id,
+                    "x": x_pos,
+                    "y": y_pos,
+                    "width": _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH,
+                    "height": _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT,
+                    "labels": ("미리보기", "중분류 주제"),
+                    "slot": slot_index,
+                }
+            )
+
+    def _material_preview_node_id_at_scene_pos(self, scene_pos: QPointF) -> str:
+        for node_id, group in sorted(
+            self._material_card_preview_groups.items(),
+            key=lambda item: item[1].zValue(),
+            reverse=True,
+        ):
+            if group.sceneBoundingRect().contains(scene_pos):
+                return node_id
+        return ""
+
+    def _begin_material_preview_node_drag(self, node_id: str) -> None:
+        group = self._material_card_preview_groups.get(node_id)
+        if group is None:
+            return
+        group.setZValue(10)
+        group.setOpacity(0.88)
+
+    def _drag_material_preview_node_to(self, node_id: str, scene_pos: QPointF) -> None:
+        group = self._material_card_preview_groups.get(node_id)
+        if group is None:
+            return
+        scene_rect = self.material_card_preview_scene.sceneRect()
+        max_x = scene_rect.right() - _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH
+        max_y = scene_rect.bottom() - _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT
+        target_x = min(max(scene_rect.left(), scene_pos.x()), max_x)
+        target_y = min(max(scene_rect.top(), scene_pos.y()), max_y)
+        group.setPos(target_x, target_y)
+
+    def _finish_material_preview_node_drag(self, node_id: str, scene_pos: QPointF) -> None:
+        group = self._material_card_preview_groups.get(node_id)
+        if group is None:
+            return
+        node_number = int(node_id.rsplit("_", 1)[1])
+        slot_positions = self._material_preview_slot_positions()
+        node_center_x = group.sceneBoundingRect().center().x()
+        target_slot = min(
+            range(len(slot_positions)),
+            key=lambda index: abs(
+                node_center_x - (slot_positions[index][0] + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH / 2))
+            ),
+        )
+        old_order = list(self.material_card_preview_order)
+        new_order = [number for number in old_order if number != node_number]
+        new_order.insert(target_slot, node_number)
+        self.material_card_preview_order = new_order
+        self.material_card_preview_last_reorder = {
+            "node_id": node_id,
+            "old_order": old_order,
+            "new_order": list(new_order),
+            "target_slot": target_slot + 1,
+            "commit": "preview_only",
+        }
+        self._populate_material_miro_uml_preview_scene()
+
     def _build_roughcut_video_player_surface(self, frame: QFrame) -> None:
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(10, 9, 10, 9)
         lay.setSpacing(7)
 
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(6)
-        self.roughcut_video_title_lbl = QLabel("비디오")
+        self.roughcut_video_title_lbl = QLabel("비디오", frame)
         self.roughcut_video_title_lbl.setStyleSheet(label_style("text", 11, bold=True))
-        self.roughcut_video_state_lbl = QLabel("대기")
+        self.roughcut_video_title_lbl.hide()
+        self.roughcut_video_state_lbl = QLabel("대기", frame)
         self.roughcut_video_state_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.roughcut_video_state_lbl.setStyleSheet(self._toolbar_badge_style("#A9B0B7", "#2D3942"))
-        top_row.addWidget(self.roughcut_video_title_lbl, stretch=1)
-        top_row.addWidget(self.roughcut_video_state_lbl, stretch=0)
-        lay.addLayout(top_row)
+        self.roughcut_video_state_lbl.hide()
 
         self.video_host = QFrame()
         self.video_host.setObjectName("roughcutVideoHost")
         self.video_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.video_host.setMinimumHeight(150)
+        self.video_host.setMinimumHeight(_ROUGHCUT_VIDEO_HOST_MIN_HEIGHT)
         self.video_host.setStyleSheet(
             "QFrame#roughcutVideoHost { background: #000000; border: 1px solid #1D2730; border-radius: 6px; }"
         )
@@ -431,23 +770,29 @@ class RoughcutWidget(
 
         control_row = QHBoxLayout()
         control_row.setContentsMargins(0, 0, 0, 0)
-        control_row.setSpacing(6)
-        self.btn_roughcut_video_prev = self._panel_button("이전", "prev")
+        control_row.setSpacing(4)
+        self.btn_roughcut_video_prev = self._roughcut_video_control_button("이전", "prev")
         self.btn_roughcut_video_prev.clicked.connect(lambda: self._move_preview_row(-1, autoplay=True))
-        self.btn_roughcut_video_play = self._panel_button("재생", "play", kind="primary")
+        self.btn_roughcut_video_play = self._roughcut_video_control_button(
+            "재생",
+            "play",
+            kind="primary",
+            width=_ROUGHCUT_VIDEO_PLAY_CONTROL_WIDTH,
+        )
         self.btn_roughcut_video_play.clicked.connect(self._start_roughcut_video_playback)
-        self.btn_roughcut_video_stop = self._panel_button("정지", "stop")
+        self.btn_roughcut_video_stop = self._roughcut_video_control_button("정지", "stop")
         self.btn_roughcut_video_stop.clicked.connect(self._stop_preview)
-        self.btn_roughcut_video_next = self._panel_button("다음", "next")
+        self.btn_roughcut_video_next = self._roughcut_video_control_button("다음", "next")
         self.btn_roughcut_video_next.clicked.connect(lambda: self._move_preview_row(1, autoplay=True))
+        control_row.addStretch(1)
         for button in (
             self.btn_roughcut_video_prev,
             self.btn_roughcut_video_play,
             self.btn_roughcut_video_stop,
             self.btn_roughcut_video_next,
         ):
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             control_row.addWidget(button)
+        control_row.addStretch(1)
         lay.addLayout(control_row)
 
         info_row = QHBoxLayout()
@@ -1830,6 +2175,48 @@ class RoughcutWidget(
         btn.setIcon(line_icon(icon_name, icon_color, 16))
         btn.setStyleSheet(button_style(kind, font_size="11px", padding="6px 9px"))
         btn.setMinimumHeight(32)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        return btn
+
+    def _roughcut_video_control_button(
+        self,
+        text: str,
+        icon_name: str,
+        *,
+        kind: str = "toolbar",
+        width: int = _ROUGHCUT_VIDEO_CONTROL_WIDTH,
+    ) -> QPushButton:
+        btn = self._panel_button(text, icon_name, kind=kind)
+        btn.setText("")
+        btn.setToolTip(text)
+        btn.setAccessibleName(text)
+        icon_color = "#FFFFFF" if kind == "primary" else COLORS["muted"]
+        btn.setIcon(line_icon(icon_name, icon_color, 11))
+        btn.setIconSize(QSize(11, 11))
+        if kind == "primary":
+            btn.setStyleSheet(
+                "QPushButton { "
+                f"background: {COLORS['primary']}; color: #FFFFFF; border: none; "
+                "border-radius: 6px; padding: 0 5px; font-size: 10px; font-weight: 700; "
+                f"min-height: {_ROUGHCUT_VIDEO_CONTROL_HEIGHT}px; max-height: {_ROUGHCUT_VIDEO_CONTROL_HEIGHT}px; "
+                f"min-width: {int(width)}px; max-width: {int(width)}px; "
+                "} "
+                f"QPushButton:hover {{ background: {COLORS['primary_hover']}; }} "
+                "QPushButton:pressed { background: #0057B8; border: 1px solid #74A9FF; padding-top: 1px; }"
+            )
+        else:
+            btn.setStyleSheet(
+                "QPushButton { "
+                f"background: {COLORS['control']}; color: {COLORS['text']}; "
+                f"border: 1px solid {COLORS['separator']}; "
+                "border-radius: 6px; padding: 0 5px; font-size: 10px; "
+                f"min-height: {_ROUGHCUT_VIDEO_CONTROL_HEIGHT}px; max-height: {_ROUGHCUT_VIDEO_CONTROL_HEIGHT}px; "
+                f"min-width: {int(width)}px; max-width: {int(width)}px; "
+                "} "
+                f"QPushButton:hover {{ background: {COLORS['control_hover']}; }} "
+                f"QPushButton:pressed {{ background: #182026; border-color: {COLORS['primary']}; padding-top: 1px; }}"
+            )
+        btn.setFixedSize(int(width), _ROUGHCUT_VIDEO_CONTROL_HEIGHT)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         return btn
 
