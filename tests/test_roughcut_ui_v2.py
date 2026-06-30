@@ -29,8 +29,11 @@ from core.roughcut.models import (
 from core.video_codec import roughcut_render_mode
 from ui.main.app_command_bridge import execute_app_command
 from ui.roughcut.roughcut_widget import (
+    _ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT,
     _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT,
     _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH,
+    _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH,
+    _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT,
     RoughcutWidget,
 )
 from ui.settings.settings_gap import GapSettingsDialog
@@ -68,18 +71,33 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(widget.roughcut_side_frame.maximumWidth(), 468)
             self.assertTrue(widget.material_card_preview_view.isVisible())
             self.assertEqual(widget.material_card_preview_view.accessibleName(), "중분류 카드 Miro UML 미리보기")
-            self.assertEqual(widget.material_card_preview_order, [1, 2, 3, 4, 5])
-            self.assertEqual(len(widget.material_card_preview_nodes), 5)
-            self.assertEqual({node["y"] for node in widget.material_card_preview_nodes}, {58})
+            self.assertEqual(widget.material_card_preview_order, list(range(1, 31)))
+            self.assertEqual(len(widget.material_card_preview_nodes), _ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT)
+            self.assertEqual(widget.material_card_preview_page_count, 2)
+            self.assertEqual(widget.material_card_preview_scene.sceneRect().width(), _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH * 2)
+            self.assertEqual(len(widget.material_card_preview_nodes[:_ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT]), 20)
             self.assertEqual(
-                [node["x"] for node in widget.material_card_preview_nodes],
-                [28, 206, 384, 562, 740],
+                {node["y"] for node in widget.material_card_preview_nodes[:20]},
+                {26, 122, 218, 314},
             )
+            self.assertEqual(
+                [node["x"] for node in widget.material_card_preview_nodes[:10]],
+                [46, 224, 402, 580, 758, 758, 580, 402, 224, 46],
+            )
+            self.assertEqual(widget.material_card_preview_nodes[20]["x"], 1246)
             for index, node in enumerate(widget.material_card_preview_nodes, start=1):
                 self.assertEqual(node["id"], f"middle_segment_preview_node_{index:02d}")
                 self.assertLessEqual(node["width"], 132)
                 self.assertLessEqual(node["height"], 92)
                 self.assertEqual(node["labels"], ("미리보기", "중분류 주제"))
+            self.assertTrue(widget.scenario_sequence_view.isVisible())
+            self.assertEqual(widget.scenario_generate_btn.text(), "시나리오생성")
+            self.assertEqual(widget.material_random_connect_btn.text(), "랜덤 연결")
+            self.assertEqual(widget.material_r_sort_btn.text(), "자동정렬")
+            self.assertEqual(widget.material_multi_select_btn.text(), "멀티선택")
+            self.assertEqual(widget.material_merge_btn.text(), "합치기")
+            self.assertEqual(widget.material_split_btn.text(), "분할")
+            self.assertEqual(widget.material_delete_btn.text(), "삭제")
             scene_text = "\n".join(
                 item.toPlainText()
                 for item in widget.material_card_preview_scene.items()
@@ -199,7 +217,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
             view = widget.material_card_preview_view
             first_node = widget._material_card_preview_groups["middle_segment_preview_node_01"]
             start = view.mapFromScene(first_node.sceneBoundingRect().center())
-            last_slot_x, last_slot_y = widget._material_preview_slot_positions()[-1]
+            last_slot_x, last_slot_y = widget._material_preview_slot_positions()[4]
             end_scene = QPointF(
                 last_slot_x + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH / 2),
                 last_slot_y + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2),
@@ -212,27 +230,66 @@ class RoughcutUiV2Tests(unittest.TestCase):
             QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
             self.app.processEvents()
 
-            self.assertEqual(widget.material_card_preview_order, [2, 3, 4, 5, 1])
+            self.assertEqual(widget.material_card_preview_order[0], 5)
+            self.assertEqual(widget.material_card_preview_order[4], 1)
             self.assertEqual(
                 widget.material_card_preview_last_reorder,
                 {
                     "node_id": "middle_segment_preview_node_01",
-                    "old_order": [1, 2, 3, 4, 5],
-                    "new_order": [2, 3, 4, 5, 1],
+                    "old_order": list(range(1, 31)),
+                    "new_order": [5, 2, 3, 4, 1, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30],
                     "target_slot": 5,
+                    "mode": "swap",
                     "commit": "preview_only",
                 },
             )
-            self.assertEqual(
-                [node["id"] for node in widget.material_card_preview_nodes],
-                [
-                    "middle_segment_preview_node_02",
-                    "middle_segment_preview_node_03",
-                    "middle_segment_preview_node_04",
-                    "middle_segment_preview_node_05",
-                    "middle_segment_preview_node_01",
-                ],
+            self.assertEqual(widget.material_card_preview_nodes[0]["id"], "middle_segment_preview_node_05")
+            self.assertEqual(widget.material_card_preview_nodes[4]["id"], "middle_segment_preview_node_01")
+        finally:
+            widget.close()
+
+    def test_material_preview_random_connections_auto_sort_parallel_and_scenario_generation(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1600, 900)
+            widget.show()
+            self.app.processEvents()
+
+            widget.material_random_connect_btn.click()
+            self.app.processEvents()
+            self.assertTrue(widget.material_card_preview_connections)
+            self.assertLessEqual(
+                max(len(targets) for targets in widget.material_card_preview_connections.values()),
+                3,
             )
+            widget.material_r_sort_btn.click()
+            self.app.processEvents()
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "auto_r_parallel_order")
+            self.assertEqual(widget.material_card_preview_last_reorder["commit"], "preview_only")
+            self.assertEqual(len(widget.material_card_preview_order), 30)
+
+            sequence = widget._selected_material_connection_sequence()
+            widget.scenario_generate_btn.click()
+            self.app.processEvents()
+            self.assertEqual(widget.material_card_preview_generated_order, sequence)
+            self.assertEqual([card["node"] for card in widget.scenario_sequence_cards], sequence)
+
+            source_with_parallel = next(
+                source
+                for source, targets in widget.material_card_preview_connections.items()
+                if len(targets) > 1
+            )
+            parallel_target = widget.material_card_preview_connections[source_with_parallel][1]
+            widget._select_material_preview_parallel_target(parallel_target)
+            self.assertEqual(widget.material_card_parallel_selections[source_with_parallel], parallel_target)
+
+            widget.material_multi_select_btn.click()
+            widget._select_material_preview_parallel_target(widget.material_card_preview_order[0])
+            widget._select_material_preview_parallel_target(widget.material_card_preview_order[1])
+            self.assertEqual(widget.material_card_preview_multi_selection[:2], widget.material_card_preview_order[:2])
+            widget.material_merge_btn.click()
+            self.app.processEvents()
+            self.assertIn(widget.material_card_preview_order[0], widget.material_card_preview_merged_nodes)
         finally:
             widget.close()
 

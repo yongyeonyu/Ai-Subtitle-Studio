@@ -19,6 +19,45 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.32 G4 Parallel Connector Auto-Sort Preview Slice
+
+Source request: expand the roughcut middle-segment card preview so cards can be
+connected by left/right pins, randomly connected for demo, automatically sorted
+by connector order, arranged in `ㄹ` style with parallel support, and projected
+into a one-line scenario preview.
+
+1. Expanded the `재료박스` preview from 5 cards to 30 compact grid-snapped cards.
+   The first visible page holds 20 cards; cards beyond 20 are reachable through
+   horizontal scrolling.
+2. Added left/right center pins to every card and preview-only connector state.
+   Right-pin to left-pin links define the next-card relationship, while a
+   single card may keep up to 3 outgoing parallel targets.
+3. Added `랜덤 연결` and `자동정렬` controls. The random demo creates a
+   deterministic 30-card connection set with parallel branches; auto-sort reads
+   the selected connector path and reorders cards into the `ㄹ` grid sequence.
+4. Added `시나리오박스` selected/generated path preview. Selecting a card shows
+   that card's video/subtitle placeholder; `시나리오생성` projects the selected
+   connector path as a one-line scenario sequence.
+5. Added preview-only `멀티선택`, `합치기`, `분할`, `삭제`, and left/right trim
+   controls in `설정박스`. Multi-select numbers cards by click order; merge,
+   split, delete, and trim update preview state only and do not write NLE rows.
+6. Preserved final subtitle authority, real media/SRT files, roughcut export
+   helpers, app-command surfaces, and project persistence semantics. This slice
+   remains a UI/state preview and does not create `_시나리오.mp4`, write scenario
+   SRT, or commit split/merge/trim operations to the editor/NLE layer.
+7. Focused verification passed: `./venv/bin/python -m py_compile
+   ui/roughcut/roughcut_widget.py tests/test_roughcut_ui_v2.py`,
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"`,
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py`,
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_app_command_bridge.py -k "roughcut"`, and
+   `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q
+   tests/test_project_segment_reload.py -k "roughcut or open_project_file"`.
+8. Manual preview artifacts were written under
+   `output/manual_verification/latest/roughcut_parallel_r_grid_20260630/`.
+
 ## v04.01.32 G4 Material Preview Node Drag Reorder Slice
 
 Source request: implement drag/drop order changing for the roughcut middle-segment

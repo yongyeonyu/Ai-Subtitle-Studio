@@ -2,6 +2,7 @@
 # Phase: PHASE2
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -58,9 +59,15 @@ _ROUGHCUT_VIDEO_HOST_MIN_HEIGHT = 173
 _ROUGHCUT_VIDEO_CONTROL_HEIGHT = 26
 _ROUGHCUT_VIDEO_CONTROL_WIDTH = 32
 _ROUGHCUT_VIDEO_PLAY_CONTROL_WIDTH = 36
-_ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT = 5
+_ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT = 30
+_ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT = 20
+_ROUGHCUT_MATERIAL_PREVIEW_COLUMNS = 5
+_ROUGHCUT_MATERIAL_PREVIEW_ROWS = 4
+_ROUGHCUT_MATERIAL_PREVIEW_PARALLEL_LIMIT = 3
+_ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH = 1200
 _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH = 132
-_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT = 92
+_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT = 74
+_ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS = 5
 
 
 class _RoughcutResizeHandle(QSplitterHandle):
@@ -197,6 +204,7 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
         self._owner = owner
         self._drag_node_id = ""
         self._drag_offset = QPointF()
+        self._connect_source_node = 0
         self.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def mousePressEvent(self, event):  # noqa: N802 - Qt override
@@ -204,10 +212,17 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
             super().mousePressEvent(event)
             return
         scene_pos = self.mapToScene(event.position().toPoint())
+        pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
+        if pin_node and pin_side == "right":
+            self._connect_source_node = pin_node
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            event.accept()
+            return
         node_id = self._owner._material_preview_node_id_at_scene_pos(scene_pos)
         if not node_id:
             super().mousePressEvent(event)
             return
+        self._owner._select_material_preview_parallel_target(int(node_id.rsplit("_", 1)[1]))
         group = self._owner._material_card_preview_groups.get(node_id)
         if group is None:
             super().mousePressEvent(event)
@@ -219,6 +234,9 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
         event.accept()
 
     def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        if self._connect_source_node:
+            event.accept()
+            return
         if not self._drag_node_id:
             super().mouseMoveEvent(event)
             return
@@ -227,6 +245,16 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
         event.accept()
 
     def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        if self._connect_source_node:
+            source = self._connect_source_node
+            self._connect_source_node = 0
+            scene_pos = self.mapToScene(event.position().toPoint())
+            target, target_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
+            if target and target_side == "left":
+                self._owner._connect_material_preview_nodes(source, target)
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
         if not self._drag_node_id:
             super().mouseReleaseEvent(event)
             return
@@ -365,6 +393,7 @@ class RoughcutWidget(
         left_lay.setContentsMargins(6, 6, 6, 6)
         left_lay.setSpacing(6)
         self.scenario_box = self._build_frame_only_box("scenario_box", "#F5F7FA")
+        self._build_scenario_sequence_preview_surface(self.scenario_box)
         self.material_box = self._build_frame_only_box("material_box", "#0A84FF")
         self._build_material_card_preview_surface(self.material_box)
         left_lay.addWidget(self.scenario_box, stretch=1)
@@ -399,6 +428,7 @@ class RoughcutWidget(
         self.video_box = self._build_frame_only_box("video_box", "#2D3942")
         self._build_roughcut_video_player_surface(self.video_box)
         self.settings_box = self._build_frame_only_box("settings_box", "#FF453A")
+        self._build_settings_control_surface(self.settings_box)
         self.right_frame_splitter = _RoughcutFrameSplitter(
             Qt.Orientation.Vertical,
             "ㅏ",
@@ -550,14 +580,129 @@ class RoughcutWidget(
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         return frame
 
-    def _build_material_card_preview_surface(self, frame: QFrame) -> None:
+    def _build_scenario_sequence_preview_surface(self, frame: QFrame) -> None:
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(0)
 
+        self.scenario_sequence_scene = QGraphicsScene(frame)
+        self.scenario_sequence_scene.setSceneRect(0, 0, 1200, 160)
+        self.scenario_sequence_view = QGraphicsView(self.scenario_sequence_scene)
+        self.scenario_sequence_view.setObjectName("roughcutScenarioSelectedPathPreview")
+        self.scenario_sequence_view.setAccessibleName("시나리오 선택 경로 미리보기")
+        self.scenario_sequence_view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.scenario_sequence_view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.scenario_sequence_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scenario_sequence_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scenario_sequence_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.scenario_sequence_view.setStyleSheet(
+            "QGraphicsView#roughcutScenarioSelectedPathPreview { background: transparent; border: none; }"
+        )
+        self.scenario_sequence_cards: list[dict[str, object]] = []
+        lay.addWidget(self.scenario_sequence_view, stretch=1)
+
+    def _build_settings_control_surface(self, frame: QFrame) -> None:
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        self.scenario_generate_btn = QPushButton("시나리오생성")
+        self.scenario_generate_btn.setObjectName("roughcutScenarioGenerateButton")
+        self.scenario_generate_btn.setStyleSheet(button_style("primary", font_size="11px", padding="6px 10px"))
+        self.scenario_generate_btn.clicked.connect(self._generate_material_preview_scenario)
+        self.material_multi_select_btn = QPushButton("멀티선택")
+        self.material_multi_select_btn.setObjectName("roughcutMaterialMultiSelectButton")
+        self.material_multi_select_btn.setCheckable(True)
+        self.material_multi_select_btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="6px 10px"))
+        self.material_multi_select_btn.clicked.connect(self._toggle_material_multi_select)
+        self.material_merge_btn = QPushButton("합치기")
+        self.material_merge_btn.setObjectName("roughcutMaterialMergeButton")
+        self.material_merge_btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="6px 10px"))
+        self.material_merge_btn.clicked.connect(self._merge_material_preview_selection)
+        self.material_split_btn = QPushButton("분할")
+        self.material_split_btn.setObjectName("roughcutMaterialSplitButton")
+        self.material_split_btn.setStyleSheet(button_style("toolbar", font_size="11px", padding="6px 10px"))
+        self.material_split_btn.clicked.connect(self._split_material_preview_selection)
+        self.material_delete_btn = QPushButton("삭제")
+        self.material_delete_btn.setObjectName("roughcutMaterialDeleteButton")
+        self.material_delete_btn.setStyleSheet(button_style("danger", font_size="11px", padding="6px 10px"))
+        self.material_delete_btn.clicked.connect(self._delete_material_preview_selection)
+        trim_row = QHBoxLayout()
+        trim_row.setContentsMargins(0, 0, 0, 0)
+        trim_row.setSpacing(4)
+        self.material_trim_left_minus_btn = QPushButton("좌-")
+        self.material_trim_left_plus_btn = QPushButton("좌+")
+        self.material_trim_right_minus_btn = QPushButton("우-")
+        self.material_trim_right_plus_btn = QPushButton("우+")
+        for button in (
+            self.material_trim_left_minus_btn,
+            self.material_trim_left_plus_btn,
+            self.material_trim_right_minus_btn,
+            self.material_trim_right_plus_btn,
+        ):
+            button.setStyleSheet(button_style("toolbar", font_size="10px", padding="4px 6px"))
+            trim_row.addWidget(button)
+        self.material_trim_left_minus_btn.clicked.connect(lambda: self._adjust_material_preview_trim("left", -1))
+        self.material_trim_left_plus_btn.clicked.connect(lambda: self._adjust_material_preview_trim("left", 1))
+        self.material_trim_right_minus_btn.clicked.connect(lambda: self._adjust_material_preview_trim("right", -1))
+        self.material_trim_right_plus_btn.clicked.connect(lambda: self._adjust_material_preview_trim("right", 1))
+
+        for button in (
+            self.scenario_generate_btn,
+            self.material_multi_select_btn,
+            self.material_merge_btn,
+            self.material_split_btn,
+            self.material_delete_btn,
+        ):
+            lay.addWidget(button)
+        lay.addLayout(trim_row)
+        lay.addStretch(1)
+
+    def _build_material_card_preview_surface(self, frame: QFrame) -> None:
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(6)
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(6)
+        self.material_random_connect_btn = QPushButton("랜덤 연결")
+        self.material_random_connect_btn.setObjectName("roughcutMaterialRandomConnectButton")
+        self.material_random_connect_btn.setToolTip("데모용 랜덤 순서선을 생성")
+        self.material_random_connect_btn.setStyleSheet(button_style("toolbar", font_size="10px", padding="5px 8px"))
+        self.material_random_connect_btn.clicked.connect(self._randomize_material_preview_connections)
+        self.material_r_sort_btn = QPushButton("자동정렬")
+        self.material_r_sort_btn.setObjectName("roughcutMaterialRSortButton")
+        self.material_r_sort_btn.setToolTip("연결 순서를 ㄹ자 그리드로 자동 정렬")
+        self.material_r_sort_btn.setStyleSheet(button_style("primary", font_size="10px", padding="5px 8px"))
+        self.material_r_sort_btn.clicked.connect(self._apply_material_preview_r_order_from_connections)
+        controls.addWidget(self.material_random_connect_btn)
+        controls.addWidget(self.material_r_sort_btn)
+        controls.addStretch(1)
+        lay.addLayout(controls)
+
         self.material_card_preview_scene = QGraphicsScene(frame)
-        self.material_card_preview_scene.setSceneRect(0, 0, 900, 230)
+        self.material_card_preview_page_count = (
+            (_ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT + _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT - 1)
+            // _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT
+        )
+        self.material_card_preview_scene.setSceneRect(
+            0,
+            0,
+            max(1, self.material_card_preview_page_count) * _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH,
+            430,
+        )
         self.material_card_preview_order = list(range(1, _ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT + 1))
+        self.material_card_preview_connections: dict[int, list[int]] = {}
+        self.material_card_parallel_selections: dict[int, int] = {}
+        self.material_card_preview_selected_node = 1
+        self.material_card_preview_multi_select_enabled = False
+        self.material_card_preview_multi_selection: list[int] = []
+        self.material_card_preview_generated_order: list[int] = []
+        self.material_card_preview_deleted_nodes: set[int] = set()
+        self.material_card_preview_merged_nodes: dict[int, list[int]] = {}
+        self.material_card_preview_split_children: dict[int, list[int]] = {}
+        self.material_card_preview_trim_state: dict[int, dict[str, int]] = {}
         self.material_card_preview_last_reorder: dict[str, object] = {}
         self._material_card_preview_groups: dict[str, object] = {}
         self.material_card_preview_view = _RoughcutMaterialPreviewView(self.material_card_preview_scene, self)
@@ -565,7 +710,7 @@ class RoughcutWidget(
         self.material_card_preview_view.setAccessibleName("중분류 카드 Miro UML 미리보기")
         self.material_card_preview_view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.material_card_preview_view.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.material_card_preview_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.material_card_preview_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.material_card_preview_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.material_card_preview_view.setFrameShape(QFrame.Shape.NoFrame)
         self.material_card_preview_view.setStyleSheet(
@@ -574,45 +719,348 @@ class RoughcutWidget(
         self.material_card_preview_nodes: list[dict[str, object]] = []
         self._populate_material_miro_uml_preview_scene()
         lay.addWidget(self.material_card_preview_view, stretch=1)
+        self._refresh_scenario_sequence_preview()
 
     def _material_preview_slot_positions(self) -> tuple[tuple[int, int], ...]:
-        start_x = 28
+        start_x = 46
+        start_y = 26
         step_x = 178
-        row_y = 58
-        return tuple(
-            (start_x + (index * step_x), row_y)
-            for index in range(_ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT)
+        step_y = 96
+        positions: list[tuple[int, int]] = []
+        total_count = max(_ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT, len(getattr(self, "material_card_preview_order", [])))
+        for index in range(total_count):
+            page = index // _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT
+            page_index = index % _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT
+            row = page_index // _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS
+            row_offset = page_index % _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS
+            col = row_offset if row % 2 == 0 else (_ROUGHCUT_MATERIAL_PREVIEW_COLUMNS - 1 - row_offset)
+            positions.append(
+                (
+                    (page * _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH) + start_x + (col * step_x),
+                    start_y + (row * step_y),
+                )
+            )
+        return tuple(positions)
+
+    def _material_preview_node_centers(self) -> dict[int, QPointF]:
+        centers: dict[int, QPointF] = {}
+        for node in self.material_card_preview_nodes:
+            node_number = int(str(node["id"]).rsplit("_", 1)[1])
+            centers[node_number] = QPointF(
+                float(node["x"]) + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH / 2),
+                float(node["y"]) + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2),
+            )
+        return centers
+
+    def _material_preview_pin_position(self, node_number: int, side: str) -> QPointF:
+        group = self._material_card_preview_groups.get(f"middle_segment_preview_node_{node_number:02d}")
+        if group is None:
+            return QPointF()
+        rect = group.sceneBoundingRect()
+        x_pos = rect.left() if side == "left" else rect.right()
+        return QPointF(x_pos, rect.top() + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2))
+
+    def _material_preview_pin_at_scene_pos(self, scene_pos: QPointF) -> tuple[int, str]:
+        radius = _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS + 5
+        for node_number in self.material_card_preview_order:
+            for side in ("left", "right"):
+                pin_pos = self._material_preview_pin_position(node_number, side)
+                if (scene_pos - pin_pos).manhattanLength() <= radius:
+                    return node_number, side
+        return 0, ""
+
+    def _draw_material_preview_connections(self) -> None:
+        scene = self.material_card_preview_scene
+        for source, targets in self.material_card_preview_connections.items():
+            source_pos = self._material_preview_pin_position(source, "right")
+            if source_pos.isNull():
+                continue
+            selected_target = self.material_card_parallel_selections.get(source, targets[0] if targets else 0)
+            for lane_index, target in enumerate(targets[:_ROUGHCUT_MATERIAL_PREVIEW_PARALLEL_LIMIT]):
+                target_pos = self._material_preview_pin_position(target, "left")
+                if target_pos.isNull():
+                    continue
+                is_selected = target == selected_target
+                pen = QPen(QColor("#34C759" if is_selected else "#5A6A76"))
+                pen.setWidth(3 if is_selected else 2)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                if not is_selected:
+                    pen.setStyle(Qt.PenStyle.DashLine)
+                lane_offset = (lane_index - 1) * 18 if len(targets) > 1 else 0
+                path = QPainterPath(source_pos)
+                ctrl_x = (source_pos.x() + target_pos.x()) / 2
+                path.cubicTo(
+                    QPointF(ctrl_x, source_pos.y() + lane_offset),
+                    QPointF(ctrl_x, target_pos.y() + lane_offset),
+                    target_pos,
+                )
+                connector = scene.addPath(path, pen)
+                connector.setZValue(1)
+
+    def _node_label(self, node_number: int) -> str:
+        merged = self.material_card_preview_merged_nodes.get(node_number)
+        if merged:
+            return f"{node_number:02d}+{len(merged) - 1}"
+        return f"{node_number:02d}"
+
+    def _active_material_preview_order(self) -> list[int]:
+        return [node for node in self.material_card_preview_order if node not in self.material_card_preview_deleted_nodes]
+
+    def _refresh_material_preview_scene_rect(self) -> None:
+        total_count = max(1, len(self._active_material_preview_order()))
+        page_count = (total_count + _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT - 1) // _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT
+        self.material_card_preview_page_count = page_count
+        self.material_card_preview_scene.setSceneRect(
+            0,
+            0,
+            page_count * _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH,
+            430,
         )
 
-    def _populate_material_miro_uml_preview_scene(self) -> None:
-        scene = self.material_card_preview_scene
+    def _connect_material_preview_nodes(self, source: int, target: int) -> None:
+        if source == target:
+            return
+        if source not in self._active_material_preview_order() or target not in self._active_material_preview_order():
+            return
+        targets = self.material_card_preview_connections.setdefault(source, [])
+        if target not in targets:
+            targets.append(target)
+        del targets[_ROUGHCUT_MATERIAL_PREVIEW_PARALLEL_LIMIT:]
+        if source not in self.material_card_parallel_selections and targets:
+            self.material_card_parallel_selections[source] = targets[0]
+        self._populate_material_miro_uml_preview_scene()
+
+    def _randomize_material_preview_connections(self) -> None:
+        rng = random.Random(40132)
+        order = list(self._active_material_preview_order())
+        rng.shuffle(order)
+        self.material_card_preview_connections = {
+            order[index]: [order[index + 1]]
+            for index in range(len(order) - 1)
+        }
+        for source_index in range(min(4, len(order) - 3)):
+            source = order[source_index]
+            extras = [order[source_index + 2], order[source_index + 3]]
+            for target in extras:
+                if target not in self.material_card_preview_connections[source]:
+                    self.material_card_preview_connections[source].append(target)
+            del self.material_card_preview_connections[source][_ROUGHCUT_MATERIAL_PREVIEW_PARALLEL_LIMIT:]
+        self.material_card_parallel_selections = {
+            source: targets[0]
+            for source, targets in self.material_card_preview_connections.items()
+            if targets
+        }
+        self.material_card_preview_generated_order = []
+        self._populate_material_miro_uml_preview_scene()
+
+    def _selected_material_connection_sequence(self) -> list[int]:
+        active_order = self._active_material_preview_order()
+        active_set = set(active_order)
+        selected_edges: dict[int, int] = {}
+        incoming: set[int] = set()
+        for source, targets in self.material_card_preview_connections.items():
+            if source not in active_set or not targets:
+                continue
+            target = self.material_card_parallel_selections.get(source, targets[0])
+            if target not in targets or target not in active_set:
+                continue
+            selected_edges[source] = target
+            incoming.add(target)
+        roots = [node for node in active_order if node not in incoming]
+        start = roots[0] if roots else (active_order[0] if active_order else 0)
+        sequence: list[int] = []
+        seen: set[int] = set()
+        current = start
+        while current and current in active_set and current not in seen:
+            sequence.append(current)
+            seen.add(current)
+            current = selected_edges.get(current, 0)
+        for node in active_order:
+            if node not in seen:
+                sequence.append(node)
+        return sequence
+
+    def _apply_material_preview_r_order_from_connections(self) -> None:
+        old_order = list(self.material_card_preview_order)
+        sequence = self._selected_material_connection_sequence()
+        self.material_card_preview_order = sequence
+        self.material_card_preview_last_reorder = {
+            "old_order": old_order,
+            "new_order": list(sequence),
+            "mode": "auto_r_parallel_order",
+            "commit": "preview_only",
+        }
+        self.material_card_preview_generated_order = []
+        self._populate_material_miro_uml_preview_scene()
+
+    def _select_material_preview_parallel_target(self, node_number: int) -> None:
+        if node_number not in self._active_material_preview_order():
+            return
+        self.material_card_preview_selected_node = node_number
+        for source, targets in self.material_card_preview_connections.items():
+            if node_number in targets:
+                self.material_card_parallel_selections[source] = node_number
+                break
+        if self.material_card_preview_multi_select_enabled and node_number not in self.material_card_preview_multi_selection:
+            self.material_card_preview_multi_selection.append(node_number)
+        self._populate_material_miro_uml_preview_scene()
+
+    def _toggle_material_multi_select(self) -> None:
+        self.material_card_preview_multi_select_enabled = self.material_multi_select_btn.isChecked()
+        if not self.material_card_preview_multi_select_enabled:
+            self.material_card_preview_multi_selection.clear()
+        else:
+            self.material_card_preview_multi_selection.clear()
+        self._populate_material_miro_uml_preview_scene()
+
+    def _merge_material_preview_selection(self) -> None:
+        selection = [node for node in self.material_card_preview_multi_selection if node in self._active_material_preview_order()]
+        if len(selection) < 2:
+            return
+        survivor = selection[0]
+        removed = selection[1:]
+        self.material_card_preview_merged_nodes[survivor] = selection
+        self.material_card_preview_deleted_nodes.update(removed)
+        self.material_card_preview_order = [node for node in self.material_card_preview_order if node not in removed]
+        self.material_card_preview_connections = {
+            source: [target for target in targets if target not in removed]
+            for source, targets in self.material_card_preview_connections.items()
+            if source not in removed
+        }
+        self.material_card_parallel_selections = {
+            source: target
+            for source, target in self.material_card_parallel_selections.items()
+            if source not in removed and target not in removed
+        }
+        self.material_card_preview_selected_node = survivor
+        self.material_card_preview_multi_selection = [survivor]
+        self._apply_material_preview_r_order_from_connections()
+
+    def _split_material_preview_selection(self) -> None:
+        source = self.material_card_preview_selected_node
+        if source not in self._active_material_preview_order():
+            return
+        next_node = max(self.material_card_preview_order or [0]) + 1
+        source_index = self.material_card_preview_order.index(source)
+        self.material_card_preview_order.insert(source_index + 1, next_node)
+        self.material_card_preview_split_children.setdefault(source, []).append(next_node)
+        self.material_card_preview_selected_node = next_node
+        self.material_card_preview_multi_selection = [next_node] if self.material_card_preview_multi_select_enabled else []
+        self._populate_material_miro_uml_preview_scene()
+
+    def _adjust_material_preview_trim(self, side: str, delta: int) -> None:
+        node = self.material_card_preview_selected_node
+        if node not in self._active_material_preview_order():
+            return
+        state = self.material_card_preview_trim_state.setdefault(node, {"left": 0, "right": 0})
+        state[side] = state.get(side, 0) + delta
+        self._refresh_scenario_sequence_preview()
+
+    def _delete_material_preview_selection(self) -> None:
+        targets = list(self.material_card_preview_multi_selection) if self.material_card_preview_multi_select_enabled else []
+        if not targets and self.material_card_preview_selected_node:
+            targets = [self.material_card_preview_selected_node]
+        targets = [node for node in targets if node in self._active_material_preview_order()]
+        if not targets:
+            return
+        self.material_card_preview_deleted_nodes.update(targets)
+        self.material_card_preview_order = [node for node in self.material_card_preview_order if node not in targets]
+        self.material_card_preview_connections = {
+            source: [target for target in targets_list if target not in targets]
+            for source, targets_list in self.material_card_preview_connections.items()
+            if source not in targets
+        }
+        self.material_card_parallel_selections = {
+            source: target
+            for source, target in self.material_card_parallel_selections.items()
+            if source not in targets and target not in targets
+        }
+        active = self._active_material_preview_order()
+        self.material_card_preview_selected_node = active[0] if active else 0
+        self.material_card_preview_multi_selection.clear()
+        self._apply_material_preview_r_order_from_connections()
+
+    def _generate_material_preview_scenario(self) -> None:
+        self.material_card_preview_generated_order = self._selected_material_connection_sequence()
+        self._refresh_scenario_sequence_preview()
+
+    def _refresh_scenario_sequence_preview(self) -> None:
+        scene = getattr(self, "scenario_sequence_scene", None)
+        if scene is None:
+            return
         scene.clear()
-        node_positions = self._material_preview_slot_positions()
-        connector_pen = QPen(QColor("#5A6A76"))
-        connector_pen.setWidth(2)
-        connector_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        connector_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        selected_node = getattr(self, "material_card_preview_selected_node", 0)
+        generated = list(getattr(self, "material_card_preview_generated_order", []))
+        active_sequence = generated or ([selected_node] if selected_node else [])
+        scene_width = max(1200, 46 + (len(active_sequence) * 154))
+        scene.setSceneRect(0, 0, scene_width, 160)
+        self.scenario_sequence_cards = []
+
         preview_font = QFont()
         preview_font.setPointSize(9)
         preview_font.setBold(True)
         topic_font = QFont()
         topic_font.setPointSize(10)
         topic_font.setBold(True)
+        subtitle_font = QFont()
+        subtitle_font.setPointSize(8)
+        pen = QPen(QColor("#F5F7FA"), 1)
+        for index, node_number in enumerate(active_sequence):
+            x_pos = 24 + (index * 154)
+            y_pos = 28
+            card_path = QPainterPath()
+            card_path.addRoundedRect(QRectF(x_pos, y_pos, 132, 96), 8, 8)
+            scene.addPath(card_path, pen, QBrush(QColor("#0F1518")))
+            preview_path = QPainterPath()
+            preview_path.addRoundedRect(QRectF(x_pos + 10, y_pos + 10, 112, 42), 6, 6)
+            scene.addPath(preview_path, QPen(QColor("#1D2730"), 1), QBrush(QColor("#05080A")))
+            preview_text = scene.addText("영상", preview_font)
+            preview_text.setDefaultTextColor(QColor("#8A949E"))
+            preview_text.setPos(x_pos + 54, y_pos + 20)
+            topic_text = scene.addText(f"카드 {self._node_label(node_number)}", topic_font)
+            topic_text.setDefaultTextColor(QColor("#DCE3EA"))
+            topic_text.setPos(x_pos + 10, y_pos + 56)
+            trim_state = self.material_card_preview_trim_state.get(node_number, {"left": 0, "right": 0})
+            subtitle_label = f"자막 preview L{trim_state.get('left', 0):+d} R{trim_state.get('right', 0):+d}"
+            subtitle_text = scene.addText(subtitle_label, subtitle_font)
+            subtitle_text.setDefaultTextColor(QColor("#8A949E"))
+            subtitle_text.setPos(x_pos + 10, y_pos + 76)
+            self.scenario_sequence_cards.append(
+                {
+                    "node": node_number,
+                    "x": x_pos,
+                    "y": y_pos,
+                    "generated": bool(generated),
+                }
+            )
+
+    def _populate_material_miro_uml_preview_scene(self) -> None:
+        scene = self.material_card_preview_scene
+        self._refresh_material_preview_scene_rect()
+        scene.clear()
+        node_positions = self._material_preview_slot_positions()
+        preview_font = QFont()
+        preview_font.setPointSize(9)
+        preview_font.setBold(True)
+        topic_font = QFont()
+        topic_font.setPointSize(10)
+        topic_font.setBold(True)
+        badge_font = QFont()
+        badge_font.setPointSize(8)
+        badge_font.setBold(True)
         self.material_card_preview_nodes.clear()
         self._material_card_preview_groups.clear()
-        previous_center: tuple[float, float] | None = None
-        for x_pos, y_pos in node_positions:
-            center = (
-                x_pos + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH / 2),
-                y_pos + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2),
-            )
-            if previous_center is not None:
-                scene.addLine(previous_center[0] + 8, previous_center[1], center[0] - 8, center[1], connector_pen)
-            previous_center = center
 
         for slot_index, node_number in enumerate(self.material_card_preview_order, start=1):
             x_pos, y_pos = node_positions[slot_index - 1]
             node_id = f"middle_segment_preview_node_{node_number:02d}"
+            is_selected_parallel = node_number in set(self.material_card_parallel_selections.values())
+            is_selected_node = node_number == getattr(self, "material_card_preview_selected_node", 0)
+            is_multi_selected = node_number in getattr(self, "material_card_preview_multi_selection", [])
+            border_color = "#34C759" if is_selected_parallel else "#2D3942"
+            if is_selected_node or is_multi_selected:
+                border_color = "#F5F7FA"
             node_path = QPainterPath()
             node_path.addRoundedRect(
                 QRectF(
@@ -624,12 +1072,12 @@ class RoughcutWidget(
                 8,
                 8,
             )
-            node = scene.addPath(node_path, QPen(QColor("#2D3942"), 1), QBrush(QColor("#0F1518")))
+            node = scene.addPath(node_path, QPen(QColor(border_color), 1), QBrush(QColor("#0F1518")))
             node.setData(0, node_id)
 
             preview_path = QPainterPath()
             preview_path.addRoundedRect(
-                QRectF(10, 10, _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH - 20, 46),
+                QRectF(18, 10, _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH - 36, 38),
                 6,
                 6,
             )
@@ -641,14 +1089,40 @@ class RoughcutWidget(
             preview_rect = preview_text.boundingRect()
             preview_text.setPos(
                 (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH - preview_rect.width()) / 2,
-                24,
+                20,
             )
 
             topic_text = scene.addText("중분류 주제", topic_font)
             topic_text.setDefaultTextColor(QColor("#DCE3EA"))
-            topic_text.setPos(10, 62)
+            topic_text.setPos(18, 52)
 
-            group = scene.createItemGroup([node, preview, preview_text, topic_text])
+            if node_number in getattr(self, "material_card_preview_multi_selection", []):
+                badge_value = self.material_card_preview_multi_selection.index(node_number) + 1
+                badge_label = str(badge_value)
+            else:
+                badge_label = self._node_label(node_number)
+            badge_text = scene.addText(badge_label, badge_font)
+            badge_text.setDefaultTextColor(QColor("#8A949E"))
+            badge_text.setPos(8, 6)
+
+            left_pin = scene.addEllipse(
+                -_ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2) - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                QPen(QColor("#DCE3EA"), 1),
+                QBrush(QColor("#0A0F12")),
+            )
+            right_pin = scene.addEllipse(
+                _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2) - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                QPen(QColor("#DCE3EA"), 1),
+                QBrush(QColor("#0A0F12")),
+            )
+
+            group = scene.createItemGroup([node, preview, preview_text, topic_text, badge_text, left_pin, right_pin])
             group.setData(0, node_id)
             group.setPos(x_pos, y_pos)
             group.setZValue(2)
@@ -666,6 +1140,8 @@ class RoughcutWidget(
                     "slot": slot_index,
                 }
             )
+        self._draw_material_preview_connections()
+        self._refresh_scenario_sequence_preview()
 
     def _material_preview_node_id_at_scene_pos(self, scene_pos: QPointF) -> str:
         for node_id, group in sorted(
@@ -709,14 +1185,17 @@ class RoughcutWidget(
             ),
         )
         old_order = list(self.material_card_preview_order)
-        new_order = [number for number in old_order if number != node_number]
-        new_order.insert(target_slot, node_number)
+        source_slot = old_order.index(node_number)
+        new_order = list(old_order)
+        if target_slot < len(new_order):
+            new_order[source_slot], new_order[target_slot] = new_order[target_slot], new_order[source_slot]
         self.material_card_preview_order = new_order
         self.material_card_preview_last_reorder = {
             "node_id": node_id,
             "old_order": old_order,
             "new_order": list(new_order),
             "target_slot": target_slot + 1,
+            "mode": "swap",
             "commit": "preview_only",
         }
         self._populate_material_miro_uml_preview_scene()
