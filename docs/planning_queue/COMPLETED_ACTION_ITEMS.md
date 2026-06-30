@@ -1,7 +1,7 @@
 <!--
-Document-Version: 04.01.31-source-app
+Document-Version: 04.01.34-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-Last-Updated: 2026-06-29
+Last-Updated: 2026-06-30
 Updated-By: Codex
 Purpose: Completed action item archive separated from docs/planning_queue/ACTION_ITEMS.md.
 -->
@@ -18,6 +18,41 @@ queue may keep only a short archive pointer back to the relevant heading here.
 Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
+
+## v04.01.34 Roughcut 3-Row Connector Interaction Preview Checkpoint
+
+Source request: continue the roughcut card/connector goal so `ㅓ` adjusts
+height, pins and connector lines show hover feedback, connector right-click
+delete works, and the material-card grid becomes a fixed 3-row time-order model
+with parallel cut candidates.
+
+1. Bumped `APP_VERSION` and `PROJECT_SCHEMA_VERSION` from `04.01.33` to
+   `04.01.34`.
+2. Added `docs/release_notes/RELEASE_v04.01.34.md`.
+3. Updated `AGENTS.md`, `docs/README.md`, `docs/PROJECT_STATE.md`,
+   `docs/HANDOFF.md`, `docs/quality_validation/test_result.md`, and this
+   completed archive for the `v04.01.34` source-app checkpoint.
+4. Added a left-side scenario/material vertical splitter and wired the
+   floating `ㅓ` handle to adjust both the main left/right width and the
+   scenario/material height.
+5. Replaced the roughcut material preview's previous multi-row/snake-style
+   layout with a time-order model: non-parallel cards stay in a single
+   left-to-right sequence, while up to 3 parallel cut candidates stack in one
+   fixed 3-row column.
+6. Added preview-only pin hover/connect feedback, connector hover feedback,
+   right-click connector deletion, and immediate auto-layout after connector
+   create/delete/random demo actions.
+7. Preserved final subtitle authority, original media/SRT authority, STT/cache
+   defaults, NLE persistence load-owner policy, App Store readiness, DMG scope,
+   and real scenario MP4/SRT export behavior.
+8. Focused verification passed for roughcut UI, roughcut candidate,
+   app-command, project-reload, and manual screenshot evidence. Detailed
+   command evidence is recorded in `docs/quality_validation/test_result.md` and
+   `docs/release_notes/RELEASE_v04.01.34.md`.
+9. This checkpoint does not claim full QA, DMG build/validation, App Store
+   package/signing/upload/submission, owner metadata completion, real scenario
+   `_시나리오.srt` / `_시나리오.mp4` export, or NLE-backed split/merge/trim
+   commit.
 
 ## v04.01.33 Roughcut Scenario Composer Preview Release Checkpoint
 

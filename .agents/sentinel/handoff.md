@@ -1,4 +1,5 @@
 # Sentinel Handoffs Index
+- `.agents/sentinel/handoffs/20260630-235823-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260630-013331-roughcut-full-plan-recheck.md`
 - `.agents/sentinel/handoffs/20260630-013300-watchdog-handoff-probe.md`
 - `.agents/sentinel/handoffs/20260629-162317-roughcut-nle-responsiveness-scout.md`

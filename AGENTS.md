@@ -103,7 +103,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.33-source-app
+Document-Version: 04.01.34-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-30
 Updated-By: Codex
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.33`
-- Latest release checkpoint: `v04.01.33`
+- App version in code: `04.01.34`
+- Latest release checkpoint: `v04.01.34`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -235,19 +235,21 @@ Completed item rule:
   - result: pass, `profile=quick`, `scenario_count=1`, `passed=1`, `failed_count=0`, scenario `editor_compact_macau`
   - scope note: source-app editor workflow baseline only; not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, or roughcut proof.
 - Latest release checkpoint scope:
-  - `v04.01.33` - source-app roughcut scenario-composer preview checkpoint. This collects the G4 roughcut frame cleanup, video-box playback preview, material-card drag/drop preview, 30-card grid with horizontal scrolling, parallel connector auto-sort, scenario preview, and preview-only split/merge/delete/trim controls. It bumps version/schema to `04.01.33` and refreshes release/handoff pointers. It does not change final subtitle authority, original media/SRT authority, STT/cache defaults, NLE persistence load-owner policy, App Store packaging/signing/upload/submission, owner metadata readiness, DMG scope, or real scenario MP4/SRT export behavior.
+  - `v04.01.34` - source-app roughcut material-card interaction preview checkpoint. This refines the G4 roughcut preview with `ㅓ` scenario/material height adjustment, card pin hover/connect feedback, connector hover/right-click delete, immediate left-to-right time ordering, fixed 3-row parallel cut-candidate stacks, and random-connector auto layout. It bumps version/schema to `04.01.34` and refreshes release/handoff pointers. It does not change final subtitle authority, original media/SRT authority, STT/cache defaults, NLE persistence load-owner policy, App Store packaging/signing/upload/submission, owner metadata readiness, DMG scope, or real scenario MP4/SRT export behavior.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths. Owner-approved top-level `nle` canonical load opt-in is available only when paired with matching `nle_snapshot`; owner-approved standalone `nle_snapshot` load-source opt-in is available only under the explicit snapshot policy payload; owner-approved `_nle_project_state` persistence is available only as a supplemental runtime-state payload tied to that standalone snapshot policy; owner-approved legacy disk-shape replacement is available only as legacy-compatible `editor_state` row projection from the approved snapshot source; and owner-approved final source-app project persistence load-owner policy is available only under the distinct final approval schema while retaining `editor_state` as a compatibility projection.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.33`:
-  - Roughcut preview guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"` -> `3 passed, 40 deselected`.
-  - Roughcut UI/candidate guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `50 passed`.
+- Latest focused guard set for `v04.01.34`:
+  - Roughcut preview interaction guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"` -> `4 passed, 40 deselected`.
+  - Roughcut UI guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py` -> `44 passed`.
+  - Roughcut UI/candidate guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `51 passed`.
   - Roughcut app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut"` -> `10 passed, 75 deselected`.
   - Roughcut project reload guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `4 passed, 86 deselected`.
   - Focused version/status guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
-  - Manual preview artifact: `output/manual_verification/latest/roughcut_parallel_r_grid_20260630/` -> 30-card grid, 20-card visible page, horizontal scroll, max parallel targets `3`, generated scenario order count `30`.
-  - Direct version assertion -> `APP_VERSION=04.01.33`, `PROJECT_SCHEMA_VERSION=04.01.33`.
+  - Manual preview artifact: `output/manual_verification/latest/roughcut_3row_connector_handles_20260630/` -> 3-row parallel stack, pin hover, connector hover, `ㅓ`/`ㅏ` handles, and left-to-right time order preview.
+  - Direct version assertion -> `APP_VERSION=04.01.34`, `PROJECT_SCHEMA_VERSION=04.01.34`.
+  - Tracked development `.md` path check excluding `.agents` -> pass.
   - `git diff --check -- .` -> pass.
   - Inherited `v04.01.32` documentation consolidation guard: tracked development `.md` files outside `docs/` are limited to protected root `AGENTS.md` after excluding `.agents`, `.codex_work`, `_backup_mac_migration`, `checkpoints`, and `output`.
   - Presence guard: `doc/` is absent, `docs/planning_queue/ACTION_ITEMS.md` remains the active queue, `docs/planning_queue/COMPLETED_ACTION_ITEMS.md` remains the completed archive, and moved docs exist at `docs/project_reference/icon_assets.md`, `docs/workflow_operations/macos_packaging.md`, `docs/archive_legacy/native_macos_ai_studio_native.md`, and `docs/product_behavior/apple_black_color_table.md`.
@@ -265,7 +267,7 @@ Completed item rule:
   - previous direct version assertion: `APP_VERSION=04.01.32`, `PROJECT_SCHEMA_VERSION=04.01.32`
   - `git diff --check -- .` -> pass
   - active global-canvas proof: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, timeline zoom/fit/time-window/max plus zoom-max/play/pause/status/guided-status all `ok=true`, max command elapsed `0.267435s`, `19` nonzero snapshots, final track count stayed `0`, cancel returned to `backend_active=false`
-  - latest physical Jammini probe: `.agents/sentinel/handoffs/20260629-214917-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`, `PROBE_ID=20260629-214917`.
+  - latest physical Jammini probe: `.agents/sentinel/handoffs/20260630-235823-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`, `PROBE_ID=20260630-235823`.
   - three sub-agent reviews converged on requiring a distinct final-cutover schema/policy, cache-hit/save-reopen/export/roughcut/Direct SRT proof, forged-policy fail-closed evidence, `editor_state` compatibility key retention, and wording that avoids App Store/UI/STT overclaims.
 - Latest full QA X5 rolling summary:
   - artifact: `output/manual_verification/latest/qa_suite_full_standard_x5_restored_20260626_0901/x5_high_rolling_180s`
@@ -280,7 +282,7 @@ Completed item rule:
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
 - Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, `G3 Realtime NLE STT/VAD`, and `G4 Roughcut Scenario Composer`.
-- Latest completed action-item slices: `v04.01.32 G4 Material Preview Node Drag Reorder Slice` and `v04.01.32 G4 Parallel Connector Auto-Sort Preview Slice`, released together under `v04.01.33`.
+- Latest completed action-item slice: `v04.01.34 Roughcut 3-Row Connector Interaction Preview Checkpoint`.
 - Current G0 App Store evidence snapshot:
   - latest blocker matrix audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
   - latest metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`

@@ -44,9 +44,9 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.33` from `core/runtime/config.py`
-- Project schema version: `04.01.33` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.33.md`
+- App version: `04.01.34` from `core/runtime/config.py`
+- Project schema version: `04.01.34` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.34.md`
 - Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929`
 - Latest NLE final cutover-ready opt-in audit: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md`
 - Previous NLE legacy disk-shape replacement opt-in audit: `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.md`
@@ -63,12 +63,12 @@ The repository root intentionally keeps no active development docs other than
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
 - Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
 
-`v04.01.33` is a source-app roughcut scenario-composer preview checkpoint. It
-keeps final subtitle authority, original media/SRT authority, STT/cache
-defaults, NLE persistence load-owner policy, App Store readiness, and DMG
-packaging scope unchanged while recording the G4 roughcut frame cleanup,
-video-box playback surface, material-card drag/drop preview, 30-card grid,
-parallel connector auto-sort, and scenario preview scaffolding.
+`v04.01.34` is a source-app roughcut material-card interaction preview
+checkpoint. It keeps final subtitle authority, original media/SRT authority,
+STT/cache defaults, NLE persistence load-owner policy, App Store readiness, and
+DMG packaging scope unchanged while refining the G4 roughcut preview with `ㅓ`
+height adjustment, pin hover/connect feedback, connector hover/right-click
+delete, one-line time ordering, and fixed 3-row parallel cut-candidate stacks.
 
 ## Active Groups
 
@@ -79,10 +79,11 @@ The active queue is `docs/planning_queue/ACTION_ITEMS.md`.
 - `G2. Source-App NLE / Taption Editing Continuity`: monitor and preserve the current source-app NLE/Taption editing contracts. Owner-approved top-level `nle` canonical load opt-in, standalone `nle_snapshot` load-source opt-in, supplemental `_nle_project_state` persistence opt-in, legacy-compatible `editor_state` row replacement opt-in, and final source-app project persistence load-owner policy are available only under explicit policy; per-pixel writes and further editor-owner expansion remain gated.
 - `G3. Realtime NLE STT/VAD Track Visibility And Resource-Balanced Scheduling`: runtime lane owner-map, compact live status/feed, scheduler-budget telemetry, live runtime observability proof-harness, strong-evidence gate, representative real-media runtime/status proof, final-overlap deferred-save retry guard, final save/export micro-overlap repair, same-media benchmark acceptance, editor-sequence guard, direct-SRT app-command save/reopen/export, open-media generation active-worker status/cancel/close/quit responsiveness, active global-canvas responsiveness, active-worker export final-surface regression guard, and selected stronger live active-final artifact audit slices are complete; no additional G3 active-final gate is currently selected.
 - `G4. Roughcut Scenario Composer And Generation Plan`: the frame cleanup,
-  video-box preview, material-card drag/drop, 30-card grid, connector auto-sort,
-  scenario preview, and preview-only split/merge/delete/trim controls are now
-  recorded as completed preview slices; real editor binding, NLE commit,
-  save/reopen persistence, and scenario export remain active work.
+  video-box preview, material-card drag/drop, 30-card grid, one-line time
+  ordering, fixed 3-row parallel stacks, pin/connector interaction, scenario
+  preview, and preview-only split/merge/delete/trim controls are now recorded
+  as completed preview slices; real editor binding, NLE commit, save/reopen
+  persistence, and scenario export remain active work.
 
 ## Completed Evidence Policy
 
@@ -113,8 +114,9 @@ current-version readiness refresh, the `v04.01.31` G1 STT cache review
 packet evidence-binding refresh, the `v04.01.31` G0/G1/G2/G3 blocker
 recheck plus active-queue metadata sync, and the `v04.01.31` G0 owner metadata
 values template support, the `v04.01.32` development-documentation
-consolidation and new-chat bootstrap refresh, plus the `v04.01.33` roughcut
-scenario-composer preview checkpoint.
+consolidation and new-chat bootstrap refresh, the `v04.01.33` roughcut
+scenario-composer preview checkpoint, and the `v04.01.34` roughcut 3-row
+connector interaction preview checkpoint.
 
 ## Must Not Break
 

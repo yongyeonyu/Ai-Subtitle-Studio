@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.32-source-app
+Document-Version: 04.01.34-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-30
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.32`.
+- App version: `04.01.34`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -288,7 +288,8 @@ Current baseline:
 - Existing major/minor roughcut cards already support drag/drop ordering, thumbnail preview hooks, subtitle snippets, candidate selection, ordered preview, save/reopen, and export paths. These functions must remain callable even if the old visible controls are hidden.
 - Existing roughcut detail/table paths already expose chapter title/tag user edits through roughcut-local edit state. The next slice should promote that seed into an explicit middle-segment topic/tag metadata contract instead of inventing a second metadata owner.
 - Completed narrow implementation slice: the first `재료박스` preview now renders five compact PyQt6 2D node/card frames and supports mouse drag/drop reorder into a preview-only order state. Archive pointer: `COMPLETED_ACTION_ITEMS.md` -> `v04.01.32 G4 Material Preview Node Drag Reorder Slice`.
-- Completed narrow implementation slice: the preview now supports 30 grid-snapped cards, 20-card visible pages with horizontal scrolling, left/right card pins, up to 3 parallel outgoing connectors, random demo connections, connector-order `자동정렬`, scenario-box selected/generated one-line preview, and preview-only split/merge/delete/trim controls. Archive pointer: `COMPLETED_ACTION_ITEMS.md` -> `v04.01.32 G4 Parallel Connector Auto-Sort Preview Slice`.
+- Completed narrow implementation slice: the preview now supports 30 grid-snapped cards, horizontal scrolling, left/right card pins, up to 3 parallel outgoing connectors, random demo connections, connector-order `자동정렬`, scenario-box selected/generated one-line preview, and preview-only split/merge/delete/trim controls. Archive pointer: `COMPLETED_ACTION_ITEMS.md` -> `v04.01.32 G4 Parallel Connector Auto-Sort Preview Slice`.
+- Completed narrow implementation slice: the preview now supports `ㅓ` handle scenario/material height adjustment, card pin hover/connect feedback, connector hover feedback, right-click connector deletion, immediate connector create/delete auto-layout, a default one-line time sequence, and fixed 3-row parallel cut-candidate stacks. Archive pointer: `COMPLETED_ACTION_ITEMS.md` -> `v04.01.34 Roughcut 3-Row Connector Interaction Preview Checkpoint`.
 - Remaining G4 work after that slice: bind real editor-generated middle segments, commit approved reorder/split/merge/trim operations through NLE boundaries, persist real scenario/practice notebook state on save/reopen, render real thumbnails/subtitle/topic/tag data, and synchronize scenario playback/export.
 
 Owner-approved region contract:
@@ -1523,8 +1524,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.32"
-document_version: "04.01.32-source-app"
+app_version: "04.01.34"
+document_version: "04.01.34-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."

@@ -33,7 +33,69 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
-## Current Handoff - 2026-06-30 v04.01.33 / Roughcut Scenario Composer Preview Checkpoint
+## Current Handoff - 2026-06-30 v04.01.34 / Roughcut 3-Row Connector Interaction Preview
+
+### Scope
+
+- Released the roughcut material-card interaction refinement as `v04.01.34`.
+- Bumped app/project schema version to `04.01.34`.
+- Added `docs/release_notes/RELEASE_v04.01.34.md`.
+- Updated the roughcut preview so `ㅓ` adjusts scenario/material height, pins
+  visibly hover/connect, connector lines hover, right-click deletes connector
+  lines, and material cards lay out as one left-to-right time sequence unless
+  parallel cut candidates stack in a fixed 3-row column.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.34`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.34`.
+- Latest release checkpoint: `v04.01.34`.
+- `재료박스` preview default layout is a single horizontal time sequence.
+- Up to 3 parallel cut candidates stack vertically in the same time column.
+- New connections and deleted connections immediately rebuild the preview
+  order left-to-right.
+- Final subtitle authority, original media/SRT authority, STT/cache defaults,
+  NLE persistence load-owner policy, App Store readiness, DMG scope, and real
+  scenario MP4/SRT export behavior were unchanged.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile ui/roughcut/roughcut_widget.py tests/test_roughcut_ui_v2.py` -> pass.
+- Focused roughcut interaction guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"` -> `4 passed, 40 deselected`.
+- Roughcut UI guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py` -> `44 passed`.
+- Roughcut UI/candidate guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `51 passed`.
+- Roughcut app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut"` -> `10 passed, 75 deselected`.
+- Roughcut project reload guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `4 passed, 86 deselected`.
+- Focused version/status guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
+- Direct version assertion -> `APP_VERSION=04.01.34`,
+  `PROJECT_SCHEMA_VERSION=04.01.34`.
+- Tracked development `.md` path check excluding `.agents` -> pass.
+- `git diff --check -- .` -> pass.
+- Manual preview artifact:
+  `output/manual_verification/latest/roughcut_3row_connector_handles_20260630/`.
+
+### Remaining Risks
+
+- G4 real editor-generated segment binding, NLE-backed reorder/split/merge/trim
+  commit, project save/reopen persistence, and `_시나리오.srt` /
+  `_시나리오.mp4` export remain active work.
+- G0 remains blocked on Apple Distribution/installer identities, signed `.pkg`,
+  strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store
+  Connect validation, upload/submission proof, and owner metadata values JSON.
+- G1 cache defaults remain off until the owner chooses exactly one cache and
+  same-fixture post-change proof passes.
+- G2/G3 future expansion still needs a fresh bounded owner-selected gate.
+
+### Next Recommended Action
+
+- Start from `AGENTS.md`, then `docs/planning_queue/ACTION_ITEMS.md`,
+  `docs/PROJECT_STATE.md`, this handoff, and
+  `docs/release_notes/RELEASE_v04.01.34.md`.
+- For G4 implementation, connect the preview state to real editor-generated
+  middle segments and explicit NLE commit boundaries before adding real
+  scenario export.
+
+## Previous Handoff - 2026-06-30 v04.01.33 / Roughcut Scenario Composer Preview Checkpoint
 
 ### Scope
 
