@@ -19,6 +19,32 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## v04.01.33 Roughcut Scenario Composer Preview Release Checkpoint
+
+Source request: clean code, commit to main, push main, and release.
+
+1. Bumped `APP_VERSION` and `PROJECT_SCHEMA_VERSION` from `04.01.32` to
+   `04.01.33`.
+2. Added `docs/release_notes/RELEASE_v04.01.33.md`.
+3. Updated `AGENTS.md`, `docs/README.md`, `docs/PROJECT_STATE.md`,
+   `docs/HANDOFF.md`, `docs/quality_validation/test_result.md`, and this
+   completed archive for the `v04.01.33` source-app checkpoint.
+4. Released the completed G4 roughcut preview slices as a single source-app
+   checkpoint: frame cleanup, video-box playback preview, material-card
+   drag/drop preview, 30-card grid, parallel connector auto-sort, scenario
+   preview, and preview-only split/merge/delete/trim controls.
+5. Preserved final subtitle authority, original media/SRT authority, STT/cache
+   defaults, NLE persistence load-owner policy, App Store readiness, DMG scope,
+   and real scenario MP4/SRT export behavior.
+6. Focused verification passed for roughcut UI/candidate, app-command,
+   project-reload, version/schema, and diff-check guards. Detailed command
+   evidence is recorded in `docs/quality_validation/test_result.md` and
+   `docs/release_notes/RELEASE_v04.01.33.md`.
+7. This checkpoint does not claim full QA, DMG build/validation, App Store
+   package/signing/upload/submission, owner metadata completion, real scenario
+   `_시나리오.srt` / `_시나리오.mp4` export, or NLE-backed split/merge/trim
+   commit.
+
 ## v04.01.32 G4 Parallel Connector Auto-Sort Preview Slice
 
 Source request: expand the roughcut middle-segment card preview so cards can be

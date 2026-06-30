@@ -33,6 +33,72 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-06-30 v04.01.33 / Roughcut Scenario Composer Preview Checkpoint
+
+### Scope
+
+- Released the latest source-app roughcut scenario-composer preview work as
+  `v04.01.33`.
+- Bumped app/project schema version to `04.01.33`.
+- Added `docs/release_notes/RELEASE_v04.01.33.md`.
+- Updated `AGENTS.md`, `docs/README.md`, `docs/PROJECT_STATE.md`,
+  `docs/quality_validation/test_result.md`, and this handoff.
+- Preserved the completed G4 preview slice records in
+  `docs/planning_queue/COMPLETED_ACTION_ITEMS.md`.
+
+### Result
+
+- Current code version: `APP_VERSION=04.01.33`.
+- Current project schema version: `PROJECT_SCHEMA_VERSION=04.01.33`.
+- Latest release checkpoint: `v04.01.33`.
+- Roughcut `재료박스` preview supports 30 cards, 20-card visible pages,
+  horizontal scrolling, left/right pins, random demo connections, up to 3
+  parallel connector lanes, and connector-order `자동정렬`.
+- Roughcut `시나리오박스` preview shows selected/generated one-line
+  video/subtitle placeholder sequences.
+- Roughcut `설정박스` exposes preview-only scenario generation,
+  multi-select, merge, split, delete, and left/right trim controls.
+- Final subtitle authority, original media/SRT authority, STT/cache defaults,
+  NLE persistence load-owner policy, App Store readiness, DMG scope, and real
+  scenario MP4/SRT export behavior were unchanged.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile ui/roughcut/roughcut_widget.py tests/test_roughcut_ui_v2.py` -> pass.
+- Focused roughcut preview guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"` -> `3 passed, 40 deselected`.
+- Roughcut UI/candidate guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `50 passed`.
+- Roughcut app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut"` -> `10 passed, 75 deselected`.
+- Roughcut project reload guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `4 passed, 86 deselected`.
+- Focused version/status guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
+- Manual preview artifact:
+  `output/manual_verification/latest/roughcut_parallel_r_grid_20260630/`.
+- Direct version assertion -> `APP_VERSION=04.01.33`,
+  `PROJECT_SCHEMA_VERSION=04.01.33`.
+- Tracked development `.md` path check excluding `.agents`, `.codex_work`,
+  `_backup_mac_migration`, `checkpoints`, and `output` -> pass.
+- `git diff --check -- .` -> pass.
+
+### Remaining Risks
+
+- G4 real editor-generated segment binding, NLE-backed reorder/split/merge/trim
+  commit, project save/reopen persistence, and `_시나리오.srt` /
+  `_시나리오.mp4` export remain active work.
+- G0 remains blocked on Apple Distribution/installer identities, signed `.pkg`,
+  strict `codesign`, `pkgutil --check-signature`, sandbox smoke, App Store
+  Connect validation, upload/submission proof, and owner metadata values JSON.
+- G1 cache defaults remain off until the owner chooses exactly one cache and
+  same-fixture post-change proof passes.
+- G2/G3 future expansion still needs a fresh bounded owner-selected gate.
+
+### Next Recommended Action
+
+- Start from `AGENTS.md`, then `docs/planning_queue/ACTION_ITEMS.md`,
+  `docs/PROJECT_STATE.md`, this handoff, and
+  `docs/release_notes/RELEASE_v04.01.33.md`.
+- For G4 implementation, connect the preview state to real editor-generated
+  middle segments and explicit NLE commit boundaries before adding real
+  scenario export.
+
 ## Current Handoff - 2026-06-29 v04.01.32 / Code Review, Version Release, And Agent Bootstrap Refresh
 
 ### Scope

@@ -103,9 +103,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 <!-- 삭제 금지 끝: owner-requested behavioral guidelines. -->
 
 <!--
-Document-Version: 04.01.32-source-app
+Document-Version: 04.01.33-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
-Last-Updated: 2026-06-29
+Last-Updated: 2026-06-30
 Updated-By: Codex
 Purpose: Agent bootstrap, operating rules, documentation map, and new-chat continuation prompt.
 -->
@@ -114,8 +114,8 @@ Purpose: Agent bootstrap, operating rules, documentation map, and new-chat conti
 ## Project
 
 - Path: `/Users/u_mo_c/Downloads/ai_subtitle_studio`
-- App version in code: `04.01.32`
-- Latest release checkpoint: `v04.01.32`
+- App version in code: `04.01.33`
+- Latest release checkpoint: `v04.01.33`
 - Platform: macOS, Apple Silicon first.
 - Product priority: subtitle quality before speed; optimize runtime only with behavior-preserving tests.
 - UI/UX rule: do not change UI, UX, labels, layout, colors, shortcuts, menus, or popup behavior unless the owner explicitly asks.
@@ -235,13 +235,21 @@ Completed item rule:
   - result: pass, `profile=quick`, `scenario_count=1`, `passed=1`, `failed_count=0`, scenario `editor_compact_macau`
   - scope note: source-app editor workflow baseline only; not signed package, sandbox smoke, App Store validation/upload/submission, owner metadata, full QA, real-media STT quality, or roughcut proof.
 - Latest release checkpoint scope:
-  - `v04.01.32` - documentation-consolidation, code-review, release, and new-chat bootstrap checkpoint. This keeps the `v04.01.31` G2 final source-app project persistence load-owner behavior unchanged, keeps development documentation under `docs/` with root `AGENTS.md` as the only root development-doc exception, records the stale duplicate `doc/ACTION_ITEMS.md` removal, bumps version/schema to `04.01.32`, and refreshes AGENTS/HANDOFF/release pointers for the next chat. It does not change UI/UX, STT/cache defaults, NLE runtime behavior, App Store packaging/signing/upload/submission, or owner metadata readiness.
+  - `v04.01.33` - source-app roughcut scenario-composer preview checkpoint. This collects the G4 roughcut frame cleanup, video-box playback preview, material-card drag/drop preview, 30-card grid with horizontal scrolling, parallel connector auto-sort, scenario preview, and preview-only split/merge/delete/trim controls. It bumps version/schema to `04.01.33` and refreshes release/handoff pointers. It does not change final subtitle authority, original media/SRT authority, STT/cache defaults, NLE persistence load-owner policy, App Store packaging/signing/upload/submission, owner metadata readiness, DMG scope, or real scenario MP4/SRT export behavior.
 - Current NLE action source:
   - `docs/nle_engine/NLE_Action.md`
   - status: bounded runtime/session NLE mutation ownership is adopted for covered release-commit paths. Owner-approved top-level `nle` canonical load opt-in is available only when paired with matching `nle_snapshot`; owner-approved standalone `nle_snapshot` load-source opt-in is available only under the explicit snapshot policy payload; owner-approved `_nle_project_state` persistence is available only as a supplemental runtime-state payload tied to that standalone snapshot policy; owner-approved legacy disk-shape replacement is available only as legacy-compatible `editor_state` row projection from the approved snapshot source; and owner-approved final source-app project persistence load-owner policy is available only under the distinct final approval schema while retaining `editor_state` as a compatibility projection.
   - fixed fixture for next cut-boundary proof: `/Users/u_mo_c/Library/Mobile Documents/com~apple~CloudDocs/AI_EDIT/내 프로젝트 (3).MP4`, target transitions `2765 -> 2766` and `2675 -> 2676`.
-- Latest focused guard set for `v04.01.32`:
-  - Documentation consolidation guard: tracked development `.md` files outside `docs/` are limited to protected root `AGENTS.md` after excluding `.agents`, `.codex_work`, `_backup_mac_migration`, `checkpoints`, and `output`.
+- Latest focused guard set for `v04.01.33`:
+  - Roughcut preview guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"` -> `3 passed, 40 deselected`.
+  - Roughcut UI/candidate guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `50 passed`.
+  - Roughcut app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut"` -> `10 passed, 75 deselected`.
+  - Roughcut project reload guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `4 passed, 86 deselected`.
+  - Focused version/status guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
+  - Manual preview artifact: `output/manual_verification/latest/roughcut_parallel_r_grid_20260630/` -> 30-card grid, 20-card visible page, horizontal scroll, max parallel targets `3`, generated scenario order count `30`.
+  - Direct version assertion -> `APP_VERSION=04.01.33`, `PROJECT_SCHEMA_VERSION=04.01.33`.
+  - `git diff --check -- .` -> pass.
+  - Inherited `v04.01.32` documentation consolidation guard: tracked development `.md` files outside `docs/` are limited to protected root `AGENTS.md` after excluding `.agents`, `.codex_work`, `_backup_mac_migration`, `checkpoints`, and `output`.
   - Presence guard: `doc/` is absent, `docs/planning_queue/ACTION_ITEMS.md` remains the active queue, `docs/planning_queue/COMPLETED_ACTION_ITEMS.md` remains the completed archive, and moved docs exist at `docs/project_reference/icon_assets.md`, `docs/workflow_operations/macos_packaging.md`, `docs/archive_legacy/native_macos_ai_studio_native.md`, and `docs/product_behavior/apple_black_color_table.md`.
   - G2 final cutover-ready opt-in policy: final source-app project persistence load-owner policy can be accepted only when the distinct owner-approved final schema, approved standalone `nle_snapshot` canonical source, runtime-state permission, legacy-compatible `editor_state` projection permission, compatibility-key retention, `default_project_authority=nle_snapshot`, and rollback preservation flags are present.
   - G2 final cutover-ready audit: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md` -> `status=ready`, `app_version=04.01.31`, `prep_ready=true`, `persistence_cutover_ready=true`, `blockers=[]`, matrix `overall_stoplight=green`, ready/blocked gates `12/0`, current canonical owner `nle_snapshot`, `final_cutover_ready=ready`, and `not_ui_change=true`.
@@ -254,7 +262,7 @@ Completed item rule:
   - close proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_close_20260629_083123/report.json` -> `app-close-request` returned while active in `0.009954s`, then bridge became `app_unreachable` after app exit
   - quit proof: `output/manual_verification/latest/g3_open_media_generation_responsiveness_v040113_quit_20260629_083225/report.json` -> `app-quit-request` returned while active in `0.001577s`, then bridge became `app_unreachable` after app exit
   - Direct SRT focused guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "direct_srt_rows_to_runtime_nle_state or direct_srt_readback_drift_without_overwriting_srt_rows" tests/test_editor_autosave_cleanup.py -k "direct_srt_mode or direct_srt_micro_overlap"` -> `2 passed, 140 deselected`
-  - direct version assertion: `APP_VERSION=04.01.32`, `PROJECT_SCHEMA_VERSION=04.01.32`
+  - previous direct version assertion: `APP_VERSION=04.01.32`, `PROJECT_SCHEMA_VERSION=04.01.32`
   - `git diff --check -- .` -> pass
   - active global-canvas proof: `output/manual_verification/latest/g3_global_canvas_responsiveness_v040114_20260629_084817/report.md` -> `open-media`/`start-current-pipeline` ok, active `ST_PROC/backend_active=true`, timeline zoom/fit/time-window/max plus zoom-max/play/pause/status/guided-status all `ok=true`, max command elapsed `0.267435s`, `19` nonzero snapshots, final track count stayed `0`, cancel returned to `backend_active=false`
   - latest physical Jammini probe: `.agents/sentinel/handoffs/20260629-214917-watchdog-handoff-probe.md` -> `DEX_REVIEW_READY`, `PROBE_ID=20260629-214917`.
@@ -271,8 +279,8 @@ Completed item rule:
   - `snapshot_after_early_stt.png` shows subtitles appearing from `00:00.000` while generation is still in progress.
   - log evidence confirmed early STT preview, rolling STT, and Fast-STT2 activity.
 - Current active queue source: `docs/planning_queue/ACTION_ITEMS.md`, section `Active Execution Groups`.
-- Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, and `G3 Realtime NLE STT/VAD`.
-- Latest completed action-item slice: `v04.01.32 Code Review, Version Release, And Agent Bootstrap Refresh`.
+- Current active groups: `G0 Mac App Store`, `G1 STT2 / Word Precision`, `G2 Source-App NLE`, `G3 Realtime NLE STT/VAD`, and `G4 Roughcut Scenario Composer`.
+- Latest completed action-item slices: `v04.01.32 G4 Material Preview Node Drag Reorder Slice` and `v04.01.32 G4 Parallel Connector Auto-Sort Preview Slice`, released together under `v04.01.33`.
 - Current G0 App Store evidence snapshot:
   - latest blocker matrix audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
   - latest metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`

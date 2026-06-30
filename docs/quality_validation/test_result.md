@@ -1,5 +1,45 @@
 # 자동화-4 전체 UX 테스트 결과
 
+## v04.01.33 Roughcut Scenario Composer Preview Checkpoint - 2026-06-30 KST
+
+- 실행 모드: source-app roughcut UI/state preview release checkpoint; no real
+  scenario export or NLE commit authority change.
+- 결과: pass for focused roughcut preview, roughcut candidate, app-command,
+  project reload, and version/schema guards.
+- 저장 위치:
+  - Release note: `docs/release_notes/RELEASE_v04.01.33.md`
+  - Manual preview: `output/manual_verification/latest/roughcut_parallel_r_grid_20260630/`
+  - Completed archive:
+    `docs/planning_queue/COMPLETED_ACTION_ITEMS.md#v040132-g4-parallel-connector-auto-sort-preview-slice`
+- 실제 결과:
+  - `APP_VERSION` updated to `04.01.33`.
+  - `PROJECT_SCHEMA_VERSION` updated to `04.01.33`.
+  - Roughcut `재료박스` preview now supports 30 grid-snapped cards, 20-card
+    visible pages, horizontal scrolling, left/right pins, random demo
+    connections, up to 3 parallel connector lanes, and connector-order
+    `자동정렬`.
+  - Roughcut `시나리오박스` preview shows the selected card or generated
+    connector path as a one-line video/subtitle placeholder sequence.
+  - Roughcut `설정박스` exposes preview-only `시나리오생성`, `멀티선택`,
+    `합치기`, `분할`, `삭제`, and left/right trim controls.
+  - This does not write NLE rows, final subtitle rows, source media/SRT files,
+    `_시나리오.srt`, or `_시나리오.mp4`.
+- 검증:
+  - `./venv/bin/python -m py_compile ui/roughcut/roughcut_widget.py tests/test_roughcut_ui_v2.py` -> pass.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or frame_only_boxes"` -> `3 passed, 40 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `50 passed`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut"` -> `10 passed, 75 deselected`.
+  - `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `4 passed, 86 deselected`.
+  - `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
+  - Direct version assertion -> `APP_VERSION=04.01.33`, `PROJECT_SCHEMA_VERSION=04.01.33`.
+  - Tracked development `.md` path check excluding `.agents`, `.codex_work`,
+    `_backup_mac_migration`, `checkpoints`, and `output` -> pass.
+  - `git diff --check -- .` -> pass.
+- 제외:
+  - This does not prove full QA, DMG build/validation, App Store
+    package/signing/upload/submission, owner metadata completion, real scenario
+    MP4/SRT export, or NLE-backed split/merge/trim commit.
+
 ## v04.01.32 Code Review, Version Release, And Agent Bootstrap Refresh - 2026-06-29 KST
 
 - 실행 모드: documentation/release/code-review checkpoint; no runtime behavior change.
