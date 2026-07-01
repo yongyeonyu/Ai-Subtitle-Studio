@@ -37,6 +37,9 @@ from core.roughcut.storyboard_graph import (
     STORYBOARD_ROW_COUNT,
     STORYBOARD_ROW_LABELS,
     STORYBOARD_ROW_ROLE_NAMES,
+    build_storyboard_layout_plan,
+    selected_storyboard_connection_sequence,
+    sorted_storyboard_nodes_by_grid,
     storyboard_row_duration_seconds,
 )
 from ui.settings.qml_panel import attach_qml_tab_bar
@@ -72,19 +75,21 @@ _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS = 7
 _ROUGHCUT_MATERIAL_PREVIEW_ROWS = STORYBOARD_ROW_COUNT
 _ROUGHCUT_MATERIAL_PREVIEW_ROW_ORDER = tuple(range(STORYBOARD_ROW_COUNT))
 _ROUGHCUT_MATERIAL_PREVIEW_VISIBLE_COUNT = _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS * _ROUGHCUT_MATERIAL_PREVIEW_ROWS
-_ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH = 1400
+_ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH = 2528
 _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH = 132
 _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT = 74
-_ROUGHCUT_MATERIAL_PREVIEW_NODE_STEP_X = 188
-_ROUGHCUT_MATERIAL_PREVIEW_START_X = 106
+_ROUGHCUT_MATERIAL_PREVIEW_NODE_STEP_X = 376
+_ROUGHCUT_MATERIAL_PREVIEW_START_X = 126
 _ROUGHCUT_MATERIAL_PREVIEW_START_Y = 26
 _ROUGHCUT_MATERIAL_PREVIEW_ROW_STEP_Y = 96
 _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS = 8
 _ROUGHCUT_MATERIAL_PREVIEW_PIN_HIT_RADIUS = 15
 _ROUGHCUT_MATERIAL_PREVIEW_SCENE_HEIGHT = 626
+_ROUGHCUT_MATERIAL_PREVIEW_SORT_ANIMATION_MS = 1040
 _ROUGHCUT_MATERIAL_PREVIEW_SHADOW_COLOR = "#00C8FF"
 _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES = STORYBOARD_ROW_ROLE_NAMES
 _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS = STORYBOARD_CONNECTION_ROLE_COLORS
+_ROUGHCUT_MATERIAL_PREVIEW_AUTO_SORT_ON_CONNECT = True
 _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_ROWS = {
     role: index for index, role in enumerate(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES)
 }
@@ -259,6 +264,7 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
         self._owner = owner
         self._drag_node_id = ""
         self._drag_offset = QPointF()
+        self._drag_insert_shift = False
         self._connect_source_node = 0
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -285,6 +291,7 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
                     group.setPos(original_pos)
                     self._drag_node_id = copied_node_id
                     self._drag_offset = scene_pos - original_pos
+                    self._drag_insert_shift = True
                     self._owner._begin_material_preview_node_drag(copied_node_id)
                     self.setCursor(Qt.CursorShape.ClosedHandCursor)
                     event.accept()
@@ -297,9 +304,12 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
         if self._connect_source_node:
             pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
             if pin_node and pin_side == "left":
-                self._owner._connect_material_preview_nodes(self._connect_source_node, pin_node)
+                self._owner._connect_material_preview_nodes(
+                    self._connect_source_node,
+                    pin_node,
+                    clear_routing_before_refresh=True,
+                )
                 self._connect_source_node = 0
-                self._owner._clear_material_preview_routing_mode()
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
                 event.accept()
                 return
@@ -311,11 +321,6 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
                 self.setCursor(Qt.CursorShape.CrossCursor)
                 event.accept()
                 return
-        source, target = self._owner._material_preview_connection_at_scene_pos(scene_pos)
-        if source and target:
-            self._owner._cycle_material_preview_connection_role(source, target)
-            event.accept()
-            return
         pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
         if pin_node and pin_side == "right":
             self._connect_source_node = pin_node
@@ -323,6 +328,11 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
             self._owner._set_material_preview_connect_cursor(scene_pos)
             self._owner._set_material_preview_hover_pin(pin_node, pin_side)
             self.setCursor(Qt.CursorShape.CrossCursor)
+            event.accept()
+            return
+        source, target = self._owner._material_preview_connection_at_scene_pos(scene_pos)
+        if source and target:
+            self._owner._cycle_material_preview_connection_role(source, target)
             event.accept()
             return
         node_id = self._owner._material_preview_node_id_at_scene_pos(scene_pos)
@@ -336,6 +346,7 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
             return
         self._drag_node_id = node_id
         self._drag_offset = scene_pos - group.pos()
+        self._drag_insert_shift = False
         self._owner._begin_material_preview_node_drag(node_id)
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
         event.accept()
@@ -371,9 +382,12 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
             scene_pos = self.mapToScene(event.position().toPoint())
             target, target_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
             if target and target_side == "left":
-                self._owner._connect_material_preview_nodes(source, target)
+                self._owner._connect_material_preview_nodes(
+                    source,
+                    target,
+                    clear_routing_before_refresh=True,
+                )
                 self._connect_source_node = 0
-                self._owner._clear_material_preview_routing_mode()
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             else:
                 self._owner._set_material_preview_connect_cursor(scene_pos)
@@ -385,9 +399,15 @@ class _RoughcutMaterialPreviewView(QGraphicsView):
             return
         node_id = self._drag_node_id
         scene_pos = self.mapToScene(event.position().toPoint())
+        insert_shift = self._drag_insert_shift
         self._drag_node_id = ""
         self._drag_offset = QPointF()
-        self._owner._finish_material_preview_node_drag(node_id, scene_pos)
+        self._drag_insert_shift = False
+        self._owner._finish_material_preview_node_drag(
+            node_id,
+            scene_pos,
+            insert_shift=insert_shift,
+        )
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         event.accept()
 
@@ -867,6 +887,8 @@ class RoughcutWidget(
         self.material_card_preview_connection_shadow_path = QPainterPath()
         self.material_card_preview_hover_connection: tuple[int, int] = (0, 0)
         self.material_card_preview_connection_paths: dict[tuple[int, int], QPainterPath] = {}
+        self.material_card_preview_lane_connections: dict[int, int] = {}
+        self.material_card_preview_parallel_column_counts: tuple[int, ...] = ()
         self.material_card_preview_drag_shadow_slot = 0
         self.material_card_preview_drag_shadow_rect: QRectF | None = None
         self.material_card_preview_drag_shadow_item = None
@@ -881,6 +903,7 @@ class RoughcutWidget(
         self.material_card_preview_last_reorder: dict[str, object] = {}
         self.material_card_preview_last_auto_copy: dict[str, object] = {}
         self.material_card_preview_last_animation: dict[str, object] = {}
+        self.material_card_preview_sort_vectors: list[dict[str, object]] = []
         self._material_card_preview_animations: list[QVariantAnimation] = []
         self._material_card_preview_groups: dict[str, object] = {}
         self.material_card_preview_view = RoughcutStoryboardView(self.material_card_preview_scene, self)
@@ -1052,13 +1075,13 @@ class RoughcutWidget(
         ]
         self.material_card_preview_last_animation = {
             "mode": "smooth_grid_sort",
-            "duration_ms": 520,
+            "duration_ms": _ROUGHCUT_MATERIAL_PREVIEW_SORT_ANIMATION_MS,
             "move_count": len(valid_moves),
             "commit": "preview_only",
         }
         for group, start_pos, end_pos in valid_moves:
             animation = QVariantAnimation(self)
-            animation.setDuration(520)
+            animation.setDuration(_ROUGHCUT_MATERIAL_PREVIEW_SORT_ANIMATION_MS)
             animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
             animation.setStartValue(QPointF(start_pos))
             animation.setEndValue(QPointF(end_pos))
@@ -1075,6 +1098,9 @@ class RoughcutWidget(
             animation.start()
 
     def _material_preview_pin_position(self, node_number: int, side: str) -> QPointF:
+        if node_number < 0:
+            row = self._material_preview_lane_row_from_source(node_number)
+            return self._material_preview_lane_pin_position(row) if side == "right" else QPointF()
         group = self._material_card_preview_groups.get(f"middle_segment_preview_node_{node_number:02d}")
         if group is None:
             return QPointF()
@@ -1095,6 +1121,13 @@ class RoughcutWidget(
                     closest_node = node_number
                     closest_side = side
                     closest_distance = distance
+        for row in range(len(STORYBOARD_ROW_LABELS)):
+            pin_pos = self._material_preview_lane_pin_position(row)
+            distance = (scene_pos - pin_pos).manhattanLength()
+            if distance <= radius and distance < closest_distance:
+                closest_node = self._material_preview_lane_source_id(row)
+                closest_side = "right"
+                closest_distance = distance
         return closest_node, closest_side
 
     def _draw_material_preview_connections(self) -> None:
@@ -1103,6 +1136,45 @@ class RoughcutWidget(
         connection_specs: list[dict[str, object]] = []
         active_set = set(self._active_material_preview_order())
         hover_connection = getattr(self, "material_card_preview_hover_connection", (0, 0))
+        for row, target in self.material_card_preview_lane_connections.items():
+            if target not in active_set:
+                continue
+            source = self._material_preview_lane_source_id(row)
+            source_pos = self._material_preview_lane_pin_position(row)
+            target_pos = self._material_preview_pin_position(target, "left")
+            if source_pos.isNull() or target_pos.isNull():
+                continue
+            role = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
+                min(row, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
+            ]
+            is_hovered = hover_connection == (source, target)
+            role_color = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS.get(role, "#5A6A76")
+            pen = QPen(QColor("#00C8FF" if is_hovered else role_color))
+            pen.setWidth(4 if is_hovered else 3)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            path, route_points = self._material_preview_connection_path_and_points(
+                source_pos,
+                target_pos,
+                source_node=source,
+                target_node=target,
+                role=role,
+            )
+            self.material_card_preview_connection_paths[(source, target)] = path
+            connector = scene.addPath(path, pen)
+            connector.setZValue(1)
+            connector.setData(0, f"middle_segment_preview_lane_connection_{row}_{target}_{role}")
+            connection_specs.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "role": role,
+                    "points": route_points,
+                    "color": QColor("#00C8FF" if is_hovered else role_color),
+                    "width": 4 if is_hovered else 3,
+                    "opacity": 1.0,
+                }
+            )
         for source, targets in self.material_card_preview_connections.items():
             if source not in active_set:
                 continue
@@ -1190,16 +1262,24 @@ class RoughcutWidget(
         blocked_rect = getattr(self, "material_card_preview_drag_shadow_rect", None)
         if blocked_rect is not None and not blocked_rect.isNull():
             blockers.append(blocked_rect.adjusted(-4, -4, 4, 4))
-        fallback_points = self._material_preview_orthogonal_connection_points(source_pos, target_pos, channels[0])
-        fallback = self._material_preview_rounded_polyline_path(fallback_points)
+        candidates: list[tuple[float, bool, QPainterPath, list[QPointF]]] = []
         for channel_y in channels:
             points = self._material_preview_orthogonal_connection_points(source_pos, target_pos, channel_y)
             path = self._material_preview_rounded_polyline_path(points)
-            if not self._material_preview_path_intersects_any_rect(path, blockers):
-                return path, points
-            fallback = path
-            fallback_points = points
-        return fallback, fallback_points
+            intersects = self._material_preview_path_intersects_any_rect(path, blockers)
+            candidates.append((self._material_preview_polyline_length(points), intersects, path, points))
+        if not candidates:
+            return QPainterPath(), []
+        non_intersecting = [candidate for candidate in candidates if not candidate[1]]
+        selected = min(non_intersecting or candidates, key=lambda candidate: candidate[0])
+        return selected[2], selected[3]
+
+    def _material_preview_polyline_length(self, points: list[QPointF]) -> float:
+        total = 0.0
+        for previous, current in zip(points, points[1:]):
+            total += abs(float(current.x()) - float(previous.x()))
+            total += abs(float(current.y()) - float(previous.y()))
+        return round(total, 3)
 
     def _material_preview_route_channels(
         self,
@@ -1455,12 +1535,18 @@ class RoughcutWidget(
             return
         target_node, target_side = getattr(self, "material_card_preview_hover_pin", (0, ""))
         target_pos = self._material_preview_pin_position(target_node, "left") if target_node and target_side == "left" else cursor
+        role = "main"
+        if source < 0:
+            lane_row = self._material_preview_lane_row_from_source(source)
+            role = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
+                min(lane_row, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
+            ]
         path = self._material_preview_connection_path(
             source_pos,
             target_pos,
             source_node=source,
             target_node=target_node,
-            role="main",
+            role=role,
         )
         self.material_card_preview_connection_shadow_path = path
         pen = QPen(QColor("#FF3B30"), 3)
@@ -1472,11 +1558,12 @@ class RoughcutWidget(
         shadow.setZValue(4)
         shadow.setData(0, "middle_segment_preview_connection_shadow")
 
-    def _clear_material_preview_routing_mode(self) -> None:
+    def _clear_material_preview_routing_mode(self, *, refresh: bool = True) -> None:
         self.material_card_preview_connect_source = 0
         self.material_card_preview_connect_cursor = None
         self.material_card_preview_hover_pin = (0, "")
-        self._populate_material_miro_uml_preview_scene()
+        if refresh:
+            self._populate_material_miro_uml_preview_scene()
 
     def _pending_material_preview_connection_role(self, source: int) -> str:
         targets = self.material_card_preview_connections.get(source, [])
@@ -1486,6 +1573,12 @@ class RoughcutWidget(
         ]
 
     def _material_preview_pin_role_color(self, node_number: int, side: str) -> str:
+        if node_number < 0:
+            row = self._material_preview_lane_row_from_source(node_number)
+            role = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
+                min(row, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
+            ]
+            return _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS.get(role, _ROUGHCUT_MATERIAL_PREVIEW_SHADOW_COLOR)
         connect_source = getattr(self, "material_card_preview_connect_source", 0)
         if side == "right" and connect_source == node_number:
             role = self._pending_material_preview_connection_role(node_number)
@@ -1520,6 +1613,18 @@ class RoughcutWidget(
             (source_node - 1) % len(_ROUGHCUT_MATERIAL_PREVIEW_SOURCE_COLORS)
         ]
 
+    def _material_preview_lane_source_id(self, row: int) -> int:
+        row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+        return -(row + 1)
+
+    def _material_preview_lane_row_from_source(self, source: int) -> int:
+        return max(0, min(len(STORYBOARD_ROW_LABELS) - 1, abs(int(source)) - 1))
+
+    def _material_preview_lane_pin_position(self, row: int) -> QPointF:
+        row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+        y_pos = _ROUGHCUT_MATERIAL_PREVIEW_START_Y + (row * _ROUGHCUT_MATERIAL_PREVIEW_ROW_STEP_Y)
+        return QPointF(86, y_pos + 37)
+
     def _active_material_preview_order(self) -> list[int]:
         return [node for node in self.material_card_preview_order if node not in self.material_card_preview_deleted_nodes]
 
@@ -1539,13 +1644,9 @@ class RoughcutWidget(
         )
 
     def _material_preview_sorted_by_grid(self) -> list[int]:
-        return sorted(
+        return sorted_storyboard_nodes_by_grid(
             self._active_material_preview_order(),
-            key=lambda node: (
-                self.material_card_preview_grid_slots.get(node, (1, 0))[1],
-                self.material_card_preview_grid_slots.get(node, (1, 0))[0],
-                node,
-            ),
+            self.material_card_preview_grid_slots,
         )
 
     def _assign_material_preview_grid_from_order(self, ordered_nodes: list[int]) -> None:
@@ -1593,6 +1694,28 @@ class RoughcutWidget(
         self.material_card_preview_grid_slots[node_number] = (row, col)
         self.material_card_preview_order = self._material_preview_sorted_by_grid()
 
+    def _move_material_preview_node_to_grid_slot(self, node_number: int, row: int, col: int) -> dict[str, object]:
+        row = max(0, min(_ROUGHCUT_MATERIAL_PREVIEW_ROWS - 1, row))
+        col = max(0, col)
+        old_slot = self.material_card_preview_grid_slots.get(node_number, (row, col))
+        swap_node = 0
+        for occupant, slot in self.material_card_preview_grid_slots.items():
+            if occupant == node_number or occupant in self.material_card_preview_deleted_nodes:
+                continue
+            if slot == (row, col):
+                swap_node = occupant
+                break
+        self.material_card_preview_grid_slots[node_number] = (row, col)
+        if swap_node:
+            self.material_card_preview_grid_slots[swap_node] = old_slot
+        self.material_card_preview_order = self._material_preview_sorted_by_grid()
+        return {
+            "mode": "grid_swap" if swap_node else "grid_move_empty",
+            "swapped_with": swap_node,
+            "old_grid": {"row": old_slot[0], "col": old_slot[1]},
+            "target_grid": {"row": row, "col": col},
+        }
+
     def _material_preview_incoming_sources(self, target: int) -> list[int]:
         return [
             source
@@ -1638,8 +1761,21 @@ class RoughcutWidget(
             self._populate_material_miro_uml_preview_scene()
         return next_node
 
-    def _connect_material_preview_nodes(self, source: int, target: int) -> None:
+    def _connect_material_preview_nodes(
+        self,
+        source: int,
+        target: int,
+        *,
+        clear_routing_before_refresh: bool = False,
+    ) -> None:
         if source == target:
+            return
+        if source < 0:
+            self._connect_material_preview_lane_to_node(
+                self._material_preview_lane_row_from_source(source),
+                target,
+                clear_routing_before_refresh=clear_routing_before_refresh,
+            )
             return
         if source not in self._active_material_preview_order() or target not in self._active_material_preview_order():
             return
@@ -1682,7 +1818,18 @@ class RoughcutWidget(
         if source not in self.material_card_parallel_selections and targets:
             self.material_card_parallel_selections[source] = targets[0]
         self.material_card_preview_generated_order = []
-        self._apply_material_preview_r_order_from_connections()
+        if clear_routing_before_refresh:
+            self._clear_material_preview_routing_mode(refresh=False)
+        if _ROUGHCUT_MATERIAL_PREVIEW_AUTO_SORT_ON_CONNECT:
+            self._apply_material_preview_r_order_from_connections()
+        else:
+            self.material_card_preview_last_reorder = {
+                "source": source,
+                "target": target,
+                "mode": "connect_without_auto_sort",
+                "commit": "preview_only",
+            }
+            self._populate_material_miro_uml_preview_scene()
 
     def _default_material_preview_connection_role(self, source: int, target: int) -> str:
         targets = self.material_card_preview_connections.get(source, [])
@@ -1719,6 +1866,15 @@ class RoughcutWidget(
 
     def _delete_material_preview_connection(self, source: int, target: int) -> None:
         animate_from = self._material_preview_current_group_positions()
+        if source < 0:
+            row = self._material_preview_lane_row_from_source(source)
+            if self.material_card_preview_lane_connections.get(row) != target:
+                return
+            self.material_card_preview_lane_connections.pop(row, None)
+            self.material_card_preview_hover_connection = (0, 0)
+            self.material_card_preview_generated_order = []
+            self._apply_material_preview_r_order_from_connections(animate_from=animate_from)
+            return
         targets = self.material_card_preview_connections.get(source)
         if not targets or target not in targets:
             return
@@ -1731,7 +1887,16 @@ class RoughcutWidget(
             self.material_card_parallel_selections[source] = targets[0]
         self.material_card_preview_hover_connection = (0, 0)
         self.material_card_preview_generated_order = []
-        self._apply_material_preview_r_order_from_connections(animate_from=animate_from)
+        if _ROUGHCUT_MATERIAL_PREVIEW_AUTO_SORT_ON_CONNECT:
+            self._apply_material_preview_r_order_from_connections(animate_from=animate_from)
+        else:
+            self.material_card_preview_last_reorder = {
+                "source": source,
+                "target": target,
+                "mode": "delete_connection_without_auto_sort",
+                "commit": "preview_only",
+            }
+            self._populate_material_miro_uml_preview_scene()
 
     def _material_preview_connection_at_scene_pos(self, scene_pos: QPointF) -> tuple[int, int]:
         stroker = QPainterPathStroker()
@@ -1793,6 +1958,7 @@ class RoughcutWidget(
             for source, targets in self.material_card_preview_connections.items()
             if targets
         }
+        self.material_card_preview_parallel_column_counts = ()
         self.material_card_preview_connection_roles = {
             (source, target): _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
                 min(index, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
@@ -1804,59 +1970,94 @@ class RoughcutWidget(
         self._apply_material_preview_r_order_from_connections()
 
     def _selected_material_connection_sequence(self) -> list[int]:
-        active_order = self._active_material_preview_order()
-        active_set = set(active_order)
-        selected_edges: dict[int, int] = {}
-        incoming: set[int] = set()
-        for source, targets in self.material_card_preview_connections.items():
-            if source not in active_set or not targets:
-                continue
-            main_targets = [
-                target
-                for target in targets
-                if target in active_set and self._material_preview_connection_role(source, target) == "main"
-            ]
-            target = main_targets[0] if main_targets else self.material_card_parallel_selections.get(source, targets[0])
-            if target not in targets or target not in active_set:
-                continue
-            selected_edges[source] = target
-            incoming.add(target)
-        roots = [node for node in active_order if node not in incoming]
-        sequence: list[int] = []
-        seen: set[int] = set()
-        for start in roots or active_order:
-            current = start
-            while current and current in active_set and current not in seen:
-                sequence.append(current)
-                seen.add(current)
-                current = selected_edges.get(current, 0)
-        for node in active_order:
-            if node not in seen:
-                sequence.append(node)
-        return sequence
+        return selected_storyboard_connection_sequence(
+            self._active_material_preview_order(),
+            self.material_card_preview_connections,
+            self.material_card_preview_connection_roles,
+            self.material_card_parallel_selections,
+        )
+
+    def _connect_material_preview_lane_to_node(
+        self,
+        row: int,
+        target: int,
+        *,
+        clear_routing_before_refresh: bool = False,
+    ) -> None:
+        if target not in self._active_material_preview_order():
+            return
+        row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+        for existing_row, existing_target in list(self.material_card_preview_lane_connections.items()):
+            if existing_target == target and existing_row != row:
+                self.material_card_preview_lane_connections.pop(existing_row, None)
+        self.material_card_preview_lane_connections[row] = target
+        self.material_card_preview_generated_order = []
+        if clear_routing_before_refresh:
+            self._clear_material_preview_routing_mode(refresh=False)
+        self._apply_material_preview_r_order_from_connections()
 
     def _apply_material_preview_r_order_from_connections(
         self,
         *,
         animate_from: dict[int, QPointF] | None = None,
+        ordered_nodes: list[int] | None = None,
     ) -> None:
         if animate_from is None:
             animate_from = self._material_preview_current_group_positions()
         old_order = list(self.material_card_preview_order)
-        sequence = self._selected_material_connection_sequence()
-        self.material_card_preview_order = sequence
-        self._assign_material_preview_grid_from_order(sequence)
-        self._align_material_preview_connection_targets()
-        sequence = self._material_preview_sorted_by_grid()
-        self.material_card_preview_order = sequence
+        active_nodes = list(ordered_nodes) if ordered_nodes is not None else self._active_material_preview_order()
+        plan = build_storyboard_layout_plan(
+            active_nodes,
+            self.material_card_preview_connections,
+            self.material_card_preview_connection_roles,
+            parallel_selections=self.material_card_parallel_selections,
+            lane_anchors=self.material_card_preview_lane_connections,
+            parallel_column_counts=self.material_card_preview_parallel_column_counts,
+            deleted_nodes=self.material_card_preview_deleted_nodes,
+        )
+        self.material_card_preview_order = list(plan.order)
+        self.material_card_preview_grid_slots = dict(plan.grid_slots)
+        self.material_card_preview_sort_vectors = [
+            {
+                "ordinal": vector.ordinal,
+                "source": vector.source,
+                "target": vector.target,
+                "role": vector.role,
+                "source_grid": {"row": vector.source_row, "col": vector.source_col},
+                "target_grid": {"row": vector.target_row, "col": vector.target_col},
+                "delta": {"row": vector.delta_row, "col": vector.delta_col},
+                "manhattan_grid_distance": vector.manhattan_grid_distance,
+            }
+            for vector in plan.vectors
+        ]
         self.material_card_preview_last_reorder = {
             "old_order": old_order,
-            "new_order": list(sequence),
+            "new_order": list(plan.order),
+            "sort_vectors": list(self.material_card_preview_sort_vectors),
             "mode": "auto_r_parallel_order",
             "commit": "preview_only",
         }
         self.material_card_preview_generated_order = []
         self._populate_material_miro_uml_preview_scene(animate_from=animate_from)
+
+    def _apply_material_preview_parallel_group_layout(
+        self,
+        group_counts: tuple[int, ...] | list[int],
+        *,
+        ordered_nodes: list[int] | None = None,
+    ) -> None:
+        active_order = self._active_material_preview_order()
+        active_set = set(active_order)
+        ordered: list[int] = []
+        for node in ordered_nodes or active_order:
+            node = int(node)
+            if node in active_set and node not in ordered:
+                ordered.append(node)
+        ordered.extend(node for node in active_order if node not in ordered)
+        self.material_card_preview_parallel_column_counts = tuple(
+            count for count in (int(raw_count) for raw_count in group_counts) if count > 0
+        )
+        self._apply_material_preview_r_order_from_connections(ordered_nodes=ordered)
 
     def _select_material_preview_parallel_target(self, node_number: int) -> None:
         if node_number not in self._active_material_preview_order():
@@ -2211,6 +2412,19 @@ class RoughcutWidget(
             lane_text = scene.addText(label, lane_font)
             lane_text.setDefaultTextColor(QColor("#DCE3EA"))
             lane_text.setPos(20, y_pos + 26)
+            lane_source = self._material_preview_lane_source_id(row_index)
+            lane_hovered = getattr(self, "material_card_preview_hover_pin", (0, "")) == (lane_source, "right")
+            lane_connected = row_index in getattr(self, "material_card_preview_lane_connections", {})
+            lane_pin_color = "#00C8FF" if lane_hovered else (lane_color if lane_connected else "#0A0F12")
+            lane_pin = scene.addEllipse(
+                86 - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                y_pos + 37 - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                QPen(QColor("#F5F7FA" if lane_hovered else "#DCE3EA"), 1),
+                QBrush(QColor(lane_pin_color)),
+            )
+            lane_pin.setData(0, f"middle_segment_storyboard_lane_pin_{row_index}")
 
         for slot_index, node_number in enumerate(self.material_card_preview_order, start=1):
             x_pos, y_pos = node_positions[slot_index - 1]
@@ -2371,7 +2585,13 @@ class RoughcutWidget(
             _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2,
         ))
 
-    def _finish_material_preview_node_drag(self, node_id: str, scene_pos: QPointF) -> None:
+    def _finish_material_preview_node_drag(
+        self,
+        node_id: str,
+        scene_pos: QPointF,
+        *,
+        insert_shift: bool = False,
+    ) -> None:
         group = self._material_card_preview_groups.get(node_id)
         if group is None:
             return
@@ -2380,7 +2600,19 @@ class RoughcutWidget(
         target_row, target_col = self._material_preview_grid_slot_for_scene_pos(node_center)
         old_order = list(self.material_card_preview_order)
         old_slots = dict(self.material_card_preview_grid_slots)
-        self._place_material_preview_node_at_grid_slot(node_number, target_row, target_col)
+        if insert_shift:
+            self._place_material_preview_node_at_grid_slot(node_number, target_row, target_col)
+            move_result = {
+                "mode": "grid_insert_shift",
+                "swapped_with": 0,
+                "old_grid": {
+                    "row": old_slots.get(node_number, (target_row, target_col))[0],
+                    "col": old_slots.get(node_number, (target_row, target_col))[1],
+                },
+                "target_grid": {"row": target_row, "col": target_col},
+            }
+        else:
+            move_result = self._move_material_preview_node_to_grid_slot(node_number, target_row, target_col)
         new_order = list(self.material_card_preview_order)
         self.material_card_preview_last_reorder = {
             "node_id": node_id,
@@ -2390,7 +2622,9 @@ class RoughcutWidget(
             "new_slots": dict(self.material_card_preview_grid_slots),
             "target_slot": (target_col * _ROUGHCUT_MATERIAL_PREVIEW_ROWS) + target_row + 1,
             "target_grid": {"row": target_row, "col": target_col},
-            "mode": "grid_insert_shift",
+            "old_grid": move_result["old_grid"],
+            "swapped_with": move_result["swapped_with"],
+            "mode": move_result["mode"],
             "commit": "preview_only",
         }
         self._clear_material_preview_drag_shadow()

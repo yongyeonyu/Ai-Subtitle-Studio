@@ -13,6 +13,7 @@ class RoughcutStoryboardView(QGraphicsView):
         self._drag_offset = QPointF()
         self._drag_press_scene_pos = QPointF()
         self._drag_started = False
+        self._drag_insert_shift = False
         self._connect_source_node = 0
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -41,6 +42,7 @@ class RoughcutStoryboardView(QGraphicsView):
                     self._drag_offset = scene_pos - original_pos
                     self._drag_press_scene_pos = QPointF(scene_pos)
                     self._drag_started = True
+                    self._drag_insert_shift = True
                     self._owner._begin_material_preview_node_drag(copied_node_id)
                     self.setCursor(Qt.CursorShape.ClosedHandCursor)
                     event.accept()
@@ -53,9 +55,12 @@ class RoughcutStoryboardView(QGraphicsView):
         if self._connect_source_node:
             pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
             if pin_node and pin_side == "left":
-                self._owner._connect_material_preview_nodes(self._connect_source_node, pin_node)
+                self._owner._connect_material_preview_nodes(
+                    self._connect_source_node,
+                    pin_node,
+                    clear_routing_before_refresh=True,
+                )
                 self._connect_source_node = 0
-                self._owner._clear_material_preview_routing_mode()
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
                 event.accept()
                 return
@@ -67,11 +72,6 @@ class RoughcutStoryboardView(QGraphicsView):
                 self.setCursor(Qt.CursorShape.CrossCursor)
                 event.accept()
                 return
-        source, target = self._owner._material_preview_connection_at_scene_pos(scene_pos)
-        if source and target:
-            self._owner._cycle_material_preview_connection_role(source, target)
-            event.accept()
-            return
         pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
         if pin_node and pin_side == "right":
             self._connect_source_node = pin_node
@@ -79,6 +79,11 @@ class RoughcutStoryboardView(QGraphicsView):
             self._owner._set_material_preview_connect_cursor(scene_pos)
             self._owner._set_material_preview_hover_pin(pin_node, pin_side)
             self.setCursor(Qt.CursorShape.CrossCursor)
+            event.accept()
+            return
+        source, target = self._owner._material_preview_connection_at_scene_pos(scene_pos)
+        if source and target:
+            self._owner._cycle_material_preview_connection_role(source, target)
             event.accept()
             return
         node_id = self._owner._material_preview_node_id_at_scene_pos(scene_pos)
@@ -94,6 +99,7 @@ class RoughcutStoryboardView(QGraphicsView):
         self._drag_offset = scene_pos - group.pos()
         self._drag_press_scene_pos = QPointF(scene_pos)
         self._drag_started = False
+        self._drag_insert_shift = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         event.accept()
 
@@ -135,9 +141,12 @@ class RoughcutStoryboardView(QGraphicsView):
             scene_pos = self.mapToScene(event.position().toPoint())
             target, target_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
             if target and target_side == "left":
-                self._owner._connect_material_preview_nodes(source, target)
+                self._owner._connect_material_preview_nodes(
+                    source,
+                    target,
+                    clear_routing_before_refresh=True,
+                )
                 self._connect_source_node = 0
-                self._owner._clear_material_preview_routing_mode()
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             else:
                 self._owner._set_material_preview_connect_cursor(scene_pos)
@@ -150,12 +159,18 @@ class RoughcutStoryboardView(QGraphicsView):
         node_id = self._drag_node_id
         scene_pos = self.mapToScene(event.position().toPoint())
         drag_started = self._drag_started
+        insert_shift = self._drag_insert_shift
         self._drag_node_id = ""
         self._drag_offset = QPointF()
         self._drag_press_scene_pos = QPointF()
         self._drag_started = False
+        self._drag_insert_shift = False
         if drag_started:
-            self._owner._finish_material_preview_node_drag(node_id, scene_pos)
+            self._owner._finish_material_preview_node_drag(
+                node_id,
+                scene_pos,
+                insert_shift=insert_shift,
+            )
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         event.accept()
 

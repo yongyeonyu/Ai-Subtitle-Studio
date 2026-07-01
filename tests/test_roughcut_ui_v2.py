@@ -93,15 +93,21 @@ class RoughcutUiV2Tests(unittest.TestCase):
             )
             self.assertEqual(
                 [node["x"] for node in widget.material_card_preview_nodes[:10]],
-                [106, 106, 106, 106, 106, 106, 294, 294, 294, 294],
+                [126, 126, 126, 126, 126, 126, 502, 502, 502, 502],
             )
-            self.assertEqual(widget.material_card_preview_nodes[21]["x"], 670)
+            self.assertEqual(widget.material_card_preview_nodes[21]["x"], 1254)
             self.assertEqual(widget.material_card_preview_nodes[21]["y"], 314)
             lane_items = [
                 item for item in widget.material_card_preview_scene.items()
                 if str(item.data(0)).startswith("middle_segment_storyboard_lane_")
+                and not str(item.data(0)).startswith("middle_segment_storyboard_lane_pin_")
             ]
             self.assertEqual(len(lane_items), 6)
+            lane_pin_items = [
+                item for item in widget.material_card_preview_scene.items()
+                if str(item.data(0)).startswith("middle_segment_storyboard_lane_pin_")
+            ]
+            self.assertEqual(len(lane_pin_items), 6)
             for index, node in enumerate(widget.material_card_preview_nodes, start=1):
                 self.assertEqual(node["id"], f"middle_segment_preview_node_{index:02d}")
                 self.assertLessEqual(node["width"], 132)
@@ -255,9 +261,13 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.app.processEvents()
 
             self.assertEqual(widget.material_card_preview_grid_slots[1], (4, 0))
+            self.assertEqual(widget.material_card_preview_grid_slots[5], (0, 0))
             self.assertEqual(widget.material_card_preview_last_reorder["target_grid"], {"row": 4, "col": 0})
-            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "grid_insert_shift")
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "grid_swap")
+            self.assertEqual(widget.material_card_preview_last_reorder["swapped_with"], 5)
             self.assertEqual(widget.material_card_preview_last_reorder["commit"], "preview_only")
+            self.assertEqual(len(widget._active_material_preview_order()), 30)
+            self.assertEqual(widget.material_card_preview_deleted_nodes, set())
             self.assertEqual(widget.material_card_preview_drag_shadow_slot, 0)
             self.assertIsNone(widget.material_card_preview_drag_shadow_rect)
             self.assertIn("middle_segment_preview_node_01", {node["id"] for node in widget.material_card_preview_nodes[:6]})
@@ -294,6 +304,8 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertTrue(widget.material_card_preview_connection_shadow_path.isEmpty())
             self.assertEqual(widget._material_preview_pin_role_color(1, "right"), "#34C759")
             self.assertEqual(widget._material_preview_pin_role_color(2, "left"), "#34C759")
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "auto_r_parallel_order")
+            self.assertEqual(widget.material_card_preview_last_animation["duration_ms"], 1040)
 
             widget._connect_material_preview_nodes(1, 3)
             widget._connect_material_preview_nodes(1, 4)
@@ -303,7 +315,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
                 for node in widget.material_card_preview_nodes
             }
             parallel_positions = [node_positions[node] for node in (2, 3, 4)]
-            self.assertEqual({pos[0] for pos in parallel_positions}, {294})
+            self.assertEqual({pos[0] for pos in parallel_positions}, {502})
             self.assertEqual({pos[1] for pos in parallel_positions}, {26, 122, 218})
             self.assertEqual(widget.material_card_preview_connection_roles[(1, 2)], "main")
             self.assertEqual(widget.material_card_preview_connection_roles[(1, 3)], "sub1")
@@ -321,9 +333,10 @@ class RoughcutUiV2Tests(unittest.TestCase):
             hover_colors = [
                 item.pen().color().name().lower()
                 for item in widget.material_card_preview_scene.items()
-                if hasattr(item, "pen") and item.pen().color().name().lower() == "#00c8ff"
+                if str(item.data(0)).startswith("middle_segment_preview_connection_")
+                and hasattr(item, "pen")
             ]
-            self.assertTrue(hover_colors)
+            self.assertIn("#00c8ff", hover_colors)
 
             right_click_pos = view.mapFromScene(hover_scene_pos)
             QTest.mouseClick(
@@ -373,6 +386,116 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(widget.material_card_preview_connect_source, 0)
             self.assertEqual(widget.material_card_preview_connections[1], [2])
             self.assertEqual(widget._material_preview_pin_role_color(2, "left"), "#34C759")
+            self.assertEqual(widget.material_card_preview_grid_slots[2], (0, 1))
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "auto_r_parallel_order")
+            self.assertEqual(widget.material_card_preview_last_animation["duration_ms"], 1040)
+
+            view.centerOn(widget._material_preview_pin_position(1, "right"))
+            self.app.processEvents()
+            source_pos = view.mapFromScene(widget._material_preview_pin_position(1, "right"))
+            QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, source_pos)
+            self.app.processEvents()
+            self.assertEqual(widget.material_card_preview_connect_source, 1)
+            view.centerOn(widget._material_preview_pin_position(3, "left"))
+            self.app.processEvents()
+            second_target_pos = view.mapFromScene(widget._material_preview_pin_position(3, "left"))
+            QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, second_target_pos)
+            self.app.processEvents()
+            self.assertEqual(widget.material_card_preview_connections[1], [2, 3])
+            self.assertEqual(widget.material_card_preview_connection_roles[(1, 3)], "sub1")
+            self.assertEqual(len(widget._active_material_preview_order()), 30)
+            self.assertEqual(widget.material_card_preview_grid_slots[3], (1, 1))
+        finally:
+            widget.close()
+
+    def test_material_preview_lane_pin_connects_and_auto_sorts_lane_anchor(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1600, 900)
+            widget.show()
+            self.app.processEvents()
+
+            view = widget.material_card_preview_view
+            view.horizontalScrollBar().setValue(0)
+            view.verticalScrollBar().setValue(0)
+            self.app.processEvents()
+
+            lane_row = 2
+            lane_source = widget._material_preview_lane_source_id(lane_row)
+            source_pos = view.mapFromScene(widget._material_preview_lane_pin_position(lane_row))
+            target_pos = view.mapFromScene(widget._material_preview_pin_position(7, "left"))
+            self.assertEqual(widget._material_preview_pin_at_scene_pos(widget._material_preview_lane_pin_position(lane_row)), (lane_source, "right"))
+
+            QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, source_pos)
+            self.app.processEvents()
+            self.assertEqual(widget.material_card_preview_connect_source, lane_source)
+
+            QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, target_pos)
+            self.app.processEvents()
+
+            self.assertEqual(widget.material_card_preview_connect_source, 0)
+            self.assertEqual(widget.material_card_preview_lane_connections[lane_row], 7)
+            self.assertEqual(widget.material_card_preview_grid_slots[7], (2, 0))
+            self.assertEqual(widget.material_card_preview_grid_slots[3], (2, 1))
+            self.assertIn((lane_source, 7), widget.material_card_preview_connection_paths)
+            self.assertEqual(widget.material_card_preview_sort_vectors[0]["source"], lane_source)
+            self.assertEqual(widget.material_card_preview_sort_vectors[0]["target"], 7)
+            self.assertEqual(widget.material_card_preview_sort_vectors[0]["role"], "sub2")
+            self.assertEqual(len(widget._active_material_preview_order()), 30)
+            self.assertEqual(widget.material_card_preview_deleted_nodes, set())
+        finally:
+            widget.close()
+
+    def test_material_preview_parallel_group_layout_sorts_random_line_to_three_one_three_three(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1600, 900)
+            widget.show()
+            self.app.processEvents()
+
+            random_line = [7, 2, 10, 5, 1, 9, 3, 8, 4, 6]
+            widget.material_card_preview_order = list(random_line)
+            widget.material_card_preview_deleted_nodes = set(range(11, 31))
+            widget.material_card_preview_grid_slots = {
+                node: (0, index)
+                for index, node in enumerate(random_line)
+            }
+            widget._populate_material_miro_uml_preview_scene()
+            self.app.processEvents()
+
+            widget._apply_material_preview_parallel_group_layout(
+                (3, 1, 3, 3),
+                ordered_nodes=list(range(1, 11)),
+            )
+            self.app.processEvents()
+
+            self.assertEqual(widget.material_card_preview_order, list(range(1, 11)))
+            self.assertEqual(widget.material_card_preview_parallel_column_counts, (3, 1, 3, 3))
+            self.assertEqual(len(widget._active_material_preview_order()), 10)
+            self.assertEqual(widget.material_card_preview_deleted_nodes, set(range(11, 31)))
+            self.assertEqual(
+                [widget.material_card_preview_grid_slots[node] for node in range(1, 11)],
+                [
+                    (0, 0),
+                    (1, 0),
+                    (2, 0),
+                    (0, 1),
+                    (0, 2),
+                    (1, 2),
+                    (2, 2),
+                    (0, 3),
+                    (1, 3),
+                    (2, 3),
+                ],
+            )
+            node_positions = {
+                int(str(node["id"]).rsplit("_", 1)[1]): (node["x"], node["y"])
+                for node in widget.material_card_preview_nodes
+            }
+            self.assertEqual([node_positions[node][0] for node in (1, 2, 3)], [126, 126, 126])
+            self.assertEqual([node_positions[node][1] for node in (1, 2, 3)], [26, 122, 218])
+            self.assertEqual([node_positions[node][0] for node in (8, 9, 10)], [1254, 1254, 1254])
+            self.assertEqual([node_positions[node][1] for node in (8, 9, 10)], [26, 122, 218])
         finally:
             widget.close()
 
@@ -386,6 +509,13 @@ class RoughcutUiV2Tests(unittest.TestCase):
             widget._connect_material_preview_nodes(7, 3)
             widget._connect_material_preview_nodes(10, 11)
             self.app.processEvents()
+            for source_node, target_node in ((7, 3), (10, 11)):
+                self.assertIn(target_node, widget.material_card_preview_connections[source_node])
+            self.assertEqual(widget.material_card_preview_grid_slots[3], (0, 1))
+            self.assertEqual(widget.material_card_preview_grid_slots[11], (3, 2))
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "auto_r_parallel_order")
+            self.assertEqual(widget.material_card_preview_last_animation["duration_ms"], 1040)
+
             for source_node, target_node in ((7, 3), (10, 11)):
                 source_row, source_col = widget.material_card_preview_grid_slots[source_node]
                 target_row, target_col = widget.material_card_preview_grid_slots[target_node]
@@ -511,6 +641,37 @@ class RoughcutUiV2Tests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_material_preview_left_drag_swaps_cards_without_deleting_or_shifting_row(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1600, 900)
+            widget.show()
+            self.app.processEvents()
+
+            view = widget.material_card_preview_view
+            node_1 = widget._material_card_preview_groups["middle_segment_preview_node_01"]
+            node_2 = widget._material_card_preview_groups["middle_segment_preview_node_02"]
+            view.horizontalScrollBar().setValue(0)
+            view.verticalScrollBar().setValue(0)
+            self.app.processEvents()
+            start = view.mapFromScene(node_1.sceneBoundingRect().center())
+            end = view.mapFromScene(node_2.sceneBoundingRect().center())
+
+            QTest.mousePress(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+            QTest.mouseMove(view.viewport(), end, delay=1)
+            QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+            self.app.processEvents()
+
+            self.assertEqual(len(widget._active_material_preview_order()), 30)
+            self.assertEqual(widget.material_card_preview_deleted_nodes, set())
+            self.assertEqual(widget.material_card_preview_grid_slots[1], (1, 0))
+            self.assertEqual(widget.material_card_preview_grid_slots[2], (0, 0))
+            self.assertEqual(widget.material_card_preview_grid_slots[8], (1, 1))
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "grid_swap")
+            self.assertEqual(widget.material_card_preview_last_reorder["swapped_with"], 2)
+        finally:
+            widget.close()
+
     def test_material_preview_left_click_selects_card_without_reorder_and_shows_detail_layer(self):
         widget = RoughcutWidget()
         try:
@@ -595,15 +756,59 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.app.processEvents()
 
             self.assertEqual(widget.material_card_preview_grid_slots[2], (0, 1))
+            self.assertEqual(
+                widget.material_card_preview_sort_vectors[0],
+                {
+                    "ordinal": 0,
+                    "source": 1,
+                    "target": 2,
+                    "role": "main",
+                    "source_grid": {"row": 0, "col": 0},
+                    "target_grid": {"row": 0, "col": 1},
+                    "delta": {"row": 0, "col": 1},
+                    "manhattan_grid_distance": 1,
+                },
+            )
             self.assertEqual(widget.material_card_preview_last_animation["mode"], "smooth_grid_sort")
+            self.assertEqual(widget.material_card_preview_last_animation["duration_ms"], 1040)
             self.assertGreater(widget.material_card_preview_last_animation["move_count"], 0)
             self.assertTrue(widget._material_card_preview_animations)
-            self.assertEqual(QPointF(widget._material_card_preview_groups[node_id].pos()), before_pos)
+            current_pos = QPointF(widget._material_card_preview_groups[node_id].pos())
+            self.assertLess((current_pos - before_pos).manhattanLength(), 2.0)
+
+            path, route_points = widget._material_preview_connection_path_and_points(
+                widget._material_preview_pin_position(1, "right"),
+                widget._material_preview_pin_position(2, "left"),
+                source_node=1,
+                target_node=2,
+                role="main",
+            )
+            self.assertFalse(path.isEmpty())
+            channels = widget._material_preview_route_channels(
+                "main",
+                widget._material_preview_pin_position(1, "right"),
+                widget._material_preview_pin_position(2, "left"),
+            )
+            blockers = widget._material_preview_blocking_rects(1, 2)
+            non_intersecting_lengths = []
+            for channel in channels:
+                candidate_points = widget._material_preview_orthogonal_connection_points(
+                    widget._material_preview_pin_position(1, "right"),
+                    widget._material_preview_pin_position(2, "left"),
+                    channel,
+                )
+                candidate_path = widget._material_preview_rounded_polyline_path(candidate_points)
+                if not widget._material_preview_path_intersects_any_rect(candidate_path, blockers):
+                    non_intersecting_lengths.append(widget._material_preview_polyline_length(candidate_points))
+            self.assertEqual(
+                widget._material_preview_polyline_length(route_points),
+                min(non_intersecting_lengths),
+            )
 
             QTest.qWait(widget.material_card_preview_last_animation["duration_ms"] + 80)
             self.app.processEvents()
             final_pos = QPointF(widget._material_card_preview_groups[node_id].pos())
-            self.assertEqual(final_pos, QPointF(294, 26))
+            self.assertEqual(final_pos, QPointF(502, 26))
         finally:
             widget.close()
 
