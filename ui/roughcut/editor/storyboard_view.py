@@ -15,6 +15,8 @@ class RoughcutStoryboardView(QGraphicsView):
         self._drag_started = False
         self._drag_insert_shift = False
         self._connect_source_node = 0
+        self._connect_source_side = "right"
+        self._connect_started_on_press = False
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
@@ -68,33 +70,45 @@ class RoughcutStoryboardView(QGraphicsView):
             return
         if self._connect_source_node:
             pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
-            if pin_node and pin_side == "left" and pin_node != self._connect_source_node:
+            if pin_node and pin_side == "left" and not (
+                pin_node == self._connect_source_node and pin_side == self._connect_source_side
+            ):
                 self._owner._connect_material_preview_nodes(
                     self._connect_source_node,
                     pin_node,
+                    source_side=self._connect_source_side,
+                    target_side=pin_side,
                     clear_routing_before_refresh=True,
                 )
                 self._connect_source_node = 0
+                self._connect_source_side = "right"
+                self._connect_started_on_press = False
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
                 event.accept()
                 return
             if pin_node and pin_side == "right":
                 self._connect_source_node = pin_node
-                self._owner._set_material_preview_connect_source(pin_node)
+                self._connect_source_side = pin_side
+                self._connect_started_on_press = True
+                self._owner._set_material_preview_connect_source(pin_node, pin_side)
                 self._owner._set_material_preview_connect_cursor(scene_pos)
                 self._owner._set_material_preview_hover_pin(pin_node, pin_side)
                 self.setCursor(Qt.CursorShape.CrossCursor)
                 event.accept()
                 return
             self._connect_source_node = 0
+            self._connect_source_side = "right"
+            self._connect_started_on_press = False
             self._owner._clear_material_preview_routing_mode()
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             event.accept()
             return
         pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
-        if pin_node and pin_side == "right":
+        if pin_node and pin_side in {"left", "right"}:
             self._connect_source_node = pin_node
-            self._owner._set_material_preview_connect_source(pin_node)
+            self._connect_source_side = pin_side
+            self._connect_started_on_press = True
+            self._owner._set_material_preview_connect_source(pin_node, pin_side)
             self._owner._set_material_preview_connect_cursor(scene_pos)
             self._owner._set_material_preview_hover_pin(pin_node, pin_side)
             self.setCursor(Qt.CursorShape.CrossCursor)
@@ -127,8 +141,10 @@ class RoughcutStoryboardView(QGraphicsView):
         if self._connect_source_node:
             self._owner._set_material_preview_connect_cursor(scene_pos)
             pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
-            if pin_side != "left" or pin_node == self._connect_source_node:
+            if pin_side != "left":
                 pin_node, pin_side = 0, ""
+            if pin_node != self._connect_source_node or pin_side != self._connect_source_side:
+                self._connect_started_on_press = False
             self._owner._set_material_preview_hover_pin(pin_node, pin_side)
             event.accept()
             return
@@ -159,13 +175,23 @@ class RoughcutStoryboardView(QGraphicsView):
             source = self._connect_source_node
             scene_pos = self.mapToScene(event.position().toPoint())
             target, target_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
-            if target and target_side == "left" and target != source:
+            if self._connect_started_on_press and target == source and target_side == self._connect_source_side:
+                self._connect_started_on_press = False
+                self._owner._set_material_preview_connect_cursor(scene_pos)
+                self.setCursor(Qt.CursorShape.CrossCursor)
+                event.accept()
+                return
+            if target and target_side == "left":
                 self._owner._connect_material_preview_nodes(
                     source,
                     target,
+                    source_side=self._connect_source_side,
+                    target_side=target_side,
                     clear_routing_before_refresh=True,
                 )
                 self._connect_source_node = 0
+                self._connect_source_side = "right"
+                self._connect_started_on_press = False
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             else:
                 self._owner._set_material_preview_connect_cursor(scene_pos)

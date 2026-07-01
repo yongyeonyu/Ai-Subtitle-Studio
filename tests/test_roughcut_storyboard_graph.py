@@ -90,6 +90,29 @@ def test_storyboard_layout_plan_anchors_lane_root_without_dropping_cards():
     assert plan.vectors[0].role == "sub2"
 
 
+def test_storyboard_layout_plan_anchors_lane_root_parallel_targets():
+    nodes = list(range(1, 9))
+
+    plan = build_storyboard_layout_plan(
+        nodes,
+        {},
+        {},
+        lane_anchor_targets={2: [7, 8, 6]},
+        lane_anchor_target_roles={(2, 7): "main", (2, 8): "sub1", (2, 6): "sub2"},
+    )
+
+    assert sorted(plan.order) == nodes
+    assert plan.grid_slots[7] == (2, 0)
+    assert plan.grid_slots[8] == (1, 0)
+    assert plan.grid_slots[6] == (3, 0)
+    assert [(vector.source, vector.target, vector.role) for vector in plan.vectors[:3]] == [
+        (-3, 7, "main"),
+        (-3, 8, "sub1"),
+        (-3, 6, "sub2"),
+    ]
+    assert [vector.target_row for vector in plan.vectors[:3]] == [2, 1, 3]
+
+
 def test_storyboard_layout_plan_keeps_random_ten_card_goal_from_lane_root():
     target_order = [5, 1, 3, 9, 10, 7, 2, 6, 4, 8]
     connections = {

@@ -87,6 +87,16 @@ def storyboard_role_for_outgoing_index(index: int) -> str:
     return STORYBOARD_ROW_ROLE_NAMES[index]
 
 
+def storyboard_parallel_anchor_rows(source_row: int) -> tuple[int, ...]:
+    source_row = clamp_storyboard_row(source_row)
+    rows = [source_row]
+    for distance in range(1, STORYBOARD_ROW_COUNT):
+        for candidate in (source_row - distance, source_row + distance):
+            if 0 <= candidate < STORYBOARD_ROW_COUNT and candidate not in rows:
+                rows.append(candidate)
+    return tuple(rows)
+
+
 def initial_storyboard_grid_slots(nodes: list[int]) -> dict[int, tuple[int, int]]:
     return {
         node: (index % STORYBOARD_ROW_COUNT, index // STORYBOARD_ROW_COUNT)
@@ -216,6 +226,8 @@ def build_storyboard_layout_plan(
     parallel_selections: Mapping[int, int] | None = None,
     lane_anchors: Mapping[int, int] | None = None,
     lane_anchor_roles: Mapping[int, str] | None = None,
+    lane_anchor_targets: Mapping[int, Sequence[int]] | None = None,
+    lane_anchor_target_roles: Mapping[tuple[int, int], str] | None = None,
     parallel_column_counts: Sequence[int] | None = None,
     parallel_column_start_row: int = STORYBOARD_MAIN_ROW,
     deleted_nodes: Iterable[int] = (),
@@ -230,15 +242,44 @@ def build_storyboard_layout_plan(
         parallel_selections,
     )
     active_set = set(sequence)
-    anchors = {
-        clamp_storyboard_row(row): int(target)
-        for row, target in (lane_anchors or {}).items()
-        if int(target) in active_set
-    }
     anchor_roles = {
         clamp_storyboard_row(row): str(role or "main")
         for row, role in (lane_anchor_roles or {}).items()
     }
+    anchor_target_roles = {
+        (clamp_storyboard_row(row), int(target)): str(role or "main")
+        for (row, target), role in (lane_anchor_target_roles or {}).items()
+    }
+    anchor_targets: dict[int, tuple[int, ...]] = {}
+    if lane_anchor_targets is not None:
+        for raw_row, raw_targets in lane_anchor_targets.items():
+            row = clamp_storyboard_row(raw_row)
+            targets: list[int] = []
+            for raw_target in raw_targets:
+                target = int(raw_target)
+                if target in active_set and target not in targets:
+                    targets.append(target)
+            if targets:
+                anchor_targets[row] = tuple(targets)
+    else:
+        for raw_row, raw_target in (lane_anchors or {}).items():
+            row = clamp_storyboard_row(raw_row)
+            target = int(raw_target)
+            if target in active_set:
+                anchor_targets[row] = (target,)
+
+    anchor_items: list[tuple[int, int, int, str]] = []
+    for row, targets in sorted(anchor_targets.items()):
+        for branch_index, target in enumerate(targets):
+            role = anchor_target_roles.get((row, target))
+            if role is None:
+                role = (
+                    anchor_roles.get(row, storyboard_role_for_row(row))
+                    if branch_index == 0
+                    else storyboard_role_for_outgoing_index(branch_index)
+                )
+            anchor_items.append((row, target, branch_index, role))
+
     if parallel_column_counts:
         slots = storyboard_parallel_group_grid_slots(
             sequence,
@@ -248,9 +289,11 @@ def build_storyboard_layout_plan(
     else:
         slots = initial_storyboard_grid_slots(sequence)
 
-        for row, target in sorted(anchors.items()):
-            _shift_storyboard_row_right(slots, row=row, col=0, ignored_node=target)
-            slots[target] = (row, 0)
+        for row, target, branch_index, _role in anchor_items:
+            anchor_rows = storyboard_parallel_anchor_rows(row)
+            target_row = anchor_rows[min(branch_index, len(anchor_rows) - 1)]
+            _shift_storyboard_row_right(slots, row=target_row, col=0, ignored_node=target)
+            slots[target] = (target_row, 0)
 
         placed_targets_by_source_row: dict[tuple[int, int], set[int]] = {}
         for source in sequence:
@@ -278,14 +321,14 @@ def build_storyboard_layout_plan(
     order = tuple(sorted_storyboard_nodes_by_grid(sequence, slots))
     vectors: list[StoryboardSortVector] = []
     ordinal = 0
-    for row, target in sorted(anchors.items()):
+    for row, target, _branch_index, role in anchor_items:
         target_row, target_col = slots[target]
         vectors.append(
             StoryboardSortVector(
                 ordinal=ordinal,
                 source=-(row + 1),
                 target=target,
-                role=anchor_roles.get(row, storyboard_role_for_row(row)),
+                role=role,
                 source_row=row,
                 source_col=-1,
                 target_row=target_row,
@@ -356,6 +399,7 @@ __all__ = [
     "sorted_storyboard_nodes_by_grid",
     "source_color_for_storyboard_node",
     "selected_storyboard_connection_sequence",
+    "storyboard_parallel_anchor_rows",
     "storyboard_parallel_group_grid_slots",
     "storyboard_role_for_outgoing_index",
     "storyboard_role_for_row",

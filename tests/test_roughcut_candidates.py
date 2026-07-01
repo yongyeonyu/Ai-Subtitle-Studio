@@ -66,6 +66,51 @@ class RoughcutCandidateTests(unittest.TestCase):
         finally:
             widget.close()
 
+    def test_candidate_payload_roundtrips_material_storyboard_snapshot(self):
+        widget = RoughcutWidget()
+        restored = RoughcutWidget()
+        try:
+            widget._source_signature = "sig-current"
+            widget._result = _result("현재 후보")
+            widget._connect_material_preview_nodes(1, 2)
+            widget._connect_material_preview_nodes(2, 3, source_side="left", target_side="left")
+            copied_source = widget.material_card_preview_last_auto_copy["connected_source"]
+            widget._create_material_preview_story_card(1)
+            widget._connect_material_preview_lane_to_node(1, copied_source)
+            widget.material_card_preview_trim_state[2] = {"left": 1, "right": -2}
+            widget.material_card_preview_selected_node = copied_source
+            widget.material_card_preview_multi_select_enabled = True
+            widget.material_card_preview_multi_selection = [2, copied_source]
+            widget.material_card_preview_generated_order = [1, 2, copied_source, 3]
+            widget.material_card_preview_clipboard = [2]
+            widget.scenario_sequence_layer = "card_detail"
+
+            payload = widget._roughcut_state_payload()
+            json.dumps(payload, ensure_ascii=False)
+            snapshot = payload["material_preview_storyboard"]
+            self.assertEqual(snapshot["card_move_grid_step"], 1)
+            self.assertEqual(snapshot["connector_route_grid_step"], 0.5)
+            self.assertEqual(payload["candidates"][0]["material_preview_storyboard"]["selected_node"], copied_source)
+
+            restored._apply_candidate_payload(payload, persist=False)
+
+            self.assertIn(copied_source, restored.material_card_preview_order)
+            self.assertEqual(restored.material_card_preview_source_nodes[copied_source], 2)
+            self.assertEqual(restored.material_card_preview_connections[copied_source], [3])
+            self.assertEqual(restored.material_card_preview_connection_sides[(copied_source, 3)], ("left", "left"))
+            self.assertEqual(restored._material_preview_incoming_sources(2), [1])
+            self.assertEqual(restored.material_card_preview_trim_state[2], {"left": 1, "right": -2})
+            self.assertEqual(restored.material_card_preview_selected_node, copied_source)
+            self.assertEqual(restored.material_card_preview_multi_selection, [2, copied_source])
+            self.assertEqual(restored.material_card_preview_generated_order, [1, 2, copied_source, 3])
+            self.assertEqual(restored.material_card_preview_clipboard, [2])
+            self.assertEqual(restored.scenario_sequence_layer, "card_detail")
+            self.assertIn(1, restored.material_story_card_rows)
+            self.assertIn(copied_source, restored._material_preview_lane_targets(1))
+        finally:
+            widget.close()
+            restored.close()
+
     def test_apply_candidate_payload_restores_selected_chapter_and_filter(self):
         widget = RoughcutWidget()
         try:

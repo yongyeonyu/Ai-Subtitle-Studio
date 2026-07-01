@@ -295,6 +295,15 @@ class RoughcutStateMixin:
             "result_schema_version": getattr(result, "schema_version", "roughcut_result.v1"),
             "warnings": list(result.warnings),
         }
+        storyboard_payload = {}
+        storyboard_builder = getattr(self, "_roughcut_material_preview_state_payload", None)
+        if callable(storyboard_builder):
+            try:
+                storyboard_payload = storyboard_builder()
+            except Exception:
+                storyboard_payload = {}
+        if storyboard_payload:
+            payload["material_preview_storyboard"] = storyboard_payload
         payload["outputs"] = self._candidate_outputs_payload(result)
         return payload
 
@@ -383,6 +392,13 @@ class RoughcutStateMixin:
             self._roughcut_export_style = dict(style)
             if hasattr(self, "style_panel"):
                 self.style_panel.set_style(style)
+        storyboard_payload = candidate.get("material_preview_storyboard")
+        storyboard_restorer = getattr(self, "_restore_roughcut_material_preview_state", None)
+        if isinstance(storyboard_payload, dict) and callable(storyboard_restorer):
+            try:
+                storyboard_restorer(storyboard_payload)
+            except Exception:
+                pass
         if hasattr(self, "source_lbl"):
             self.source_lbl.setText(str(candidate.get("source_media") or self._media_label()))
         self._sync_candidate_state_label(candidate)
