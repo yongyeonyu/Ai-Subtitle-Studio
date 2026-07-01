@@ -90,6 +90,11 @@ _ROUGHCUT_MATERIAL_PREVIEW_SHADOW_COLOR = "#00C8FF"
 _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES = STORYBOARD_ROW_ROLE_NAMES
 _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS = STORYBOARD_CONNECTION_ROLE_COLORS
 _ROUGHCUT_MATERIAL_PREVIEW_AUTO_SORT_ON_CONNECT = True
+_ROUGHCUT_STORY_START_DEFAULT_ROW = 2
+_ROUGHCUT_STORY_CARD_X = 8
+_ROUGHCUT_STORY_CARD_WIDTH = 96
+_ROUGHCUT_STORY_CARD_HEIGHT = 58
+_ROUGHCUT_STORY_CARD_TOP_OFFSET = 8
 _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_ROWS = {
     role: index for index, role in enumerate(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES)
 }
@@ -888,6 +893,8 @@ class RoughcutWidget(
         self.material_card_preview_hover_connection: tuple[int, int] = (0, 0)
         self.material_card_preview_connection_paths: dict[tuple[int, int], QPainterPath] = {}
         self.material_card_preview_lane_connections: dict[int, int] = {}
+        self.material_story_card_rows: list[int] = [_ROUGHCUT_STORY_START_DEFAULT_ROW]
+        self.material_story_card_labels: dict[int, str] = {_ROUGHCUT_STORY_START_DEFAULT_ROW: "메인"}
         self.material_card_preview_parallel_column_counts: tuple[int, ...] = ()
         self.material_card_preview_drag_shadow_slot = 0
         self.material_card_preview_drag_shadow_rect: QRectF | None = None
@@ -911,6 +918,7 @@ class RoughcutWidget(
         self.material_card_preview_view.setAccessibleName("중분류 카드 Miro UML 미리보기")
         self.material_card_preview_view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.material_card_preview_view.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.material_card_preview_view.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.material_card_preview_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.material_card_preview_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.material_card_preview_view.setFrameShape(QFrame.Shape.NoFrame)
@@ -920,7 +928,15 @@ class RoughcutWidget(
         self.material_card_preview_nodes: list[dict[str, object]] = []
         self._populate_material_miro_uml_preview_scene()
         lay.addWidget(self.material_card_preview_view, stretch=1)
+        QTimer.singleShot(0, self._scroll_material_preview_to_story_start)
         self._refresh_scenario_sequence_preview()
+
+    def _scroll_material_preview_to_story_start(self) -> None:
+        view = getattr(self, "material_card_preview_view", None)
+        if view is None:
+            return
+        view.horizontalScrollBar().setValue(view.horizontalScrollBar().minimum())
+        view.verticalScrollBar().setValue(view.verticalScrollBar().minimum())
 
     def _material_preview_slot_positions(self) -> tuple[tuple[int, int], ...]:
         lookup = self._material_preview_node_position_lookup()
@@ -1108,6 +1124,81 @@ class RoughcutWidget(
         x_pos = rect.left() if side == "left" else rect.right()
         return QPointF(x_pos, rect.top() + (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2))
 
+    def _material_preview_story_rows(self) -> list[int]:
+        rows = sorted(
+            {
+                max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+                for row in getattr(self, "material_story_card_rows", [_ROUGHCUT_STORY_START_DEFAULT_ROW])
+            }
+        )
+        return rows or [_ROUGHCUT_STORY_START_DEFAULT_ROW]
+
+    def _material_preview_story_row_role(self, row: int) -> str:
+        row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+        labels = getattr(self, "material_story_card_labels", {})
+        if labels.get(row) == "메인":
+            return "main"
+        rows = self._material_preview_story_rows()
+        non_main_rows = [candidate for candidate in rows if labels.get(candidate) != "메인"]
+        try:
+            index = non_main_rows.index(row) + 1
+        except ValueError:
+            index = len(non_main_rows) + 1
+        return _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
+            min(index, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
+        ]
+
+    def _material_preview_story_card_label(self, row: int) -> str:
+        labels = getattr(self, "material_story_card_labels", {})
+        return str(labels.get(row) or f"스토리 {self._material_preview_story_rows().index(row) + 1}")
+
+    def _material_preview_story_card_rect(self, row: int) -> QRectF:
+        row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+        y_pos = _ROUGHCUT_MATERIAL_PREVIEW_START_Y + (row * _ROUGHCUT_MATERIAL_PREVIEW_ROW_STEP_Y)
+        return QRectF(
+            _ROUGHCUT_STORY_CARD_X,
+            y_pos + _ROUGHCUT_STORY_CARD_TOP_OFFSET,
+            _ROUGHCUT_STORY_CARD_WIDTH,
+            _ROUGHCUT_STORY_CARD_HEIGHT,
+        )
+
+    def _material_preview_story_plus_rows(self) -> list[int]:
+        rows = self._material_preview_story_rows()
+        candidates: list[int] = []
+        above = min(rows) - 1
+        below = max(rows) + 1
+        if above >= 0:
+            candidates.append(above)
+        if below < len(STORYBOARD_ROW_LABELS):
+            candidates.append(below)
+        return candidates
+
+    def _material_preview_story_plus_at_scene_pos(self, scene_pos: QPointF) -> int | None:
+        for row in self._material_preview_story_plus_rows():
+            if self._material_preview_story_card_rect(row).contains(scene_pos):
+                return row
+        return None
+
+    def _create_material_preview_story_card(self, row: int) -> None:
+        row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+        rows = self._material_preview_story_rows()
+        if row in rows:
+            return
+        rows.append(row)
+        rows.sort()
+        self.material_story_card_rows = rows
+        if not hasattr(self, "material_story_card_labels"):
+            self.material_story_card_labels = {}
+        existing_non_main = sum(1 for label in self.material_story_card_labels.values() if label != "메인")
+        self.material_story_card_labels.setdefault(row, f"스토리 {existing_non_main + 2}")
+        self.material_card_preview_last_reorder = {
+            "mode": "story_card_added",
+            "story_row": row,
+            "active_story_rows": list(rows),
+            "commit": "preview_only",
+        }
+        self._populate_material_miro_uml_preview_scene()
+
     def _material_preview_pin_at_scene_pos(self, scene_pos: QPointF) -> tuple[int, str]:
         radius = _ROUGHCUT_MATERIAL_PREVIEW_PIN_HIT_RADIUS
         closest_node = 0
@@ -1121,7 +1212,7 @@ class RoughcutWidget(
                     closest_node = node_number
                     closest_side = side
                     closest_distance = distance
-        for row in range(len(STORYBOARD_ROW_LABELS)):
+        for row in self._material_preview_story_rows():
             pin_pos = self._material_preview_lane_pin_position(row)
             distance = (scene_pos - pin_pos).manhattanLength()
             if distance <= radius and distance < closest_distance:
@@ -1144,9 +1235,7 @@ class RoughcutWidget(
             target_pos = self._material_preview_pin_position(target, "left")
             if source_pos.isNull() or target_pos.isNull():
                 continue
-            role = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
-                min(row, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
-            ]
+            role = self._material_preview_story_row_role(row)
             is_hovered = hover_connection == (source, target)
             role_color = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS.get(role, "#5A6A76")
             pen = QPen(QColor("#00C8FF" if is_hovered else role_color))
@@ -1538,9 +1627,7 @@ class RoughcutWidget(
         role = "main"
         if source < 0:
             lane_row = self._material_preview_lane_row_from_source(source)
-            role = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
-                min(lane_row, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
-            ]
+            role = self._material_preview_story_row_role(lane_row)
         path = self._material_preview_connection_path(
             source_pos,
             target_pos,
@@ -1575,9 +1662,7 @@ class RoughcutWidget(
     def _material_preview_pin_role_color(self, node_number: int, side: str) -> str:
         if node_number < 0:
             row = self._material_preview_lane_row_from_source(node_number)
-            role = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
-                min(row, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
-            ]
+            role = self._material_preview_story_row_role(row)
             return _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS.get(role, _ROUGHCUT_MATERIAL_PREVIEW_SHADOW_COLOR)
         connect_source = getattr(self, "material_card_preview_connect_source", 0)
         if side == "right" and connect_source == node_number:
@@ -1622,8 +1707,8 @@ class RoughcutWidget(
 
     def _material_preview_lane_pin_position(self, row: int) -> QPointF:
         row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
-        y_pos = _ROUGHCUT_MATERIAL_PREVIEW_START_Y + (row * _ROUGHCUT_MATERIAL_PREVIEW_ROW_STEP_Y)
-        return QPointF(86, y_pos + 37)
+        rect = self._material_preview_story_card_rect(row)
+        return QPointF(rect.right(), rect.center().y())
 
     def _active_material_preview_order(self) -> list[int]:
         return [node for node in self.material_card_preview_order if node not in self.material_card_preview_deleted_nodes]
@@ -1987,6 +2072,14 @@ class RoughcutWidget(
         if target not in self._active_material_preview_order():
             return
         row = max(0, min(len(STORYBOARD_ROW_LABELS) - 1, int(row)))
+        if row not in self._material_preview_story_rows():
+            rows = self._material_preview_story_rows()
+            rows.append(row)
+            rows.sort()
+            self.material_story_card_rows = rows
+            if not hasattr(self, "material_story_card_labels"):
+                self.material_story_card_labels = {}
+            self.material_story_card_labels.setdefault(row, f"스토리 {len(rows)}")
         for existing_row, existing_target in list(self.material_card_preview_lane_connections.items()):
             if existing_target == target and existing_row != row:
                 self.material_card_preview_lane_connections.pop(existing_row, None)
@@ -2012,6 +2105,10 @@ class RoughcutWidget(
             self.material_card_preview_connection_roles,
             parallel_selections=self.material_card_parallel_selections,
             lane_anchors=self.material_card_preview_lane_connections,
+            lane_anchor_roles={
+                row: self._material_preview_story_row_role(row)
+                for row in self.material_card_preview_lane_connections
+            },
             parallel_column_counts=self.material_card_preview_parallel_column_counts,
             deleted_nodes=self.material_card_preview_deleted_nodes,
         )
@@ -2372,6 +2469,74 @@ class RoughcutWidget(
             }
         )
 
+    def _draw_material_preview_story_cards(self, scene: QGraphicsScene, font: QFont) -> None:
+        hover_pin = getattr(self, "material_card_preview_hover_pin", (0, ""))
+        connect_source = getattr(self, "material_card_preview_connect_source", 0)
+        label_font = QFont(font)
+        label_font.setPointSize(9)
+        label_font.setBold(True)
+        plus_font = QFont(font)
+        plus_font.setPointSize(16)
+        plus_font.setBold(True)
+
+        for row in self._material_preview_story_plus_rows():
+            rect = self._material_preview_story_card_rect(row)
+            plus_path = QPainterPath()
+            plus_path.addRoundedRect(rect, 10, 10)
+            plus_card = scene.addPath(plus_path, QPen(QColor("#5A6570"), 1), QBrush(QColor("#5A6570")))
+            plus_card.setOpacity(0.5)
+            plus_card.setZValue(1.2)
+            plus_card.setData(0, f"middle_segment_storyboard_plus_{row}")
+            plus_text = scene.addText("+", plus_font)
+            plus_text.setDefaultTextColor(QColor("#DCE3EA"))
+            plus_rect = plus_text.boundingRect()
+            plus_text.setPos(
+                rect.center().x() - (plus_rect.width() / 2),
+                rect.center().y() - (plus_rect.height() / 2) - 1,
+            )
+            plus_text.setOpacity(0.78)
+            plus_text.setZValue(1.3)
+            plus_text.setData(0, f"middle_segment_storyboard_plus_text_{row}")
+
+        for row in self._material_preview_story_rows():
+            rect = self._material_preview_story_card_rect(row)
+            role = self._material_preview_story_row_role(row)
+            role_color = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS.get(role, "#34C759")
+            source = self._material_preview_lane_source_id(row)
+            hovered = hover_pin == (source, "right")
+            connected = row in getattr(self, "material_card_preview_lane_connections", {})
+            card_path = QPainterPath()
+            card_path.addRoundedRect(rect, 10, 10)
+            card = scene.addPath(
+                card_path,
+                QPen(QColor("#F5F7FA" if hovered else role_color), 2),
+                QBrush(QColor("#101820")),
+            )
+            card.setZValue(1.5)
+            card.setData(0, f"middle_segment_storyboard_card_{row}")
+            label = scene.addText(self._material_preview_story_card_label(row), label_font)
+            label.setDefaultTextColor(QColor("#F5F7FA"))
+            label_rect = label.boundingRect()
+            label.setPos(rect.left() + 12, rect.center().y() - (label_rect.height() / 2) - 1)
+            label.setZValue(1.6)
+            label.setData(0, f"middle_segment_storyboard_card_label_{row}")
+            pin_color = (
+                "#00C8FF"
+                if hovered and connect_source != source
+                else (role_color if connected or connect_source == source else "#0A0F12")
+            )
+            pin_pos = self._material_preview_lane_pin_position(row)
+            pin = scene.addEllipse(
+                pin_pos.x() - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                pin_pos.y() - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
+                QPen(QColor("#F5F7FA" if hovered or connect_source == source else "#DCE3EA"), 1),
+                QBrush(QColor(pin_color)),
+            )
+            pin.setZValue(1.8)
+            pin.setData(0, f"middle_segment_storyboard_lane_pin_{row}")
+
     def _populate_material_miro_uml_preview_scene(
         self,
         *,
@@ -2399,32 +2564,7 @@ class RoughcutWidget(
         self.material_card_preview_nodes.clear()
         self._material_card_preview_groups.clear()
 
-        for row_index, label in enumerate(STORYBOARD_ROW_LABELS):
-            y_pos = _ROUGHCUT_MATERIAL_PREVIEW_START_Y + (row_index * _ROUGHCUT_MATERIAL_PREVIEW_ROW_STEP_Y)
-            lane_path = QPainterPath()
-            lane_path.addRoundedRect(QRectF(8, y_pos + 16, 78, 42), 8, 8)
-            role = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES[
-                min(row_index, len(_ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLES) - 1)
-            ]
-            lane_color = _ROUGHCUT_MATERIAL_PREVIEW_CONNECTION_ROLE_COLORS.get(role, "#5A6A76")
-            lane = scene.addPath(lane_path, QPen(QColor(lane_color), 1), QBrush(QColor("#0A0F12")))
-            lane.setData(0, f"middle_segment_storyboard_lane_{row_index}")
-            lane_text = scene.addText(label, lane_font)
-            lane_text.setDefaultTextColor(QColor("#DCE3EA"))
-            lane_text.setPos(20, y_pos + 26)
-            lane_source = self._material_preview_lane_source_id(row_index)
-            lane_hovered = getattr(self, "material_card_preview_hover_pin", (0, "")) == (lane_source, "right")
-            lane_connected = row_index in getattr(self, "material_card_preview_lane_connections", {})
-            lane_pin_color = "#00C8FF" if lane_hovered else (lane_color if lane_connected else "#0A0F12")
-            lane_pin = scene.addEllipse(
-                86 - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
-                y_pos + 37 - _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS,
-                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
-                _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS * 2,
-                QPen(QColor("#F5F7FA" if lane_hovered else "#DCE3EA"), 1),
-                QBrush(QColor(lane_pin_color)),
-            )
-            lane_pin.setData(0, f"middle_segment_storyboard_lane_pin_{row_index}")
+        self._draw_material_preview_story_cards(scene, lane_font)
 
         for slot_index, node_number in enumerate(self.material_card_preview_order, start=1):
             x_pos, y_pos = node_positions[slot_index - 1]

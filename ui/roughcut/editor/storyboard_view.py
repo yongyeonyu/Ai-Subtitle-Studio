@@ -52,6 +52,11 @@ class RoughcutStoryboardView(QGraphicsView):
         if event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
+        story_row = self._owner._material_preview_story_plus_at_scene_pos(scene_pos)
+        if story_row is not None:
+            self._owner._create_material_preview_story_card(story_row)
+            event.accept()
+            return
         if self._connect_source_node:
             pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
             if pin_node and pin_side == "left":

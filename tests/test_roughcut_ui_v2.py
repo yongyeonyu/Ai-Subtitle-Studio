@@ -74,6 +74,14 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertEqual(widget.roughcut_side_frame.maximumWidth(), 468)
             self.assertTrue(widget.material_card_preview_view.isVisible())
             self.assertEqual(widget.material_card_preview_view.accessibleName(), "중분류 카드 Miro UML 미리보기")
+            self.assertEqual(
+                widget.material_card_preview_view.horizontalScrollBar().value(),
+                widget.material_card_preview_view.horizontalScrollBar().minimum(),
+            )
+            self.assertEqual(
+                widget.material_card_preview_view.verticalScrollBar().value(),
+                widget.material_card_preview_view.verticalScrollBar().minimum(),
+            )
             self.assertEqual(widget.material_card_preview_order, list(range(1, 31)))
             self.assertEqual(len(widget.material_card_preview_nodes), _ROUGHCUT_MATERIAL_PREVIEW_NODE_COUNT)
             self.assertEqual(widget.material_card_preview_page_count, 1)
@@ -97,17 +105,31 @@ class RoughcutUiV2Tests(unittest.TestCase):
             )
             self.assertEqual(widget.material_card_preview_nodes[21]["x"], 1254)
             self.assertEqual(widget.material_card_preview_nodes[21]["y"], 314)
-            lane_items = [
+            story_card_items = [
                 item for item in widget.material_card_preview_scene.items()
-                if str(item.data(0)).startswith("middle_segment_storyboard_lane_")
-                and not str(item.data(0)).startswith("middle_segment_storyboard_lane_pin_")
+                if str(item.data(0)).startswith("middle_segment_storyboard_card_")
+                and not str(item.data(0)).startswith("middle_segment_storyboard_card_label_")
             ]
-            self.assertEqual(len(lane_items), 6)
+            self.assertEqual(len(story_card_items), 1)
+            self.assertEqual(widget.material_story_card_rows, [2])
+            story_top_left = widget.material_card_preview_view.mapFromScene(
+                widget._material_preview_story_card_rect(2).topLeft()
+            )
+            self.assertGreaterEqual(story_top_left.x(), 0)
+            self.assertGreaterEqual(story_top_left.y(), 0)
+            self.assertLess(story_top_left.x(), widget.material_card_preview_view.viewport().width())
+            self.assertLess(story_top_left.y(), widget.material_card_preview_view.viewport().height())
+            story_plus_items = [
+                item for item in widget.material_card_preview_scene.items()
+                if str(item.data(0)).startswith("middle_segment_storyboard_plus_")
+                and not str(item.data(0)).startswith("middle_segment_storyboard_plus_text_")
+            ]
+            self.assertEqual(len(story_plus_items), 2)
             lane_pin_items = [
                 item for item in widget.material_card_preview_scene.items()
                 if str(item.data(0)).startswith("middle_segment_storyboard_lane_pin_")
             ]
-            self.assertEqual(len(lane_pin_items), 6)
+            self.assertEqual(len(lane_pin_items), 1)
             for index, node in enumerate(widget.material_card_preview_nodes, start=1):
                 self.assertEqual(node["id"], f"middle_segment_preview_node_{index:02d}")
                 self.assertLessEqual(node["width"], 132)
@@ -440,9 +462,47 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.assertIn((lane_source, 7), widget.material_card_preview_connection_paths)
             self.assertEqual(widget.material_card_preview_sort_vectors[0]["source"], lane_source)
             self.assertEqual(widget.material_card_preview_sort_vectors[0]["target"], 7)
-            self.assertEqual(widget.material_card_preview_sort_vectors[0]["role"], "sub2")
+            self.assertEqual(widget.material_card_preview_sort_vectors[0]["role"], "main")
             self.assertEqual(len(widget._active_material_preview_order()), 30)
             self.assertEqual(widget.material_card_preview_deleted_nodes, set())
+        finally:
+            widget.close()
+
+    def test_material_preview_story_plus_card_creates_story_start_card(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1600, 900)
+            widget.show()
+            self.app.processEvents()
+
+            view = widget.material_card_preview_view
+            self.assertEqual(widget.material_story_card_rows, [2])
+            plus_row = 1
+            plus_pos = widget._material_preview_story_card_rect(plus_row).center().toPoint()
+            QTest.mouseClick(
+                view.viewport(),
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                view.mapFromScene(QPointF(plus_pos)),
+            )
+            self.app.processEvents()
+
+            self.assertEqual(widget.material_story_card_rows, [1, 2])
+            self.assertIn(plus_row, widget.material_story_card_labels)
+            self.assertEqual(widget._material_preview_story_row_role(2), "main")
+            self.assertEqual(widget._material_preview_story_row_role(plus_row), "sub1")
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "story_card_added")
+            story_card_items = [
+                item for item in widget.material_card_preview_scene.items()
+                if str(item.data(0)).startswith("middle_segment_storyboard_card_")
+                and not str(item.data(0)).startswith("middle_segment_storyboard_card_label_")
+            ]
+            self.assertEqual(len(story_card_items), 2)
+            lane_pin_items = [
+                item for item in widget.material_card_preview_scene.items()
+                if str(item.data(0)).startswith("middle_segment_storyboard_lane_pin_")
+            ]
+            self.assertEqual(len(lane_pin_items), 2)
         finally:
             widget.close()
 

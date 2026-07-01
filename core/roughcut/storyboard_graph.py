@@ -215,6 +215,7 @@ def build_storyboard_layout_plan(
     *,
     parallel_selections: Mapping[int, int] | None = None,
     lane_anchors: Mapping[int, int] | None = None,
+    lane_anchor_roles: Mapping[int, str] | None = None,
     parallel_column_counts: Sequence[int] | None = None,
     parallel_column_start_row: int = STORYBOARD_MAIN_ROW,
     deleted_nodes: Iterable[int] = (),
@@ -233,6 +234,10 @@ def build_storyboard_layout_plan(
         clamp_storyboard_row(row): int(target)
         for row, target in (lane_anchors or {}).items()
         if int(target) in active_set
+    }
+    anchor_roles = {
+        clamp_storyboard_row(row): str(role or "main")
+        for row, role in (lane_anchor_roles or {}).items()
     }
     if parallel_column_counts:
         slots = storyboard_parallel_group_grid_slots(
@@ -280,7 +285,7 @@ def build_storyboard_layout_plan(
                 ordinal=ordinal,
                 source=-(row + 1),
                 target=target,
-                role=storyboard_role_for_row(row),
+                role=anchor_roles.get(row, storyboard_role_for_row(row)),
                 source_row=row,
                 source_col=-1,
                 target_row=target_row,
