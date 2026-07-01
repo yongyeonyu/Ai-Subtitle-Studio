@@ -1299,9 +1299,17 @@ class RoughcutWidget(
         selected = int(payload.get("selected_node", 0) or 0)
         self.material_card_preview_selected_node = selected if selected in active_set else (self._active_material_preview_order()[0] if self._active_material_preview_order() else 0)
         self.material_card_preview_multi_select_enabled = bool(payload.get("multi_select_enabled", False))
-        self.material_card_preview_multi_selection = [
+        multi_button = getattr(self, "material_multi_select_btn", None)
+        if multi_button is not None:
+            was_blocked = multi_button.blockSignals(True)
+            multi_button.setChecked(self.material_card_preview_multi_select_enabled)
+            multi_button.blockSignals(was_blocked)
+        restored_multi_selection = [
             node for node in _int_list(payload.get("multi_selection")) if node in active_set
         ]
+        self.material_card_preview_multi_selection = (
+            restored_multi_selection if self.material_card_preview_multi_select_enabled else []
+        )
         self.material_card_preview_generated_order = [
             node for node in _int_list(payload.get("generated_order")) if node in active_set
         ]
@@ -1313,6 +1321,8 @@ class RoughcutWidget(
         )
         self.material_card_preview_last_reorder = dict(payload.get("last_reorder") or {}) if isinstance(payload.get("last_reorder"), dict) else {}
         self.material_card_preview_last_auto_copy = dict(payload.get("last_auto_copy") or {}) if isinstance(payload.get("last_auto_copy"), dict) else {}
+        self.material_card_preview_hover_connection = (0, 0)
+        self._clear_material_preview_drag_shadow()
         self._clear_material_preview_routing_mode(refresh=False)
         self._populate_material_miro_uml_preview_scene()
 

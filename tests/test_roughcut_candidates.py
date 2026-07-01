@@ -101,12 +101,21 @@ class RoughcutCandidateTests(unittest.TestCase):
             self.assertEqual(restored._material_preview_incoming_sources(2), [1])
             self.assertEqual(restored.material_card_preview_trim_state[2], {"left": 1, "right": -2})
             self.assertEqual(restored.material_card_preview_selected_node, copied_source)
+            self.assertTrue(restored.material_card_preview_multi_select_enabled)
+            self.assertTrue(restored.material_multi_select_btn.isChecked())
             self.assertEqual(restored.material_card_preview_multi_selection, [2, copied_source])
             self.assertEqual(restored.material_card_preview_generated_order, [1, 2, copied_source, 3])
             self.assertEqual(restored.material_card_preview_clipboard, [2])
             self.assertEqual(restored.scenario_sequence_layer, "card_detail")
             self.assertIn(1, restored.material_story_card_rows)
             self.assertIn(copied_source, restored._material_preview_lane_targets(1))
+
+            snapshot["multi_select_enabled"] = False
+            snapshot["multi_selection"] = [2, copied_source]
+            restored._restore_roughcut_material_preview_state(snapshot)
+            self.assertFalse(restored.material_card_preview_multi_select_enabled)
+            self.assertFalse(restored.material_multi_select_btn.isChecked())
+            self.assertEqual(restored.material_card_preview_multi_selection, [])
         finally:
             widget.close()
             restored.close()
