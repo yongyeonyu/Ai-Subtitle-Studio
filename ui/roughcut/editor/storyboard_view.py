@@ -26,6 +26,15 @@ class RoughcutStoryboardView(QGraphicsView):
             source, target = self._owner._material_preview_connection_at_scene_pos(scene_pos)
             if source and target:
                 self._owner._delete_material_preview_connection(source, target)
+                if self._connect_source_node:
+                    self._connect_source_node = 0
+                    self._owner._clear_material_preview_routing_mode(refresh=False)
+                event.accept()
+                return
+            if self._connect_source_node:
+                self._connect_source_node = 0
+                self._owner._clear_material_preview_routing_mode()
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
                 event.accept()
                 return
             node_id = self._owner._material_preview_node_id_at_scene_pos(scene_pos)
@@ -59,7 +68,7 @@ class RoughcutStoryboardView(QGraphicsView):
             return
         if self._connect_source_node:
             pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
-            if pin_node and pin_side == "left":
+            if pin_node and pin_side == "left" and pin_node != self._connect_source_node:
                 self._owner._connect_material_preview_nodes(
                     self._connect_source_node,
                     pin_node,
@@ -77,6 +86,11 @@ class RoughcutStoryboardView(QGraphicsView):
                 self.setCursor(Qt.CursorShape.CrossCursor)
                 event.accept()
                 return
+            self._connect_source_node = 0
+            self._owner._clear_material_preview_routing_mode()
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
         pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
         if pin_node and pin_side == "right":
             self._connect_source_node = pin_node
@@ -113,7 +127,7 @@ class RoughcutStoryboardView(QGraphicsView):
         if self._connect_source_node:
             self._owner._set_material_preview_connect_cursor(scene_pos)
             pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
-            if pin_side != "left":
+            if pin_side != "left" or pin_node == self._connect_source_node:
                 pin_node, pin_side = 0, ""
             self._owner._set_material_preview_hover_pin(pin_node, pin_side)
             event.accept()
@@ -145,7 +159,7 @@ class RoughcutStoryboardView(QGraphicsView):
             source = self._connect_source_node
             scene_pos = self.mapToScene(event.position().toPoint())
             target, target_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
-            if target and target_side == "left":
+            if target and target_side == "left" and target != source:
                 self._owner._connect_material_preview_nodes(
                     source,
                     target,
