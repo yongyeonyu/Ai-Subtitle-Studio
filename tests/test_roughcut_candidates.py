@@ -83,6 +83,9 @@ class RoughcutCandidateTests(unittest.TestCase):
             widget.material_card_preview_multi_selection = [2, copied_source]
             widget.material_card_preview_generated_order = [1, 2, copied_source, 3]
             widget.material_card_preview_clipboard = [2]
+            widget.material_card_preview_canvas_grid_positions[2] = (8, 4)
+            widget.scenario_sequence_view.zoom_in()
+            widget.material_card_preview_view.zoom_out()
             widget.scenario_sequence_layer = "card_detail"
 
             payload = widget._roughcut_state_payload()
@@ -90,11 +93,17 @@ class RoughcutCandidateTests(unittest.TestCase):
             snapshot = payload["material_preview_storyboard"]
             self.assertEqual(snapshot["card_move_grid_step"], 1)
             self.assertEqual(snapshot["connector_route_grid_step"], 0.5)
+            self.assertEqual(snapshot["canvas_grid_positions"]["2"], {"cell_x": 8, "cell_y": 4})
+            self.assertGreater(snapshot["canvas_view"]["scenario_zoom"], 1.0)
+            self.assertLess(snapshot["canvas_view"]["material_zoom"], 1.0)
             self.assertEqual(payload["candidates"][0]["material_preview_storyboard"]["selected_node"], copied_source)
 
             restored._apply_candidate_payload(payload, persist=False)
 
             self.assertIn(copied_source, restored.material_card_preview_order)
+            self.assertEqual(restored.material_card_preview_canvas_grid_positions[2], (8, 4))
+            self.assertGreater(restored.scenario_sequence_view.canvas_zoom, 1.0)
+            self.assertLess(restored.material_card_preview_view.canvas_zoom, 1.0)
             self.assertEqual(restored.material_card_preview_source_nodes[copied_source], 2)
             self.assertEqual(restored.material_card_preview_connections[copied_source], [3])
             self.assertEqual(restored.material_card_preview_connection_sides[(copied_source, 3)], ("left", "left"))

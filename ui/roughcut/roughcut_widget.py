@@ -54,7 +54,7 @@ from ui.roughcut.roughcut_state import RoughcutStateMixin
 from ui.roughcut.roughcut_style_panel import DEFAULT_ROUGHCUT_EXPORT_STYLE, RoughcutStylePanel
 from ui.roughcut.roughcut_table import RoughcutTableMixin
 from ui.roughcut.roughcut_title_panel import RoughcutTitlePanel
-from ui.roughcut.editor import RoughcutStoryboardView
+from ui.roughcut.editor import RoughcutCanvasView, RoughcutStoryboardView
 from ui.style import COLORS, button_style, label_style, line_icon, panel_style
 
 
@@ -111,6 +111,7 @@ _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH = (
 )
 _ROUGHCUT_MATERIAL_PREVIEW_PIN_RADIUS = 8
 _ROUGHCUT_MATERIAL_PREVIEW_PIN_HIT_RADIUS = 15
+_ROUGHCUT_MATERIAL_PREVIEW_PIN_MAGNET_RADIUS = 32
 _ROUGHCUT_MATERIAL_PREVIEW_SCENE_HEIGHT = (
     _ROUGHCUT_MATERIAL_PREVIEW_START_Y
     + ((_ROUGHCUT_MATERIAL_PREVIEW_ROWS - 1) * _ROUGHCUT_MATERIAL_PREVIEW_ROW_STEP_Y)
@@ -807,14 +808,38 @@ class RoughcutWidget(
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         return frame
 
+    def _make_roughcut_canvas_zoom_label(self, canvas_name: str) -> QLabel:
+        label = QLabel("100%")
+        label.setObjectName(f"roughcut{canvas_name.capitalize()}CanvasZoomLabel")
+        label.setStyleSheet(label_style("muted", size=9))
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        setattr(self, f"{canvas_name}_canvas_zoom_label", label)
+        return label
+
+    def _make_roughcut_canvas_zoom_indicator(self, canvas_name: str) -> QHBoxLayout:
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(0)
+        controls.addStretch(1)
+        controls.addWidget(self._make_roughcut_canvas_zoom_label(canvas_name))
+        return controls
+
+    def _on_roughcut_canvas_zoom_changed(self, canvas_name: str, zoom: float) -> None:
+        zoom = max(0.01, float(zoom))
+        setattr(self, f"{canvas_name}_canvas_zoom", zoom)
+        label = getattr(self, f"{canvas_name}_canvas_zoom_label", None)
+        if label is not None:
+            label.setText(f"{int(round(zoom * 100))}%")
+
     def _build_scenario_sequence_preview_surface(self, frame: QFrame) -> None:
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(10, 10, 10, 10)
-        lay.setSpacing(0)
+        lay.setSpacing(6)
 
         self.scenario_sequence_scene = QGraphicsScene(frame)
         self.scenario_sequence_scene.setSceneRect(0, 0, 1200, 160)
-        self.scenario_sequence_view = QGraphicsView(self.scenario_sequence_scene)
+        self.scenario_canvas_zoom = 1.0
+        self.scenario_sequence_view = RoughcutCanvasView(self.scenario_sequence_scene, self, "scenario")
         self.scenario_sequence_view.setObjectName("roughcutScenarioSelectedPathPreview")
         self.scenario_sequence_view.setAccessibleName("시나리오 선택 경로 미리보기")
         self.scenario_sequence_view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -829,6 +854,7 @@ class RoughcutWidget(
         self.scenario_sequence_summaries: list[dict[str, object]] = []
         self.scenario_sequence_layer = "sequence"
         self.scenario_sequence_detail: dict[str, object] = {}
+        lay.addLayout(self._make_roughcut_canvas_zoom_indicator("scenario"))
         lay.addWidget(self.scenario_sequence_view, stretch=1)
 
     def _build_settings_control_surface(self, frame: QFrame) -> None:
@@ -909,7 +935,9 @@ class RoughcutWidget(
         controls.addWidget(self.material_random_connect_btn)
         controls.addWidget(self.material_r_sort_btn)
         controls.addStretch(1)
+        controls.addWidget(self._make_roughcut_canvas_zoom_label("material"))
         lay.addLayout(controls)
+        self.material_canvas_zoom = 1.0
 
         self.material_card_preview_scene = QGraphicsScene(frame)
         self.material_card_preview_page_count = (
@@ -928,6 +956,9 @@ class RoughcutWidget(
         self.material_card_parallel_selections: dict[int, int] = {}
         self.material_card_preview_grid_slots: dict[int, tuple[int, int]] = self._initial_material_preview_grid_slots(
             self.material_card_preview_order
+        )
+        self.material_card_preview_canvas_grid_positions: dict[int, tuple[int, int]] = (
+            self._material_preview_canvas_positions_from_grid_slots(self.material_card_preview_grid_slots)
         )
         self.material_card_preview_source_nodes: dict[int, int] = {
             node: node for node in self.material_card_preview_order
@@ -950,6 +981,7 @@ class RoughcutWidget(
         self.material_story_card_labels: dict[int, str] = {_ROUGHCUT_STORY_START_DEFAULT_ROW: "메인"}
         self.material_card_preview_parallel_column_counts: tuple[int, ...] = ()
         self.material_card_preview_drag_shadow_slot = 0
+        self.material_card_preview_drag_shadow_cell: dict[str, int] = {}
         self.material_card_preview_drag_shadow_rect: QRectF | None = None
         self.material_card_preview_drag_shadow_item = None
         self.material_card_preview_selected_node = 1
@@ -1025,6 +1057,18 @@ class RoughcutWidget(
             "grid_slots": {
                 str(node): {"row": int(slot[0]), "col": int(slot[1])}
                 for node, slot in getattr(self, "material_card_preview_grid_slots", {}).items()
+            },
+            "canvas_grid_positions": {
+                str(node): {"cell_x": int(cell[0]), "cell_y": int(cell[1])}
+                for node, cell in getattr(self, "material_card_preview_canvas_grid_positions", {}).items()
+            },
+            "canvas_view": {
+                "material_zoom": float(getattr(self, "material_canvas_zoom", 1.0)),
+                "scenario_zoom": float(getattr(self, "scenario_canvas_zoom", 1.0)),
+            },
+            "connector_style": {
+                "type": "orthogonal_straight",
+                "line_jumps_enabled": True,
             },
             "source_nodes": {
                 str(node): int(source)
@@ -1132,6 +1176,20 @@ class RoughcutWidget(
         for node in self.material_card_preview_order:
             slots.setdefault(node, fallback_slots.get(node, (0, 0)))
         self.material_card_preview_grid_slots = slots
+        self.material_card_preview_canvas_grid_positions = self._material_preview_canvas_positions_from_grid_slots(slots)
+        canvas_positions_raw = payload.get("canvas_grid_positions")
+        if isinstance(canvas_positions_raw, dict):
+            for raw_node, raw_cell in canvas_positions_raw.items():
+                if not isinstance(raw_cell, dict):
+                    continue
+                try:
+                    node = int(raw_node)
+                    cell_x = max(0, int(raw_cell.get("cell_x", 0)))
+                    cell_y = max(0, int(raw_cell.get("cell_y", 0)))
+                except (TypeError, ValueError):
+                    continue
+                if node in self.material_card_preview_source_nodes:
+                    self.material_card_preview_canvas_grid_positions[node] = (cell_x, cell_y)
 
         deleted_nodes = set(_int_list(payload.get("deleted_nodes")))
         self.material_card_preview_deleted_nodes = {
@@ -1321,6 +1379,22 @@ class RoughcutWidget(
         )
         self.material_card_preview_last_reorder = dict(payload.get("last_reorder") or {}) if isinstance(payload.get("last_reorder"), dict) else {}
         self.material_card_preview_last_auto_copy = dict(payload.get("last_auto_copy") or {}) if isinstance(payload.get("last_auto_copy"), dict) else {}
+        canvas_view_raw = payload.get("canvas_view")
+        if isinstance(canvas_view_raw, dict):
+            try:
+                material_zoom = float(canvas_view_raw.get("material_zoom", 1.0))
+            except (TypeError, ValueError):
+                material_zoom = 1.0
+            try:
+                scenario_zoom = float(canvas_view_raw.get("scenario_zoom", 1.0))
+            except (TypeError, ValueError):
+                scenario_zoom = 1.0
+            material_view = getattr(self, "material_card_preview_view", None)
+            if material_view is not None:
+                material_view.set_canvas_zoom(material_zoom)
+            scenario_view = getattr(self, "scenario_sequence_view", None)
+            if scenario_view is not None:
+                scenario_view.set_canvas_zoom(scenario_zoom)
         self.material_card_preview_hover_connection = (0, 0)
         self._clear_material_preview_drag_shadow()
         self._clear_material_preview_routing_mode(refresh=False)
@@ -1349,9 +1423,63 @@ class RoughcutWidget(
             columns.setdefault(col, []).append(node)
         return tuple(tuple(sorted(nodes, key=lambda node: self.material_card_preview_grid_slots.get(node, (1, 0))[0])) for _col, nodes in sorted(columns.items()))
 
+    def _material_preview_canvas_cell_for_position(self, x_pos: float, y_pos: float) -> tuple[int, int]:
+        cell = float(_ROUGHCUT_MATERIAL_PREVIEW_GRID_CELL_SIZE)
+        origin_x = self._material_preview_grid_axis_origin("x")
+        origin_y = self._material_preview_grid_axis_origin("y")
+        return (
+            max(0, int(round((float(x_pos) - origin_x) / cell))),
+            max(0, int(round((float(y_pos) - origin_y) / cell))),
+        )
+
+    def _material_preview_position_for_canvas_cell(self, cell_x: int, cell_y: int) -> tuple[int, int]:
+        cell = _ROUGHCUT_MATERIAL_PREVIEW_GRID_CELL_SIZE
+        origin_x = int(self._material_preview_grid_axis_origin("x"))
+        origin_y = int(self._material_preview_grid_axis_origin("y"))
+        return (
+            origin_x + (max(0, int(cell_x)) * cell),
+            origin_y + (max(0, int(cell_y)) * cell),
+        )
+
+    def _material_preview_canvas_cell_for_grid_slot(self, row: int, col: int) -> tuple[int, int]:
+        x_pos, y_pos = self._material_preview_position_for_grid_slot(row, col)
+        return self._material_preview_canvas_cell_for_position(x_pos, y_pos)
+
+    def _material_preview_canvas_positions_from_grid_slots(
+        self,
+        slots: dict[int, tuple[int, int]],
+    ) -> dict[int, tuple[int, int]]:
+        return {
+            int(node): self._material_preview_canvas_cell_for_grid_slot(slot[0], slot[1])
+            for node, slot in slots.items()
+        }
+
+    def _sync_material_preview_canvas_positions_from_grid_slots(
+        self,
+        nodes: list[int] | None = None,
+    ) -> None:
+        if not hasattr(self, "material_card_preview_canvas_grid_positions"):
+            self.material_card_preview_canvas_grid_positions = {}
+        target_nodes = list(nodes) if nodes is not None else list(self.material_card_preview_grid_slots)
+        for node in target_nodes:
+            slot = self.material_card_preview_grid_slots.get(node)
+            if slot is None:
+                continue
+            self.material_card_preview_canvas_grid_positions[node] = self._material_preview_canvas_cell_for_grid_slot(
+                slot[0],
+                slot[1],
+            )
+
     def _material_preview_node_position_lookup(self) -> dict[int, tuple[int, int]]:
         positions: dict[int, tuple[int, int]] = {}
+        canvas_positions = getattr(self, "material_card_preview_canvas_grid_positions", {})
         for node_number in self._active_material_preview_order():
+            if node_number in canvas_positions:
+                positions[node_number] = self._material_preview_position_for_canvas_cell(
+                    canvas_positions[node_number][0],
+                    canvas_positions[node_number][1],
+                )
+                continue
             row, col = self.material_card_preview_grid_slots.get(node_number, (1, 0))
             page = max(0, col) // _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS
             page_col = max(0, col) % _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS
@@ -1435,10 +1563,20 @@ class RoughcutWidget(
         )
 
     def _update_material_preview_drag_shadow(self, node_id: str, scene_pos: QPointF) -> None:
-        node_number = int(node_id.rsplit("_", 1)[1])
-        insert_slot = self._material_preview_insert_slot_for_scene_pos(scene_pos, node_number)
-        shadow_rect = self._material_preview_shadow_rect_for_insert_slot(insert_slot, node_number)
-        self.material_card_preview_drag_shadow_slot = insert_slot + 1
+        top_left = QPointF(
+            scene_pos.x() - (_ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH / 2),
+            scene_pos.y() - (_ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT / 2),
+        )
+        cell_x, cell_y = self._material_preview_canvas_cell_for_position(top_left.x(), top_left.y())
+        x_pos, y_pos = self._material_preview_position_for_canvas_cell(cell_x, cell_y)
+        shadow_rect = QRectF(
+            x_pos,
+            y_pos,
+            _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH,
+            _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT,
+        )
+        self.material_card_preview_drag_shadow_slot = 0
+        self.material_card_preview_drag_shadow_cell = {"cell_x": cell_x, "cell_y": cell_y}
         self.material_card_preview_drag_shadow_rect = shadow_rect
         self._draw_material_preview_drag_shadow()
 
@@ -1473,6 +1611,7 @@ class RoughcutWidget(
     def _clear_material_preview_drag_shadow(self) -> None:
         self._remove_material_preview_drag_shadow_item()
         self.material_card_preview_drag_shadow_slot = 0
+        self.material_card_preview_drag_shadow_cell = {}
         self.material_card_preview_drag_shadow_rect = None
 
     def _material_preview_node_centers(self) -> dict[int, QPointF]:
@@ -1680,8 +1819,12 @@ class RoughcutWidget(
         }
         self._populate_material_miro_uml_preview_scene()
 
-    def _material_preview_pin_at_scene_pos(self, scene_pos: QPointF) -> tuple[int, str]:
-        radius = _ROUGHCUT_MATERIAL_PREVIEW_PIN_HIT_RADIUS
+    def _material_preview_pin_at_scene_pos(self, scene_pos: QPointF, *, magnet: bool = False) -> tuple[int, str]:
+        radius = (
+            _ROUGHCUT_MATERIAL_PREVIEW_PIN_MAGNET_RADIUS
+            if magnet
+            else _ROUGHCUT_MATERIAL_PREVIEW_PIN_HIT_RADIUS
+        )
         closest_node = 0
         closest_side = ""
         closest_distance = radius + 1.0
@@ -1946,38 +2089,8 @@ class RoughcutWidget(
         if not points:
             return QPainterPath()
         path = QPainterPath(points[0])
-        if len(points) == 1:
-            return path
-        for index in range(1, len(points) - 1):
-            prev = points[index - 1]
-            current = points[index]
-            next_point = points[index + 1]
-            prev_dx = current.x() - prev.x()
-            prev_dy = current.y() - prev.y()
-            next_dx = next_point.x() - current.x()
-            next_dy = next_point.y() - current.y()
-            prev_len = abs(prev_dx) + abs(prev_dy)
-            next_len = abs(next_dx) + abs(next_dy)
-            is_turn = (prev_dx != 0 and next_dy != 0) or (prev_dy != 0 and next_dx != 0)
-            if not is_turn or prev_len <= 2 or next_len <= 2:
-                path.lineTo(current)
-                continue
-            corner_radius = min(radius, prev_len / 2, next_len / 2)
-            prev_unit_x = 0 if prev_dx == 0 else (1 if prev_dx > 0 else -1)
-            prev_unit_y = 0 if prev_dy == 0 else (1 if prev_dy > 0 else -1)
-            next_unit_x = 0 if next_dx == 0 else (1 if next_dx > 0 else -1)
-            next_unit_y = 0 if next_dy == 0 else (1 if next_dy > 0 else -1)
-            before_corner = QPointF(
-                current.x() - (prev_unit_x * corner_radius),
-                current.y() - (prev_unit_y * corner_radius),
-            )
-            after_corner = QPointF(
-                current.x() + (next_unit_x * corner_radius),
-                current.y() + (next_unit_y * corner_radius),
-            )
-            path.lineTo(before_corner)
-            path.quadTo(current, after_corner)
-        path.lineTo(points[-1])
+        for point in points[1:]:
+            path.lineTo(point)
         return path
 
     def _material_preview_path_intersects_rect(self, path: QPainterPath, rect: QRectF) -> bool:
@@ -2002,11 +2115,14 @@ class RoughcutWidget(
     def _material_preview_blocking_rects(self, source_node: int = 0, target_node: int = 0) -> list[QRectF]:
         blockers: list[QRectF] = []
         ignored = {source_node, target_node}
+        positions = self._material_preview_node_position_lookup()
         for node_number in self._active_material_preview_order():
             if node_number in ignored:
                 continue
-            row, col = self.material_card_preview_grid_slots.get(node_number, (0, 0))
-            x_pos, y_pos = self._material_preview_position_for_grid_slot(row, col)
+            x_pos, y_pos = positions.get(
+                node_number,
+                self._material_preview_position_for_grid_slot(*self.material_card_preview_grid_slots.get(node_number, (0, 0))),
+            )
             blockers.append(
                 QRectF(
                     x_pos,
@@ -2288,17 +2404,27 @@ class RoughcutWidget(
 
     def _refresh_material_preview_scene_rect(self) -> None:
         active_nodes = self._active_material_preview_order()
+        positions = self._material_preview_node_position_lookup()
         total_columns = max(
             1,
             max((self.material_card_preview_grid_slots.get(node, (0, 0))[1] for node in active_nodes), default=0) + 1,
         )
         page_count = (total_columns + _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS - 1) // _ROUGHCUT_MATERIAL_PREVIEW_COLUMNS
         self.material_card_preview_page_count = page_count
+        default_width = page_count * _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH
+        max_right = max(
+            (x_pos + _ROUGHCUT_MATERIAL_PREVIEW_NODE_WIDTH for x_pos, _y_pos in positions.values()),
+            default=default_width,
+        )
+        max_bottom = max(
+            (y_pos + _ROUGHCUT_MATERIAL_PREVIEW_NODE_HEIGHT for _x_pos, y_pos in positions.values()),
+            default=_ROUGHCUT_MATERIAL_PREVIEW_SCENE_HEIGHT,
+        )
         self.material_card_preview_scene.setSceneRect(
             0,
             0,
-            page_count * _ROUGHCUT_MATERIAL_PREVIEW_PAGE_WIDTH,
-            _ROUGHCUT_MATERIAL_PREVIEW_SCENE_HEIGHT,
+            max(default_width, max_right + (_ROUGHCUT_MATERIAL_PREVIEW_GRID_CELL_SIZE * 2)),
+            max(_ROUGHCUT_MATERIAL_PREVIEW_SCENE_HEIGHT, max_bottom + (_ROUGHCUT_MATERIAL_PREVIEW_GRID_CELL_SIZE * 2)),
         )
 
     def _material_preview_sorted_by_grid(self) -> list[int]:
@@ -2315,6 +2441,7 @@ class RoughcutWidget(
             )
             for index, node in enumerate(ordered_nodes)
         }
+        self._sync_material_preview_canvas_positions_from_grid_slots(list(self.material_card_preview_grid_slots))
 
     def _align_material_preview_connection_targets(self) -> None:
         active = set(self._active_material_preview_order())
@@ -2349,7 +2476,9 @@ class RoughcutWidget(
             slot_row, slot_col = slot
             if slot_row == row and slot_col >= col:
                 self.material_card_preview_grid_slots[occupant] = (slot_row, slot_col + 1)
+                self._sync_material_preview_canvas_positions_from_grid_slots([occupant])
         self.material_card_preview_grid_slots[node_number] = (row, col)
+        self._sync_material_preview_canvas_positions_from_grid_slots([node_number])
         self.material_card_preview_order = self._material_preview_sorted_by_grid()
 
     def _move_material_preview_node_to_grid_slot(self, node_number: int, row: int, col: int) -> dict[str, object]:
@@ -2364,8 +2493,10 @@ class RoughcutWidget(
                 swap_node = occupant
                 break
         self.material_card_preview_grid_slots[node_number] = (row, col)
+        self._sync_material_preview_canvas_positions_from_grid_slots([node_number])
         if swap_node:
             self.material_card_preview_grid_slots[swap_node] = old_slot
+            self._sync_material_preview_canvas_positions_from_grid_slots([swap_node])
         self.material_card_preview_order = self._material_preview_sorted_by_grid()
         return {
             "mode": "grid_swap" if swap_node else "grid_move_empty",
@@ -2742,9 +2873,10 @@ class RoughcutWidget(
             self.material_card_preview_connect_cursor = None
             self._populate_material_miro_uml_preview_scene()
             return
-        if old_cursor is not None and (old_cursor - scene_pos).manhattanLength() < 2:
+        snapped_scene_pos = self._material_preview_snap_point_to_half_grid(scene_pos)
+        if old_cursor is not None and (old_cursor - snapped_scene_pos).manhattanLength() < 2:
             return
-        self.material_card_preview_connect_cursor = QPointF(scene_pos)
+        self.material_card_preview_connect_cursor = QPointF(snapped_scene_pos)
         self._populate_material_miro_uml_preview_scene()
 
     def _set_material_preview_hover_connection(self, source: int, target: int) -> None:
@@ -2904,6 +3036,7 @@ class RoughcutWidget(
         )
         self.material_card_preview_order = list(plan.order)
         self.material_card_preview_grid_slots = dict(plan.grid_slots)
+        self._sync_material_preview_canvas_positions_from_grid_slots(list(plan.grid_slots))
         self.material_card_preview_sort_vectors = [
             {
                 "ordinal": vector.ordinal,
@@ -3625,23 +3758,18 @@ class RoughcutWidget(
         if group is None:
             return
         node_number = int(node_id.rsplit("_", 1)[1])
-        node_center = group.sceneBoundingRect().center()
-        target_row, target_col = self._material_preview_grid_slot_for_scene_pos(node_center)
         old_order = list(self.material_card_preview_order)
         old_slots = dict(self.material_card_preview_grid_slots)
-        if insert_shift:
-            self._place_material_preview_node_at_grid_slot(node_number, target_row, target_col)
-            move_result = {
-                "mode": "grid_insert_shift",
-                "swapped_with": 0,
-                "old_grid": {
-                    "row": old_slots.get(node_number, (target_row, target_col))[0],
-                    "col": old_slots.get(node_number, (target_row, target_col))[1],
-                },
-                "target_grid": {"row": target_row, "col": target_col},
-            }
-        else:
-            move_result = self._move_material_preview_node_to_grid_slot(node_number, target_row, target_col)
+        old_canvas_positions = dict(getattr(self, "material_card_preview_canvas_grid_positions", {}))
+        if not hasattr(self, "material_card_preview_canvas_grid_positions"):
+            self.material_card_preview_canvas_grid_positions = {}
+        group_pos = group.pos()
+        target_cell_x, target_cell_y = self._material_preview_canvas_cell_for_position(group_pos.x(), group_pos.y())
+        old_cell = old_canvas_positions.get(
+            node_number,
+            self._material_preview_canvas_cell_for_grid_slot(*old_slots.get(node_number, (0, 0))),
+        )
+        self.material_card_preview_canvas_grid_positions[node_number] = (target_cell_x, target_cell_y)
         new_order = list(self.material_card_preview_order)
         self.material_card_preview_last_reorder = {
             "node_id": node_id,
@@ -3649,11 +3777,13 @@ class RoughcutWidget(
             "new_order": list(new_order),
             "old_slots": old_slots,
             "new_slots": dict(self.material_card_preview_grid_slots),
-            "target_slot": (target_col * _ROUGHCUT_MATERIAL_PREVIEW_ROWS) + target_row + 1,
-            "target_grid": {"row": target_row, "col": target_col},
-            "old_grid": move_result["old_grid"],
-            "swapped_with": move_result["swapped_with"],
-            "mode": move_result["mode"],
+            "old_canvas_grid_positions": old_canvas_positions,
+            "new_canvas_grid_positions": dict(self.material_card_preview_canvas_grid_positions),
+            "target_slot": 0,
+            "target_grid": {"cell_x": target_cell_x, "cell_y": target_cell_y},
+            "old_grid": {"cell_x": old_cell[0], "cell_y": old_cell[1]},
+            "swapped_with": 0,
+            "mode": "canvas_grid_copy_place" if insert_shift else "canvas_grid_move",
             "commit": "preview_only",
         }
         self._clear_material_preview_drag_shadow()

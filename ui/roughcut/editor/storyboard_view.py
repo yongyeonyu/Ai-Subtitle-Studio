@@ -1,14 +1,149 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, Qt
-from PyQt6.QtGui import QKeySequence
+from PyQt6.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtGui import QKeySequence, QTransform
 from PyQt6.QtWidgets import QGraphicsScene, QGraphicsView
 
 
-class RoughcutStoryboardView(QGraphicsView):
-    def __init__(self, scene: QGraphicsScene, owner):
+class RoughcutCanvasView(QGraphicsView):
+    def __init__(self, scene: QGraphicsScene, owner=None, canvas_name: str = "canvas"):
         super().__init__(scene)
         self._owner = owner
+        self._canvas_name = canvas_name
+        self._canvas_zoom = 1.0
+        self._canvas_min_zoom = 0.4
+        self._canvas_max_zoom = 2.5
+        self._space_pan_active = False
+        self._canvas_panning = False
+        self._canvas_pan_last_pos = QPoint()
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+
+    @property
+    def canvas_zoom(self) -> float:
+        return self._canvas_zoom
+
+    def set_canvas_zoom(self, zoom: float) -> None:
+        clamped = max(self._canvas_min_zoom, min(self._canvas_max_zoom, float(zoom)))
+        if abs(clamped - self._canvas_zoom) < 0.0001:
+            return
+        self._canvas_zoom = clamped
+        transform = QTransform()
+        transform.scale(clamped, clamped)
+        self.setTransform(transform)
+        callback = getattr(self._owner, "_on_roughcut_canvas_zoom_changed", None)
+        if callable(callback):
+            callback(self._canvas_name, clamped)
+
+    def zoom_in(self) -> None:
+        self.set_canvas_zoom(self._canvas_zoom * 1.15)
+
+    def zoom_out(self) -> None:
+        self.set_canvas_zoom(self._canvas_zoom / 1.15)
+
+    def reset_zoom(self) -> None:
+        self.set_canvas_zoom(1.0)
+
+    def fit_canvas(self) -> None:
+        scene_rect = self.sceneRect()
+        if scene_rect.isNull() or scene_rect.width() <= 0 or scene_rect.height() <= 0:
+            self.reset_zoom()
+            return
+        previous_anchor = self.transformationAnchor()
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.fitInView(scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
+        zoom = float(self.transform().m11())
+        clamped = max(self._canvas_min_zoom, min(self._canvas_max_zoom, zoom))
+        if abs(zoom - clamped) > 0.0001:
+            transform = QTransform()
+            transform.scale(clamped, clamped)
+            self.setTransform(transform)
+        self._canvas_zoom = clamped
+        callback = getattr(self._owner, "_on_roughcut_canvas_zoom_changed", None)
+        if callable(callback):
+            callback(self._canvas_name, self._canvas_zoom)
+        self.setTransformationAnchor(previous_anchor)
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt override
+        modifiers = event.modifiers()
+        if (
+            modifiers & Qt.KeyboardModifier.MetaModifier
+            or modifiers & Qt.KeyboardModifier.ControlModifier
+        ):
+            delta = event.angleDelta().y() or event.pixelDelta().y()
+            if delta:
+                self.set_canvas_zoom(self._canvas_zoom * (1.12 if delta > 0 else 1 / 1.12))
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+    def _begin_canvas_pan_from_event(self, event) -> bool:
+        if event.button() == Qt.MouseButton.MiddleButton or (
+            event.button() == Qt.MouseButton.LeftButton and self._space_pan_active
+        ):
+            self._canvas_panning = True
+            self._canvas_pan_last_pos = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return True
+        return False
+
+    def _continue_canvas_pan_from_event(self, event) -> bool:
+        if not self._canvas_panning:
+            return False
+        current_pos = event.position().toPoint()
+        delta = current_pos - self._canvas_pan_last_pos
+        self._canvas_pan_last_pos = current_pos
+        self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+        self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+        event.accept()
+        return True
+
+    def _end_canvas_pan_from_event(self, event) -> bool:
+        if not self._canvas_panning:
+            return False
+        self._canvas_panning = False
+        self._canvas_pan_last_pos = QPoint()
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        event.accept()
+        return True
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt override
+        if self._begin_canvas_pan_from_event(event):
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        if self._continue_canvas_pan_from_event(event):
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        if self._end_canvas_pan_from_event(event):
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802 - Qt override
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pan_active = True
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):  # noqa: N802 - Qt override
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pan_active = False
+            if not self._canvas_panning:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+
+class RoughcutStoryboardView(RoughcutCanvasView):
+    def __init__(self, scene: QGraphicsScene, owner):
+        super().__init__(scene, owner, "material")
         self._drag_node_id = ""
         self._drag_offset = QPointF()
         self._drag_press_scene_pos = QPointF()
@@ -23,6 +158,8 @@ class RoughcutStoryboardView(QGraphicsView):
         self.viewport().setMouseTracking(True)
 
     def mousePressEvent(self, event):  # noqa: N802 - Qt override
+        if self._begin_canvas_pan_from_event(event):
+            return
         scene_pos = self.mapToScene(event.position().toPoint())
         if event.button() == Qt.MouseButton.RightButton:
             source, target = self._owner._material_preview_connection_at_scene_pos(scene_pos)
@@ -69,7 +206,7 @@ class RoughcutStoryboardView(QGraphicsView):
             event.accept()
             return
         if self._connect_source_node:
-            pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
+            pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos, magnet=True)
             if pin_node and pin_side == "left" and not (
                 pin_node == self._connect_source_node and pin_side == self._connect_source_side
             ):
@@ -137,12 +274,15 @@ class RoughcutStoryboardView(QGraphicsView):
         event.accept()
 
     def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        if self._continue_canvas_pan_from_event(event):
+            return
         scene_pos = self.mapToScene(event.position().toPoint())
         if self._connect_source_node:
-            self._owner._set_material_preview_connect_cursor(scene_pos)
-            pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
+            pin_node, pin_side = self._owner._material_preview_pin_at_scene_pos(scene_pos, magnet=True)
             if pin_side != "left":
                 pin_node, pin_side = 0, ""
+            cursor_pos = self._owner._material_preview_pin_position(pin_node, pin_side) if pin_node else scene_pos
+            self._owner._set_material_preview_connect_cursor(cursor_pos)
             if pin_node != self._connect_source_node or pin_side != self._connect_source_side:
                 self._connect_started_on_press = False
             self._owner._set_material_preview_hover_pin(pin_node, pin_side)
@@ -171,10 +311,12 @@ class RoughcutStoryboardView(QGraphicsView):
         event.accept()
 
     def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        if self._end_canvas_pan_from_event(event):
+            return
         if self._connect_source_node:
             source = self._connect_source_node
             scene_pos = self.mapToScene(event.position().toPoint())
-            target, target_side = self._owner._material_preview_pin_at_scene_pos(scene_pos)
+            target, target_side = self._owner._material_preview_pin_at_scene_pos(scene_pos, magnet=True)
             if self._connect_started_on_press and target == source and target_side == self._connect_source_side:
                 self._connect_started_on_press = False
                 self._owner._set_material_preview_connect_cursor(scene_pos)
@@ -238,4 +380,4 @@ class RoughcutStoryboardView(QGraphicsView):
         super().keyPressEvent(event)
 
 
-__all__ = ["RoughcutStoryboardView"]
+__all__ = ["RoughcutCanvasView", "RoughcutStoryboardView"]

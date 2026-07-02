@@ -19,6 +19,41 @@ Archive source labels use stable action-item titles or source sections instead
 of active queue numbers, because the active queue order can change as completed
 items are removed.
 
+## G4 Roughcut Scenario Canvas Rework Slice
+
+Source request: implement the G4 roughcut scenario canvas rework plan with
+Miro-style wheel zoom/pan, straight connector routing, 1-grid card movement,
+magnetic connection behavior, and snapshot support.
+
+1. Added a shared PyQt6 2D `RoughcutCanvasView` for scenario and material
+   preview surfaces with Command/Ctrl-wheel zoom, small top-right zoom
+   percentage indicators, internal reset/fit helpers, and Space/middle-button
+   pan behavior.
+2. Added `canvas_grid_positions`, `canvas_view`, and `connector_style` to the
+   roughcut material storyboard snapshot while keeping legacy `grid_slots`
+   backward-compatible as the topology/auto-sort projection.
+3. Changed manual card dragging to persist 1-grid canvas cell placement without
+   mutating scenario order, NLE authority, or `grid_slots`.
+4. Kept explicit `자동정렬` as the layout command that rewrites both `grid_slots`
+   and canvas positions and preserves smooth movement.
+5. Changed normal connector rendering to straight orthogonal `lineTo` paths,
+   preserving line-jump overlays for crossings.
+6. Added magnetic pin routing during connector drag: near-target pins snap the
+   shadow line to the pin center and keep existing input-auto-copy behavior.
+7. Preserved final subtitle authority, original media/SRT authority,
+   roughcut/editor NLE commit boundaries, App Store scope, and real scenario
+   `_시나리오.srt` / `_시나리오.mp4` export non-claims.
+8. Verification passed:
+   `tests/test_roughcut_ui_v2.py -k "material_preview or scenario_sequence"`,
+   `tests/test_roughcut_candidates.py -k "storyboard"`,
+   `tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py`,
+   `tests/test_app_command_bridge.py -k "roughcut"`,
+   `tests/test_project_segment_reload.py -k "roughcut or open_project_file"`,
+   and `git diff --check -- .`.
+9. Manual artifacts:
+   `output/manual_verification/latest/roughcut_scenario_canvas_rework_20260702/roughcut_canvas_rework_preview.png`;
+   `output/manual_verification/latest/roughcut_scenario_canvas_rework_20260702/roughcut_canvas_zoom_indicator_preview.png`.
+
 ## v04.01.34 Roughcut 3-Row Connector Interaction Preview Checkpoint
 
 Source request: continue the roughcut card/connector goal so `ㅓ` adjusts

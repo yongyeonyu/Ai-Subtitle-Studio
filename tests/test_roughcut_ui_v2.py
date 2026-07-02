@@ -12,9 +12,9 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QPointF, Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QPainterPath, QWheelEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QListView, QWidget
+from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit, QListView, QPushButton, QWidget
 
 from core.project.nle_snapshot import build_concat_render_plan_from_snapshot
 from core.roughcut import build_concat_render_plan
@@ -297,6 +297,7 @@ class RoughcutUiV2Tests(unittest.TestCase):
             widget.show()
             self.app.processEvents()
 
+            old_slots = dict(widget.material_card_preview_grid_slots)
             view = widget.material_card_preview_view
             first_node = widget._material_card_preview_groups["middle_segment_preview_node_01"]
             start = view.mapFromScene(first_node.sceneBoundingRect().center())
@@ -310,20 +311,28 @@ class RoughcutUiV2Tests(unittest.TestCase):
             QTest.mousePress(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
             QTest.mouseMove(view.viewport(), end, delay=1)
             self.app.processEvents()
-            self.assertGreater(widget.material_card_preview_drag_shadow_slot, 0)
+            self.assertEqual(widget.material_card_preview_drag_shadow_slot, 0)
+            self.assertTrue(widget.material_card_preview_drag_shadow_cell)
             self.assertIsNotNone(widget.material_card_preview_drag_shadow_rect)
             QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
             self.app.processEvents()
 
-            self.assertEqual(widget.material_card_preview_grid_slots[1], (4, 0))
-            self.assertEqual(widget.material_card_preview_grid_slots[5], (0, 0))
-            self.assertEqual(widget.material_card_preview_last_reorder["target_grid"], {"row": 4, "col": 0})
-            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "grid_swap")
-            self.assertEqual(widget.material_card_preview_last_reorder["swapped_with"], 5)
+            self.assertEqual(widget.material_card_preview_grid_slots, old_slots)
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "canvas_grid_move")
+            self.assertIn("cell_x", widget.material_card_preview_last_reorder["target_grid"])
+            self.assertEqual(
+                widget.material_card_preview_canvas_grid_positions[1],
+                (
+                    widget.material_card_preview_last_reorder["target_grid"]["cell_x"],
+                    widget.material_card_preview_last_reorder["target_grid"]["cell_y"],
+                ),
+            )
+            self.assertEqual(widget.material_card_preview_last_reorder["swapped_with"], 0)
             self.assertEqual(widget.material_card_preview_last_reorder["commit"], "preview_only")
             self.assertEqual(len(widget._active_material_preview_order()), 30)
             self.assertEqual(widget.material_card_preview_deleted_nodes, set())
             self.assertEqual(widget.material_card_preview_drag_shadow_slot, 0)
+            self.assertEqual(widget.material_card_preview_drag_shadow_cell, {})
             self.assertIsNone(widget.material_card_preview_drag_shadow_rect)
             self.assertIn("middle_segment_preview_node_01", {node["id"] for node in widget.material_card_preview_nodes[:6]})
         finally:
@@ -572,15 +581,33 @@ class RoughcutUiV2Tests(unittest.TestCase):
             self.app.processEvents()
 
             node_id = "middle_segment_preview_node_01"
+            old_slots = dict(widget.material_card_preview_grid_slots)
             widget._begin_material_preview_node_drag(node_id)
             widget._drag_material_preview_node_to(node_id, QPointF(237.3, 81.8))
             group_pos = widget._material_card_preview_groups[node_id].pos()
             self.assertAlmostEqual(group_pos.x(), widget._material_preview_snap_axis_to_grid(group_pos.x(), "x"))
             self.assertAlmostEqual(group_pos.y(), widget._material_preview_snap_axis_to_grid(group_pos.y(), "y"))
+            expected_cell = widget._material_preview_canvas_cell_for_position(group_pos.x(), group_pos.y())
+            widget._finish_material_preview_node_drag(node_id, group_pos)
+            self.assertEqual(widget.material_card_preview_grid_slots, old_slots)
+            self.assertEqual(widget.material_card_preview_canvas_grid_positions[1], expected_cell)
+            snapshot = widget.automation_runtime_snapshot()["material_preview_storyboard"]
+            self.assertEqual(snapshot["canvas_grid_positions"]["1"], {"cell_x": expected_cell[0], "cell_y": expected_cell[1]})
+            self.assertEqual(snapshot["connector_style"]["type"], "orthogonal_straight")
 
             source = widget._material_preview_pin_position(1, "right")
             target = widget._material_preview_pin_position(4, "left")
-            _path, route_points = widget._material_preview_connection_path_and_points(
+            near_target = target + QPointF(24, 0)
+            self.assertEqual(widget._material_preview_pin_at_scene_pos(near_target), (0, ""))
+            self.assertEqual(widget._material_preview_pin_at_scene_pos(near_target, magnet=True), (4, "left"))
+            widget._set_material_preview_connect_source(1, "right")
+            widget._set_material_preview_connect_cursor(near_target)
+            widget._set_material_preview_hover_pin(4, "left")
+            shadow_path = widget.material_card_preview_connection_shadow_path
+            shadow_end = shadow_path.elementAt(shadow_path.elementCount() - 1)
+            self.assertAlmostEqual(shadow_end.x, target.x())
+            self.assertAlmostEqual(shadow_end.y, target.y())
+            path, route_points = widget._material_preview_connection_path_and_points(
                 source,
                 target,
                 source_node=1,
@@ -588,9 +615,58 @@ class RoughcutUiV2Tests(unittest.TestCase):
                 role="main",
             )
             self.assertGreaterEqual(len(route_points), 4)
+            curve_types = {
+                QPainterPath.ElementType.CurveToElement,
+                QPainterPath.ElementType.CurveToDataElement,
+            }
+            self.assertFalse(any(path.elementAt(index).type in curve_types for index in range(path.elementCount())))
             for point in route_points[1:-1]:
                 self.assertAlmostEqual(point.x(), widget._material_preview_snap_axis_to_half_grid(point.x(), "x"))
                 self.assertAlmostEqual(point.y(), widget._material_preview_snap_axis_to_half_grid(point.y(), "y"))
+        finally:
+            widget.close()
+
+    def test_scenario_and_material_canvas_zoom_is_view_only_and_snapshot_stable(self):
+        widget = RoughcutWidget()
+        try:
+            widget.resize(1600, 900)
+            widget.show()
+            self.app.processEvents()
+
+            old_slots = dict(widget.material_card_preview_grid_slots)
+            old_positions = dict(widget.material_card_preview_canvas_grid_positions)
+            self.assertIsNone(widget.findChild(QPushButton, "roughcutScenarioCanvasZoomInButton"))
+            self.assertIsNone(widget.findChild(QPushButton, "roughcutScenarioCanvasZoomFitButton"))
+            self.assertIsNone(widget.findChild(QPushButton, "roughcutMaterialCanvasZoomInButton"))
+            self.assertIsNone(widget.findChild(QPushButton, "roughcutMaterialCanvasZoomFitButton"))
+            self.assertEqual(widget.scenario_canvas_zoom_label.text(), "100%")
+            self.assertEqual(widget.material_canvas_zoom_label.text(), "100%")
+            self.assertTrue(widget.scenario_canvas_zoom_label.alignment() & Qt.AlignmentFlag.AlignRight)
+            self.assertTrue(widget.material_canvas_zoom_label.alignment() & Qt.AlignmentFlag.AlignRight)
+            command_wheel = QWheelEvent(
+                QPointF(20, 20),
+                QPointF(20, 20),
+                QPoint(0, 0),
+                QPoint(0, 120),
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.MetaModifier,
+                Qt.ScrollPhase.NoScrollPhase,
+                False,
+            )
+            widget.scenario_sequence_view.wheelEvent(command_wheel)
+            widget.material_card_preview_view.zoom_out()
+            self.app.processEvents()
+
+            self.assertGreater(widget.scenario_sequence_view.canvas_zoom, 1.0)
+            self.assertLess(widget.material_card_preview_view.canvas_zoom, 1.0)
+            self.assertTrue(command_wheel.isAccepted())
+            self.assertEqual(widget.scenario_canvas_zoom_label.text(), "112%")
+            self.assertEqual(widget.material_canvas_zoom_label.text(), "87%")
+            self.assertEqual(widget.material_card_preview_grid_slots, old_slots)
+            self.assertEqual(widget.material_card_preview_canvas_grid_positions, old_positions)
+            snapshot = widget.automation_runtime_snapshot()["material_preview_storyboard"]
+            self.assertGreater(snapshot["canvas_view"]["scenario_zoom"], 1.0)
+            self.assertLess(snapshot["canvas_view"]["material_zoom"], 1.0)
         finally:
             widget.close()
 
@@ -1178,7 +1254,8 @@ class RoughcutUiV2Tests(unittest.TestCase):
                 widget._material_preview_source_color(copied_node),
                 widget._material_preview_source_color(1),
             )
-            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "grid_insert_shift")
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "canvas_grid_copy_place")
+            self.assertIn(copied_node, widget.material_card_preview_canvas_grid_positions)
         finally:
             widget.close()
 
@@ -1205,11 +1282,11 @@ class RoughcutUiV2Tests(unittest.TestCase):
 
             self.assertEqual(len(widget._active_material_preview_order()), 30)
             self.assertEqual(widget.material_card_preview_deleted_nodes, set())
-            self.assertEqual(widget.material_card_preview_grid_slots[1], (1, 0))
-            self.assertEqual(widget.material_card_preview_grid_slots[2], (0, 0))
+            self.assertEqual(widget.material_card_preview_grid_slots[1], (0, 0))
+            self.assertEqual(widget.material_card_preview_grid_slots[2], (1, 0))
             self.assertEqual(widget.material_card_preview_grid_slots[8], (1, 1))
-            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "grid_swap")
-            self.assertEqual(widget.material_card_preview_last_reorder["swapped_with"], 2)
+            self.assertEqual(widget.material_card_preview_last_reorder["mode"], "canvas_grid_move")
+            self.assertEqual(widget.material_card_preview_last_reorder["swapped_with"], 0)
         finally:
             widget.close()
 

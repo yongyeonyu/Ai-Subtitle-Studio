@@ -33,6 +33,55 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-07-02 / G4 Roughcut Scenario Canvas Rework Slice
+
+### Scope
+
+- Implemented the owner-approved G4 roughcut scenario canvas rework plan on top
+  of the current `v04.01.34` source app without a version/schema bump.
+- Added shared PyQt6 2D canvas behavior for the scenario and material preview
+  surfaces: Command/Ctrl-wheel zoom, small top-right zoom percentage
+  indicators, internal reset/fit helpers, and Space/middle-button pan.
+- Added Miro-style material board state: 1-grid `canvas_grid_positions`,
+  view zoom snapshot fields, orthogonal straight connector style metadata,
+  magnetic pin routing, and straight normal connector paths with line-jump
+  overlays preserved.
+- Manual card drag now changes canvas placement only. It does not mutate
+  `grid_slots`, scenario order, NLE authority, final subtitles, save/export
+  authority, or editor rows. Explicit `자동정렬` remains the layout command.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile ui/roughcut/editor/storyboard_view.py ui/roughcut/roughcut_widget.py tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> pass.
+- Focused roughcut canvas/UI guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or scenario_sequence"` -> `26 passed, 42 deselected`.
+- Roughcut storyboard snapshot guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_candidates.py -k "storyboard"` -> `1 passed, 7 deselected`.
+- Roughcut UI/candidate guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `76 passed`.
+- Roughcut app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut"` -> `10 passed, 75 deselected`.
+- Roughcut project reload guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `4 passed, 86 deselected`.
+- `git diff --check -- .` -> pass.
+- Manual preview artifact:
+  `output/manual_verification/latest/roughcut_scenario_canvas_rework_20260702/roughcut_canvas_rework_preview.png`.
+- Zoom-indicator preview artifact:
+  `output/manual_verification/latest/roughcut_scenario_canvas_rework_20260702/roughcut_canvas_zoom_indicator_preview.png`.
+
+### Remaining Risks
+
+- This is still preview/canvas behavior. Real editor-generated middle-segment
+  binding, NLE-backed reorder/split/merge/trim commits, real thumbnails,
+  real topic/tag data, save/reopen notebook state, scenario playback sync, and
+  `_시나리오.srt` / `_시나리오.mp4` export remain active G4 work.
+- G4 freeform canvas positions are explicitly not canonical subtitle order.
+  Keep NLE commit boundaries and final subtitle authority unchanged.
+- G0, G1, G2, and G3 readiness/cache/NLE/runtime gates remain separate from
+  this source-app roughcut UI slice.
+
+### Next Recommended Action
+
+- Start from `AGENTS.md`, `docs/planning_queue/ACTION_ITEMS.md`, this handoff,
+  and the completed archive entry `G4 Roughcut Scenario Canvas Rework Slice`.
+- For the next G4 slice, bind real editor-generated middle segments into the
+  material cards before widening split/merge/trim write-back.
+
 ## Current Handoff - 2026-06-30 v04.01.34 / Roughcut 3-Row Connector Interaction Preview
 
 ### Scope
