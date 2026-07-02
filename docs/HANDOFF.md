@@ -33,6 +33,49 @@
 - 다음 세션이 그대로 따라 할 수 있는 명령과 파일명을 남깁니다.
 - `docs/planning_queue/ACTION_ITEMS.md`와 충돌하는 임시 우선순위를 만들지 않습니다.
 
+## Current Handoff - 2026-07-02 v04.01.35 / Roughcut Scenario Canvas Rework Release
+
+### Scope
+
+- Released the roughcut scenario-canvas preview refinement as `v04.01.35`.
+- Bumped app/project schema version to `04.01.35`.
+- Added `docs/release_notes/RELEASE_v04.01.35.md`.
+- This is a source-app checkpoint only. It does not claim DMG build/validation,
+  App Store package/signing/upload/submission, owner metadata completion, real
+  scenario MP4/SRT export, or NLE-backed split/merge/trim commit behavior.
+
+### Evidence
+
+- Compile check: `./venv/bin/python -m py_compile ui/roughcut/editor/storyboard_view.py ui/roughcut/roughcut_widget.py tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> pass.
+- Focused roughcut canvas/UI guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py -k "material_preview or scenario_sequence"` -> `26 passed, 42 deselected`.
+- Roughcut storyboard snapshot guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_candidates.py -k "storyboard"` -> `1 passed, 7 deselected`.
+- Roughcut UI/candidate guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_roughcut_ui_v2.py tests/test_roughcut_candidates.py` -> `76 passed`.
+- Roughcut app-command guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_app_command_bridge.py -k "roughcut"` -> `10 passed, 75 deselected`.
+- Roughcut project reload guard: `QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q tests/test_project_segment_reload.py -k "roughcut or open_project_file"` -> `4 passed, 86 deselected`.
+- Focused version/status guard: `PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen ./venv/bin/python -m pytest -q -p no:cacheprovider tests/test_macos_bundle_runtime_paths.py tests/test_project_context.py tests/test_cp03_cp04_status_ui.py -k "schema or version or project_file_roundtrip or status"` -> `66 passed, 84 deselected`.
+- `git diff --check -- .` -> pass.
+- Direct version assertion -> `APP_VERSION=04.01.35`,
+  `PROJECT_SCHEMA_VERSION=04.01.35`.
+- Manual preview artifacts:
+  `output/manual_verification/latest/roughcut_scenario_canvas_rework_20260702/roughcut_canvas_rework_preview.png`;
+  `output/manual_verification/latest/roughcut_scenario_canvas_rework_20260702/roughcut_canvas_zoom_indicator_preview.png`.
+
+### Remaining Risks
+
+- Real editor-generated middle-segment binding, NLE-backed reorder/split/merge/
+  trim commits, real thumbnails, real topic/tag data, save/reopen notebook
+  state, scenario playback sync, and `_시나리오.srt` / `_시나리오.mp4` export
+  remain active G4 work.
+- G4 freeform canvas positions are explicitly not canonical subtitle order.
+  Keep NLE commit boundaries and final subtitle authority unchanged.
+
+### Next Recommended Action
+
+- Start from `AGENTS.md`, `docs/planning_queue/ACTION_ITEMS.md`, this handoff,
+  and `docs/release_notes/RELEASE_v04.01.35.md`.
+- For the next G4 slice, bind real editor-generated middle segments into the
+  material cards before widening split/merge/trim write-back.
+
 ## Current Handoff - 2026-07-02 / G4 Roughcut Scenario Canvas Rework Slice
 
 ### Scope

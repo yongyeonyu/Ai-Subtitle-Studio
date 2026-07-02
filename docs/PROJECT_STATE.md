@@ -44,9 +44,9 @@ The repository root intentionally keeps no active development docs other than
 
 ## Version / Release
 
-- App version: `04.01.34` from `core/runtime/config.py`
-- Project schema version: `04.01.34` from `core/project/project_format.py`
-- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.34.md`
+- App version: `04.01.35` from `core/runtime/config.py`
+- Project schema version: `04.01.35` from `core/project/project_format.py`
+- Latest source-app checkpoint: `docs/release_notes/RELEASE_v04.01.35.md`
 - Latest source quick QA artifact: `output/manual_verification/latest/qa_suite_quick_v040117_20260629_0929`
 - Latest NLE final cutover-ready opt-in audit: `output/manual_verification/latest/nle_final_cutover_ready_v040131_20260629_150156/nle_persistence_cutover_audit.md`
 - Previous NLE legacy disk-shape replacement opt-in audit: `output/manual_verification/latest/nle_legacy_disk_shape_replacement_v040130_20260629_143522/nle_persistence_cutover_audit.md`
@@ -63,12 +63,14 @@ The repository root intentionally keeps no active development docs other than
 - Latest App Store readiness audit: `output/manual_verification/latest/app_store_current_blocker_recheck_v040131_20260629_1608/app_store_readiness_audit.md`
 - Latest App Store metadata owner-input package: `output/manual_verification/latest/app_store_metadata_owner_input_template_v040131_20260629_1625/app_store_metadata_owner_input_package.md`
 
-`v04.01.34` is a source-app roughcut material-card interaction preview
-checkpoint. It keeps final subtitle authority, original media/SRT authority,
-STT/cache defaults, NLE persistence load-owner policy, App Store readiness, and
-DMG packaging scope unchanged while refining the G4 roughcut preview with `ㅓ`
-height adjustment, pin hover/connect feedback, connector hover/right-click
-delete, one-line time ordering, and fixed 3-row parallel cut-candidate stacks.
+`v04.01.35` is a source-app roughcut scenario-canvas preview checkpoint. It
+keeps final subtitle authority, original media/SRT authority, STT/cache
+defaults, NLE persistence load-owner policy, App Store readiness, and DMG
+packaging scope unchanged while refining the G4 roughcut preview with shared
+scenario/material 2D canvas behavior, Command/Ctrl-wheel zoom, small top-right
+zoom percentage indicators, 1-grid material-card placement,
+`canvas_grid_positions` snapshot persistence, orthogonal straight connectors,
+line-jump overlays, and magnetic pin routing.
 
 ## Active Groups
 

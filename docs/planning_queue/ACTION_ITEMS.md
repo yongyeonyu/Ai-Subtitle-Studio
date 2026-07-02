@@ -1,5 +1,5 @@
 <!--
-Document-Version: 04.01.34-source-app
+Document-Version: 04.01.35-source-app
 Phase: SOURCE_APP_CONTINUATION_V4_1_0
 Last-Updated: 2026-06-30
 Updated-By: Codex
@@ -38,7 +38,7 @@ Status: active blocker-closure group. Owner approval for App Store packaging/sig
 
 Current baseline:
 
-- App version: `04.01.34`.
+- App version: `04.01.35`.
 - Submission target: Mac App Store signed `.pkg` built from a sandboxed signed `.app`.
 - Packaging scripts: `packaging/macos/build_app_bundle.sh`, `packaging/macos/sign_app_bundle.sh`, `packaging/macos/validate_app_bundle.sh`, `packaging/macos/build_app_store_pkg.sh`, `packaging/macos/upload_app_store_build.sh`.
 - Entitlements: `packaging/macos/AI Subtitle Studio.entitlements`.
@@ -1596,8 +1596,8 @@ quality gate and rollback branch before execution.
 ## Metadata
 
 ```yaml
-app_version: "04.01.34"
-document_version: "04.01.34-source-app"
+app_version: "04.01.35"
+document_version: "04.01.35-source-app"
 phase: "SOURCE_APP_CONTINUATION_V4_1_0"
 queue_source_of_truth: "docs/planning_queue/ACTION_ITEMS.md"
 commit_policy: "Commit only when the user explicitly asks."
